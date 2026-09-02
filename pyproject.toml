@@ -1,0 +1,140 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sorethumb"
+version = "0.1.0"
+description = "Unsupervised anomaly detection for tabular data"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+authors = [{ name = "Tarne Westcott", email = "tarne.westcott@gmail.com" }]
+dependencies = [
+    "polars>=1.0.0",
+    "pyarrow>=14.0.0",
+    "numpy>=1.26.0",
+    "scikit-learn>=1.4.0",
+    "scipy>=1.12.0",
+    "shap>=0.45.0",
+    "numba>=0.67.0",
+    "pandas>=2.0.0",
+    "matplotlib>=3.8.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.2.0",
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "httpx>=0.27.0",
+    "joblib>=1.3.0",
+    "psutil>=5.9.0",
+]
+
+[project.optional-dependencies]
+benchmark = [
+    "datasets>=2.0.0",
+]
+dev = [
+    "pytest>=9.0.0",
+    "pytest-cov>=7.0.0",
+    "hypothesis>=6.100.0",
+    "ruff>=0.16.0",
+    "mypy>=2.0.0",
+    "pre-commit>=4.0.0",
+    "pandas-stubs>=2.0.0",
+    "types-psutil>=5.9.0",
+]
+
+[project.scripts]
+sorethumb = "sorethumb.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sorethumb"]
+
+# ── Ruff ─────────────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D203",    # no-blank-line-before-class (conflicts with D211)
+    "D212",    # multi-line-summary-first-line (conflicts with D213)
+    "D213",    # multi-line-summary-second-line (conflicts with D212; allow either style)
+    "COM812",  # trailing comma — conflicts with formatter
+    "ISC001",  # implicit string concat — conflicts with formatter
+    "E501",    # line length enforced by formatter
+    "ANN401",  # typing.Any — intentional in some places
+    "EM101",   # exception string literals
+    "EM102",   # f-string in exception
+    "TRY003",  # long exception messages
+    "ERA001",  # commented-out code
+    "T201",    # print — library has none; rich handles client output
+    "PLR0913", # too many arguments
+    "FBT001",  # boolean positional args
+    "FBT002",  # boolean default value
+    "FBT003",  # boolean positional value in function call
+    "CPY001",  # copyright notice — not required for this project
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["sorethumb"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 25
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "D", "S", "PLR", "FBT"]
+
+# ── Mypy ─────────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "src"
+strict = true
+warn_return_any = true
+no_implicit_reexport = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = [
+    "shap.*",
+    "joblib.*",
+    "sklearn.*",
+    "scipy.*",
+    "matplotlib.*",
+    "numba.*",
+]
+ignore_missing_imports = true
+
+# ── Pytest ───────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers", "--tb=short"]
+markers = [
+    "integration: tests that may touch the network (deselected by default)",
+    "benchmark: opt-in accuracy measurement (deselected by default)",
+]
+filterwarnings = [
+    "error::sorethumb.errors.SorethumbWarning",
+]
+
+# ── Coverage ─────────────────────────────────────────────────────────────────
+[tool.coverage.run]
+source = ["src/sorethumb"]
+branch = true
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+precision = 2
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]
