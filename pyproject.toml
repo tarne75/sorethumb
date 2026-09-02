@@ -99,7 +99,7 @@ known-first-party = ["sorethumb"]
 max-complexity = 25
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["ANN", "D", "S", "PLR", "PLC", "FBT", "F401"]
+"tests/**" = ["ANN", "D", "S", "PLR", "PLC", "FBT", "F401", "DTZ", "F841"]
 
 # ── Mypy ─────────────────────────────────────────────────────────────────────
 [tool.mypy]
