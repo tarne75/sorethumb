@@ -25,9 +25,9 @@ so trivial changes do not invalidate cached artefacts.
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `source.uri` | str | **required** | Local path or http(s) URL to the source file. |
-| `source.format` | "auto" | "csv" | "tsv" | "parquet" | "json" | "jsonl" | "auto" | File format. 'auto' infers from the file extension. Set explicitly when the extension is misleading. |
-| `source.auth` | "none" | "bearer" | "basic" | "none" | HTTP authentication scheme. Token/credentials come from auth_env_var. |
-| `source.auth_env_var` | str | null | null | Name of the environment variable that holds the auth credential. The value is read at runtime and never stored in the config or logs. |
+| `source.format` | "auto" \| "csv" \| "tsv" \| "parquet" \| "json" \| "jsonl" \| "tsf" | "auto" | File format. 'auto' infers from the file extension. Set explicitly when the extension is misleading. |
+| `source.auth` | "none" \| "bearer" \| "basic" | "none" | HTTP authentication scheme. Token/credentials come from auth_env_var. |
+| `source.auth_env_var` | str \| null | null | Name of the environment variable that holds the auth credential. The value is read at runtime and never stored in the config or logs. |
 | `source.read_options` | dict[str, object] | {} | Format-specific reader overrides, e.g. {'delimiter': '\|', 'null_values': ['NA']}. Passed verbatim to the polars scan_* call. |
 | `source.cache` | bool | true | Cache downloaded files locally. Disable only for tiny or always-fresh sources. |
 | `source.max_nesting_depth` | int | 5 | Maximum recursion depth for struct unnesting. 0 disables unnesting. |
@@ -36,12 +36,12 @@ so trivial changes do not invalidate cached artefacts.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `columns.time_column` | str | null | null | Primary timestamp column. Protected from identifier-drop heuristics and used for temporal features and history alignment. |
+| `columns.time_column` | str \| null | null | Primary timestamp column. Protected from identifier-drop heuristics and used for temporal features and history alignment. |
 | `columns.group_by` | list[str] | [] | Columns to group by before scoring (e.g. site_id, region). Protected from dropping. |
-| `columns.id_column` | str | null | null | Row-identifier column to carry through to the output but exclude from features. |
-| `columns.reference_column` | str | null | null | Optional binary reference label (0/1) used only for evaluation, not training. |
+| `columns.id_column` | str \| null | null | Row-identifier column to carry through to the output but exclude from features. |
+| `columns.reference_column` | str \| null | null | Optional binary reference label (0/1) used only for evaluation, not training. |
 | `columns.ignore` | list[str] | [] | Glob patterns of columns to ignore. Prefix with 'type:<polars_dtype>' to restrict the glob to columns of that dtype, e.g. 'type:String id_*'. |
-| `columns.include_only` | list[str] | null | null | When set, only these columns (plus protected ones) are considered. Useful for narrowing scope without touching the source schema. |
+| `columns.include_only` | list[str] \| null | null | When set, only these columns (plus protected ones) are considered. Useful for narrowing scope without touching the source schema. |
 
 ## `[profiling]` — Thresholds that control column classification.
 
@@ -54,7 +54,7 @@ so trivial changes do not invalidate cached artefacts.
 | `profiling.categorical_cardinality_ratio` | float | 0.01 | String columns with cardinality_ratio <= this are classified 'categorical'. Above this threshold they go through the identifier / free-text path. |
 | `profiling.free_text_mean_length` | float | 20.0 | String columns with mean value length > this (after failing other checks) are classified 'free_text' and dropped. |
 | `profiling.sample_rows_for_examples` | int | 1000 | Number of non-null rows sampled for example values and mean-length estimation. |
-| `profiling.identifier_detection` | "conservative" | "aggressive" | "off" | "conservative" | 'conservative' only flags UUID/hex patterns at high cardinality. 'aggressive' also flags any high-cardinality string. 'off' never classifies as identifier_like (use when IDs carry signal). |
+| `profiling.identifier_detection` | "conservative" \| "aggressive" \| "off" | "conservative" | 'conservative' only flags UUID/hex patterns at high cardinality. 'aggressive' also flags any high-cardinality string. 'off' never classifies as identifier_like (use when IDs carry signal). |
 
 ## `[features]` — Feature engineering options.
 
@@ -65,8 +65,8 @@ so trivial changes do not invalidate cached artefacts.
 | `features.missing_indicators` | bool | true | Emit '<col>__is_missing' boolean features for high-null columns. |
 | `features.array_features` | bool | true | Derive __len/__mean/__min/__max features from List columns. |
 | `features.time_derivatives` | list[str] | ['hour', 'dayofweek', 'day', 'month'] | Temporal derivatives to extract from the chosen time column. Supported: hour, dayofweek, day, month, year, quarter. |
-| `features.scaler` | "standard" | "robust" | "robust" | 'robust' uses median+IQR (less sensitive to extreme outliers). 'standard' uses mean+std (required if downstream models assume z-scores). |
-| `features.dtype` | "float32" | "float64" | "float32" | Output dtype of the feature matrix. float32 halves memory vs float64. |
+| `features.scaler` | "standard" \| "robust" | "robust" | 'robust' uses median+IQR (less sensitive to extreme outliers). 'standard' uses mean+std (required if downstream models assume z-scores). |
+| `features.dtype` | "float32" \| "float64" | "float32" | Output dtype of the feature matrix. float32 halves memory vs float64. |
 | `features.correlation_reduction` | bool | true | Drop one column from each pair with Pearson \|r\| > correlation_threshold. Reduces redundancy for distance-based detectors. |
 | `features.correlation_threshold` | float | 0.95 | Correlation magnitude above which one of the pair is dropped. |
 | `features.pca` | bool | false | Compress features with PCA after scaling. Useful when the feature matrix is very wide; adds latency and reduces explainability. |
@@ -80,15 +80,15 @@ so trivial changes do not invalidate cached artefacts.
 | `detectors.name` | str | **required** | Detector identifier, e.g. 'isolation_forest'. |
 | `detectors.enabled` | bool | true | Skip this detector entirely when False. |
 | `detectors.params` | dict[str, object] | {} | Detector-specific hyperparameters, forwarded verbatim to the constructor. |
-| `detectors.train_row_cap` | int | null | null | Subsample training data to at most this many rows. None means use the full training set. Detectors with quadratic complexity (SVM) need a low cap. |
+| `detectors.train_row_cap` | int \| null | null | Subsample training data to at most this many rows. None means use the full training set. Detectors with quadratic complexity (SVM) need a low cap. |
 
 ## `[scoring]` — How per-detector scores are combined.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `scoring.contamination` | str | float | "auto" | Expected fraction of anomalies. 'auto' estimates from the score distribution. A float in (0, 0.5] sets the threshold directly. |
-| `scoring.combination` | "composite" | "intersection" | "union" | "composite" | 'composite' averages normalised detector scores. 'intersection'/'union' use voting across detectors. |
-| `scoring.weighting` | "equal" | "manual" | "agreement" | "equal" | How detector weights are determined when combination='composite'. |
+| `scoring.contamination` | str \| float | "auto" | Expected fraction of anomalies. 'auto' estimates from the score distribution. A float in (0, 0.5] sets the threshold directly. |
+| `scoring.combination` | "composite" \| "intersection" \| "union" | "composite" | 'composite' averages normalised detector scores. 'intersection'/'union' use voting across detectors. |
+| `scoring.weighting` | "equal" \| "manual" \| "agreement" | "equal" | How detector weights are determined when combination='composite'. |
 | `scoring.weights` | dict[str, float] | {} | Per-detector weights, used only when weighting='manual'. |
 | `scoring.min_records` | int | 100 | Minimum rows needed to run scoring. Fewer rows raise a CalibrationModeWarning (or error in strict mode). |
 
@@ -110,7 +110,7 @@ so trivial changes do not invalidate cached artefacts.
 | `run.seed` | int | 42 | Global random seed for reproducible results. |
 | `run.strict` | bool | false | Promote all SorethumbWarnings to errors. Always active in the test suite. |
 | `run.max_memory_mb` | int | 8192 | Approximate RSS budget. Triggers MemoryBudgetError if exceeded mid-run. Set generously; the check is coarse. |
-| `run.max_rows` | int | null | null | Truncate the input to at most this many rows (after filtering). Triggers SampleTruncatedWarning. None uses all rows. |
+| `run.max_rows` | int \| null | null | Truncate the input to at most this many rows (after filtering). Triggers SampleTruncatedWarning. None uses all rows. |
 | `run.reuse_models` | bool | false | If a matching model artefact exists in workdir, skip retraining. Useful for score-forward runs. |
 | `run.retention_days` | int | 90 | Prune run artefacts older than this many days from workdir. |
 | `run.log_level` | str | "INFO" | Python logging level for the sorethumb logger. Does not affect the config hash. |
@@ -120,7 +120,7 @@ so trivial changes do not invalidate cached artefacts.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `history.period_granularity` | "hour" | "day" | "week" | "month" | "day" | Bucket size for period-over-period comparisons. |
+| `history.period_granularity` | "hour" \| "day" \| "week" \| "month" | "day" | Bucket size for period-over-period comparisons. |
 | `history.roll_non_business` | bool | true | Include weekends and holidays when computing rolling baselines. |
 | `history.lookback_periods` | int | 28 | Number of historical periods used to build the baseline. |
 | `history.bootstrap_periods` | int | 28 | Minimum periods of history required before history scoring activates. |
