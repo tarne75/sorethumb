@@ -92,6 +92,7 @@ ignore = [
     "RUF002",  # ambiguous minus sign in docstrings — common in ML/sklearn convention
     "UP042",   # StrEnum — (str, Enum) is compatible with Python 3.11
     "N803",    # argument name X should be lowercase — sklearn convention for feature matrices
+    "N806",    # variable X in function should be lowercase — sklearn convention for matrices
     "TC004",   # move import out of TYPE_CHECKING — used in __all__ at runtime
 ]
 
@@ -102,7 +103,7 @@ known-first-party = ["sorethumb"]
 max-complexity = 25
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["ANN", "D", "S", "PLR", "PLC", "FBT", "F401", "DTZ", "F841", "N806", "SLF001"]
+"tests/**" = ["ANN", "D", "S", "PLR", "PLC", "FBT", "F401", "DTZ", "F841", "N806", "SLF001", "ARG002", "RUF059"]
 
 # ── Mypy ─────────────────────────────────────────────────────────────────────
 [tool.mypy]
