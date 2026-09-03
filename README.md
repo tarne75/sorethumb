@@ -42,6 +42,27 @@ pip install "sorethumb[benchmark]"
 
 ---
 
+## Supported file formats
+
+| Format | Extensions | Notes |
+| --- | --- | --- |
+| Parquet | `.parquet` | Recommended for large datasets; column-oriented, fast |
+| CSV | `.csv`, `.csv.gz` | Auto-detects delimiter; override via `read_options.separator` |
+| TSV | `.tsv`, `.tsv.gz` | Tab-separated; `\t` separator injected automatically |
+| JSON | `.json`, `.json.gz` | Full document loaded eagerly (not streamed) |
+| JSONL / NDJSON | `.jsonl`, `.ndjson`, `.jsonl.gz`, `.ndjson.gz` | Streamed line-by-line |
+| TSF | `.tsf` | [Monash Time Series Forecasting](https://github.com/rakshitha123/TSForecasting/tree/master/utils) format — each series becomes one row; `@attribute` columns preserved, series observations expand to `value_0`, `value_1`, … |
+
+Format is auto-detected from the file extension. Set `source.format` explicitly when the extension is ambiguous:
+
+```toml
+[source]
+uri = "/data/my_file.dat"
+format = "csv"
+```
+
+---
+
 ## 60-second quickstart
 
 ```python
