@@ -194,88 +194,127 @@ def _redact_config(config: Config) -> dict[str, Any]:
 # sorethumb init
 # ---------------------------------------------------------------------------
 
-_STARTER_TOML = """\
-# sorethumb.toml — starter configuration
-# Run `sorethumb config schema` to see all available fields.
 
-[source]
-# Path or https:// URL to your dataset.
-uri = "data/my_dataset.parquet"
-# Supported: "auto" | "csv" | "tsv" | "parquet" | "json" | "jsonl"
-format = "auto"
-# HTTP auth: "none" | "bearer" | "basic"
-auth = "none"
-# Name of the environment variable that holds the bearer token / password.
-# auth_env_var = "MY_TOKEN"
+def _generate_starter_toml() -> str:
+    """Build a complete sorethumb.toml from the live Pydantic models.
 
-[run]
-# Workspace directory where all artefacts are stored.
-workdir = ".sorethumb_workspace"
-# Global random seed for reproducibility.
-seed = 42
-# Promote all library warnings to errors.
-strict = false
-# Cap memory usage (approximate RSS in MB).
-max_memory_mb = 8192
+    Every field is shown with its default value (or a commented placeholder
+    for required/complex fields), plus its description as a TOML comment.
+    """
+    import textwrap  # noqa: PLC0415
 
-[columns]
-# Primary timestamp column for period-based history.
-# time_column = "timestamp"
-# Columns to split the dataset into groups before scoring.
-# group_by = ["region", "site_id"]
-# Column whose value appears in the results (e.g. a transaction id).
-# id_column = "transaction_id"
+    from pydantic.fields import FieldInfo  # noqa: PLC0415
+    from pydantic_core import PydanticUndefined  # noqa: PLC0415
 
-[profiling]
-# Drop columns with more than this fraction of nulls.
-null_ratio_drop = 0.9
-# Flag a column as near-constant when its top value exceeds this fraction.
-near_constant_threshold = 0.99
-# When true, drop identifier-like string columns (UUIDs, long hex).
-identifier_detection = "conservative"
+    from sorethumb.config import (  # noqa: PLC0415
+        ColumnsConfig,
+        DetectorConfig,
+        ExplainConfig,
+        FeaturesConfig,
+        HistoryConfig,
+        ProfilingConfig,
+        ReportConfig,
+        RunConfig,
+        ScoringConfig,
+        SourceConfig,
+    )
 
-[features]
-# Maximum cardinality for one-hot encoding (above this → frequency encoding).
-one_hot_max_cardinality = 20
-# "robust" (default) or "standard" scaling.
-scaler = "robust"
-# Remove highly correlated features above this threshold.
-correlation_threshold = 0.95
+    _MISSING = object()
 
-[scoring]
-# Expected fraction of anomalies: "auto" or a float in (0, 0.5].
-contamination = "auto"
-# "composite" (default) | "intersection" | "union"
-combination = "composite"
-# "equal" | "manual" | "agreement"
-weighting = "equal"
+    def _scalar(v: object) -> str | None:
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        if isinstance(v, str):
+            return f'"{v}"'
+        if isinstance(v, (int, float)):
+            return str(v)
+        if isinstance(v, list):
+            if not v:
+                return "[]"
+            rendered = [_scalar(x) for x in v]
+            if any(r is None for r in rendered):
+                return None
+            return "[" + ", ".join(str(r) for r in rendered) + "]"
+        if isinstance(v, dict) and not v:
+            return "{}"
+        return None
 
-[[detectors]]
-name = "isolation_forest"
-enabled = true
-train_row_cap = 250000
+    def _field_block(name: str, fi: FieldInfo, override: object = _MISSING) -> list[str]:
+        lines: list[str] = []
+        desc = (fi.description or "").strip()
+        if desc:
+            wrapped = textwrap.fill(desc, 76, initial_indent="# ", subsequent_indent="# ")
+            lines.append(wrapped)
+        if override is not _MISSING:
+            default = override
+        elif fi.default is not PydanticUndefined:
+            default = fi.default
+        elif fi.default_factory is not None:
+            try:
+                default = fi.default_factory({})  # type: ignore[call-arg]
+            except Exception:  # noqa: BLE001
+                default = _MISSING
+        else:
+            default = _MISSING
+        if default is _MISSING:
+            lines.append(f"# {name} =  # required — no default")
+        elif default is None:
+            lines.append(f"# {name} =  # optional, unset by default")
+        else:
+            toml_v = _scalar(default)
+            if toml_v is not None:
+                lines.append(f"{name} = {toml_v}")
+            else:
+                lines.append(f"# {name} =  # complex type, see docs")
+        return lines
 
-[[detectors]]
-name = "kmeans_distance"
-enabled = true
-train_row_cap = 200000
+    def _section(header: str, model_cls: type[Any]) -> list[str]:
+        lines = [f"[{header}]"]
+        first = True
+        for fname, fi in model_cls.model_fields.items():
+            if not first:
+                lines.append("")
+            first = False
+            lines.extend(_field_block(fname, fi))
+        return lines
 
-[explain]
-# Number of top-contributing features per anomalous row.
-top_n = 3
-# Max rows to explain (gradient attribution is 2*n_features calls per row).
-max_rows = 5000
-
-[history]
-# Time granularity: "hour" | "day" | "week" | "month"
-period_granularity = "day"
-# How many periods to bootstrap on a cold start.
-bootstrap_periods = 90
-# Rolling-window lookback.
-lookback_periods = 28
-# Roll non-business reference dates back to the previous business day.
-roll_non_business = true
-"""
+    out: list[str] = [
+        "# sorethumb.toml — generated by `sorethumb init`",
+        "# Every field is shown with its default value.",
+        "# Fields marked '# optional' are unset by default; uncomment to override.",
+        "# Fields marked '# required' must be set before `sorethumb run` will work.",
+        "# Run `sorethumb config schema` for the full JSON schema.",
+        "",
+    ]
+    for header, cls in [
+        ("source", SourceConfig),
+        ("columns", ColumnsConfig),
+        ("profiling", ProfilingConfig),
+        ("features", FeaturesConfig),
+        ("scoring", ScoringConfig),
+        ("explain", ExplainConfig),
+        ("run", RunConfig),
+        ("history", HistoryConfig),
+        ("report", ReportConfig),
+    ]:
+        out.extend(_section(header, cls))
+        out.append("")
+    out.append("# Detectors run as an ensemble; add or remove [[detectors]] blocks freely.")
+    for det in [
+        DetectorConfig(name="isolation_forest", train_row_cap=250_000),
+        DetectorConfig(name="kmeans_distance", train_row_cap=200_000),
+        DetectorConfig(name="one_class_svm", train_row_cap=20_000),
+    ]:
+        out.append("")
+        out.append("[[detectors]]")
+        first = True
+        for fname, fi in DetectorConfig.model_fields.items():
+            if not first:
+                out.append("")
+            first = False
+            out.extend(_field_block(fname, fi, override=getattr(det, fname)))
+    out.append("")
+    return "\n".join(out)
 
 
 @app.command()
@@ -294,7 +333,7 @@ def init(
         raise typer.Exit(0)
 
     path.mkdir(parents=True, exist_ok=True)
-    toml_path.write_text(_STARTER_TOML, encoding="utf-8")
+    toml_path.write_text(_generate_starter_toml(), encoding="utf-8")
 
     try:
         ws_dir = path / ".sorethumb_workspace"
