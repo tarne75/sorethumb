@@ -1117,8 +1117,24 @@ def benchmark(
         )
         raise typer.Exit(3) from None
 
-    console.print("[yellow]Benchmark harness not yet implemented (M9).[/yellow]")
-    raise typer.Exit(0)
+    from sorethumb.evaluate.benchmark import (  # noqa: PLC0415
+        BenchmarkConfig,
+        inject_into_readme,
+        run_benchmark,
+        write_outputs,
+    )
+
+    cfg = BenchmarkConfig()
+    console.print("[bold]Running benchmark harness…[/bold]")
+    rows = run_benchmark(cfg)
+
+    readme_path = Path(__file__).parent.parent.parent / "README.md"
+    if inject_into_readme(rows, readme_path):
+        console.print(f"[green]Benchmark table injected into {readme_path}[/green]")
+
+    md_path, csv_path = write_outputs(rows, Path("benchmark_results"))
+    console.print(f"Results written to {md_path} and {csv_path}")
+    console.print(f"\n[bold]Done.[/bold] {len(rows)} result(s) across {len({r.dataset for r in rows})} dataset(s).")
 
 
 # ---------------------------------------------------------------------------
