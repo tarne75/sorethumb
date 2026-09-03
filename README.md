@@ -62,13 +62,106 @@ result = run_detection(config, no_report=True)
 print(f"Found {result.n_anomalies} anomalies across {result.n_succeeded} groups")
 ```
 
-Or with the CLI:
+---
+
+## CLI quickstart — local CSV, watching live output
+
+**1. Create a workspace next to your data**
 
 ```bash
-sorethumb init .
-# edit sorethumb.toml to point at your data
-sorethumb inspect          # profile columns, no model fitting
-sorethumb run              # full pipeline
+sorethumb init /path/to/my-analysis
+cd /path/to/my-analysis
+```
+
+`init` writes a fully-commented `sorethumb.toml`. Open it and set the one required field:
+
+```toml
+[source]
+uri = "/absolute/path/to/your/data.csv"    # also accepts .parquet, .json, s3://…
+
+[run]
+workdir = "."   # where models, results and the SQLite ledger are stored
+```
+
+**2. Check how your columns will be treated (no models trained)**
+
+```bash
+sorethumb inspect
+```
+
+This profiles every column and prints the classification table:
+
+```
+┌─────────────────┬──────────────┬─────────┬──────────────────────────────┐
+│ column          │ treatment    │ missing │ reason                       │
+├─────────────────┼──────────────┼─────────┼──────────────────────────────┤
+│ age             │ numeric      │ 2.1 %   │ continuous, 847 unique values │
+│ country         │ one_hot      │ 0.0 %   │ categorical, 31 categories   │
+│ session_id      │ drop         │ 0.0 %   │ high cardinality (99.8 %)    │
+│ created_at      │ derive_time  │ 0.0 %   │ datetime → hour, dow, month  │
+│ …               │ …            │ …       │ …                            │
+└─────────────────┴──────────────┴─────────┴──────────────────────────────┘
+```
+
+Edit `sorethumb.toml` to override any column treatment before running:
+
+```toml
+[columns]
+id_column = "session_id"      # excluded from features, used as row label
+```
+
+**3. Run detection — watch progress live**
+
+```bash
+sorethumb run --log-level INFO
+```
+
+You'll see each stage scroll by in real time:
+
+```
+INFO  Loaded 84 231 rows × 22 columns from data.csv
+INFO  Profiling: 22 columns → 9 numeric, 6 one_hot, 3 derive_time, 4 drop
+INFO  Feature space: 38 output features after encoding
+INFO  [group=ALL] fitting isolation_forest on 84 231 rows × 38 features …
+INFO  [group=ALL] fitting kmeans_distance on 84 231 rows × 38 features …
+INFO  [group=ALL] fitting one_class_svm on 20 000 rows × 38 features (capped)
+INFO  [group=ALL] scoring + calibration …
+INFO  [group=ALL] SHAP explanations (TreeSHAP) for 421 flagged rows …
+INFO  Results written: results/<run_id>/ALL/anomalies.parquet
+
+Run abc12345  succeeded=1  skipped=0  failed=0
+  Total anomalies: 421
+  Report: ./runs/abc12345/report.html
+```
+
+**4. Print the top anomalies with their SHAP reasons**
+
+```bash
+sorethumb anomalies           # latest run, top reasons for every flagged row
+sorethumb anomalies --top 20  # just the 20 most anomalous rows
+sorethumb anomalies --reasons 5 --top 50   # five reason columns
+```
+
+```
+                    Anomalies — run abc12345678
+┌────┬────────┬──────────┬──────────────────────┬────────────────────────┐
+│  # │  score │ kind     │ reason 1             │ reason 2               │
+├────┼────────┼──────────┼──────────────────────┼────────────────────────┤
+│  1 │ 0.9821 │ exact    │ amount=14 500.00     │ country=NG             │
+│  2 │ 0.9714 │ exact    │ hour_of_day=3        │ failed_attempts=12     │
+│  3 │ 0.9601 │ heuristic│ session_duration=0.1 │ amount=9 200.00        │
+│  …                                                                      │
+└────┴────────┴──────────┴──────────────────────┴────────────────────────┘
+  421 anomaly row(s)   run=abc12345678   workspace=.
+```
+
+`kind=exact` means TreeSHAP (Isolation Forest); `kind=heuristic` means centroid
+or gradient attribution. See [docs/explanations.md](docs/explanations.md).
+
+For a machine-readable result pipe `--json`:
+
+```bash
+sorethumb anomalies --top 100 --json | jq '.[] | {rank, score: .composite_score, r1: .reason_1}'
 ```
 
 ---

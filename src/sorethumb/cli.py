@@ -813,6 +813,111 @@ def show(
 
 
 # ---------------------------------------------------------------------------
+# sorethumb anomalies
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def anomalies(
+    run_id: Annotated[
+        str | None, typer.Argument(help="Run ID to inspect. Defaults to the most recent run.")
+    ] = None,
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = "INFO",
+    top: Annotated[int, typer.Option("--top", help="Show only the top-N anomalies by rank.")] = 0,
+    reasons: Annotated[
+        int, typer.Option("--reasons", help="Number of reason columns to display.")
+    ] = 3,
+    json_output: _JSON_OPT = False,
+) -> None:
+    """Print flagged rows with their SHAP-derived reasons for a completed run.
+
+    Reads results from the workspace Parquet files written by ``sorethumb run``.
+    Rows are ordered by rank (1 = most anomalous). Use --top to limit output and
+    --reasons to control how many contributing features are shown per row.
+    """
+    import polars as pl  # noqa: PLC0415
+
+    _setup_logging(log_level)
+    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    ws_path = Path(cfg.run.workdir)
+
+    with Workspace.open(ws_path) as ws:
+        if run_id is None:
+            recent = ws.store.list_runs(limit=1)
+            if not recent:
+                err_console.print("[red]No runs found in this workspace.[/red]")
+                raise typer.Exit(1)
+            run_id = str(recent[0]["run_id"])
+
+        groups = ws.store.all_run_groups(run_id)
+        if not groups:
+            err_console.print(f"[red]Run not found or has no groups:[/red] {run_id}")
+            raise typer.Exit(1)
+
+        frames: list[pl.DataFrame] = []
+        for g in groups:
+            parquet = ws.results_dir(run_id, g["group_key"]) / "anomalies.parquet"
+            if parquet.exists():
+                df = pl.read_parquet(str(parquet))
+                if len(df) > 0:
+                    frames.append(
+                        df.with_columns(pl.lit(str(g.get("group_label", ""))).alias("_group"))
+                    )
+
+    if not frames:
+        console.print(f"[yellow]No anomaly rows found for run {run_id}.[/yellow]")
+        raise typer.Exit(0)
+
+    all_rows = pl.concat(frames, how="diagonal").sort("rank")
+    if top:
+        all_rows = all_rows.head(top)
+
+    reason_cols = [f"reason_{i + 1}" for i in range(reasons) if f"reason_{i + 1}" in all_rows.columns]
+    multi_group = all_rows["_group"].n_unique() > 1
+
+    if json_output:
+        display = ["_group", "rank", "composite_score", "attribution_kind", *reason_cols]
+        present = [c for c in display if c in all_rows.columns]
+        typer.echo(all_rows.select(present).rename({"_group": "group"}).write_json())
+        return
+
+    table = Table(
+        title=f"Anomalies — run {run_id[:12]}",
+        show_header=True,
+        show_lines=True,
+        header_style="bold",
+    )
+    table.add_column("#", justify="right", style="bold cyan", no_wrap=True)
+    table.add_column("score", justify="right")
+    table.add_column("kind", style="dim", no_wrap=True)
+    if multi_group:
+        table.add_column("group")
+    for r in reason_cols:
+        table.add_column(r.replace("reason_", "reason "), overflow="fold")
+
+    for row in all_rows.iter_rows(named=True):
+        score_val = row.get("composite_score") or 0.0
+        cells: list[str] = [
+            str(row.get("rank", "")),
+            f"{score_val:.4f}",
+            str(row.get("attribution_kind", "") or ""),
+        ]
+        if multi_group:
+            cells.append(str(row.get("_group", "")))
+        for r in reason_cols:
+            cells.append(str(row.get(r) or "—"))
+        table.add_row(*cells)
+
+    console.print(table)
+    console.print(
+        f"  [dim]{len(all_rows)} anomaly row(s)   run={run_id}   "
+        f"workspace={ws_path}[/dim]"
+    )
+
+
+# ---------------------------------------------------------------------------
 # sorethumb explain-plan
 # ---------------------------------------------------------------------------
 
