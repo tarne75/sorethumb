@@ -244,6 +244,7 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
 ## Documentation
 
 - [Configuration reference](docs/configuration.md)
+- [Configuration examples](docs/configuration-examples.md)
 - [Adapting to your data](docs/adapting-to-your-data.md)
 - [Explanations: exact vs heuristic](docs/explanations.md)
 - [Approximations and error characteristics](docs/approximations.md)
