@@ -106,6 +106,8 @@ max-complexity = 25
 "tests/**" = ["ANN", "D", "S", "PLR", "PLC", "FBT", "F401", "DTZ", "F841", "N806", "SLF001", "ARG002", "RUF059"]
 # db.py builds IN-clause placeholders dynamically using '?' * len(list) — safe parameterised SQL
 "src/sorethumb/store/db.py" = ["S608"]
+# charts.py calls matplotlib.use("Agg") before pyplot import — canonical pattern; renaming to mpl is unconventional
+"src/sorethumb/report/charts.py" = ["ICN001"]
 
 # ── Mypy ─────────────────────────────────────────────────────────────────────
 [tool.mypy]
