@@ -111,6 +111,8 @@ max-complexity = 25
 "src/sorethumb/report/charts.py" = ["ICN001"]
 # _pipeline.py: run_detection and _run_group are intentionally long orchestrators (82 and 72 stmts respectively)
 "src/sorethumb/_pipeline.py" = ["PLR0915"]
+# cli.py: _generate_starter_toml contains nested helpers that inflate the statement count
+"src/sorethumb/cli.py" = ["PLR0915"]
 
 # ── Mypy ─────────────────────────────────────────────────────────────────────
 [tool.mypy]
