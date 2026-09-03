@@ -396,7 +396,7 @@ def _features_for_column(
         # cast_int, impute_median, passthrough, frequency
         feats.append(col)
 
-    if emit_indicator and treatment != Treatment.indicator_only:
+    if emit_indicator and treatment != Treatment.indicator_only:  # type: ignore[comparison-overlap]
         feats.append(f"{col}__is_missing")
 
     return feats

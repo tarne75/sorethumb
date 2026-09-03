@@ -114,9 +114,10 @@ max-complexity = 25
 
 # ── Mypy ─────────────────────────────────────────────────────────────────────
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 mypy_path = "src"
 strict = true
+plugins = ["pydantic.mypy"]
 warn_return_any = true
 no_implicit_reexport = true
 strict_equality = true
@@ -133,8 +134,19 @@ module = [
     "scipy.*",
     "matplotlib.*",
     "numba.*",
+    "datasets.*",
 ]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "sorethumb.scoring.combine",
+    "sorethumb.scoring.calibrate",
+    "sorethumb.features.reduce",
+    "sorethumb.detectors.kmeans_distance",
+]
+warn_return_any = false
+
 
 # ── Pytest ───────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]

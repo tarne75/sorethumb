@@ -347,7 +347,7 @@ def run_benchmark(cfg: BenchmarkConfig | None = None) -> list[BenchmarkRow]:
                     score_seconds=score_secs,
                     peak_rss_mb=peak_rss_mb,
                     error=error,
-                    **metrics_kwargs,  # type: ignore[arg-type]
+                    **metrics_kwargs,
                 )
             )
 

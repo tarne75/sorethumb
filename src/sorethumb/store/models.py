@@ -46,7 +46,7 @@ def save_model(
 
     Returns the model_id (a digest-based string).
     """
-    detector_name: str = detector.name  # type: ignore[attr-defined]
+    detector_name: str = detector.name
     model_id = f"{run_id}_{group_key}_{detector_name}"
 
     out_dir = workspace.models_dir(run_id, group_key)
@@ -61,7 +61,7 @@ def save_model(
     calibrator_path.write_text(json.dumps(calibrator_d), encoding="utf-8")
 
     # Write manifest
-    params = detector.get_params()  # type: ignore[attr-defined]
+    params = detector.get_params()
     manifest = {
         "model_id": model_id,
         "run_id": run_id,
