@@ -89,7 +89,10 @@ ignore = [
     "SIM102",  # nested if statements — sometimes clearer than combined
     "PERF401", # list.extend vs list comprehension — style preference
     "RUF003",  # ambiguous dash character — false positive on docstrings
+    "RUF002",  # ambiguous minus sign in docstrings — common in ML/sklearn convention
     "UP042",   # StrEnum — (str, Enum) is compatible with Python 3.11
+    "N803",    # argument name X should be lowercase — sklearn convention for feature matrices
+    "TC004",   # move import out of TYPE_CHECKING — used in __all__ at runtime
 ]
 
 [tool.ruff.lint.isort]
@@ -99,7 +102,7 @@ known-first-party = ["sorethumb"]
 max-complexity = 25
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["ANN", "D", "S", "PLR", "PLC", "FBT", "F401", "DTZ", "F841"]
+"tests/**" = ["ANN", "D", "S", "PLR", "PLC", "FBT", "F401", "DTZ", "F841", "N806", "SLF001"]
 
 # ── Mypy ─────────────────────────────────────────────────────────────────────
 [tool.mypy]
