@@ -128,6 +128,7 @@ def generate() -> str:
         "sorethumb is configured through a single TOML file (default: `sorethumb.toml`).",
         "Run `sorethumb init` to create a fully commented starter file.",
         "Run `sorethumb config schema` to emit the JSON schema.",
+        "For scenario-based TOML snippets see [configuration-examples.md](configuration-examples.md).",
         "",
         "## Resolution order",
         "",
