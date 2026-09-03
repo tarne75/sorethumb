@@ -38,7 +38,7 @@ jobs:
             -m "not integration and not benchmark" \
             --cov=sorethumb \
             --cov-report=xml \
-            --cov-fail-under=65
+            --cov-fail-under=68
       - uses: codecov/codecov-action@v4
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         with:
