@@ -381,3 +381,127 @@ class Store:
     def vacuum(self) -> None:
         """Run SQLite VACUUM."""
         self._conn.execute("VACUUM")
+
+    # ------------------------------------------------------------------
+    # period
+    # ------------------------------------------------------------------
+
+    def upsert_period(
+        self,
+        dataset_fp: str,
+        period_label: str,
+        period_from: str,
+        period_to: str,
+    ) -> None:
+        """Insert or replace a period row."""
+        self._conn.execute(
+            """
+            INSERT INTO period (dataset_fp, period_label, period_from, period_to)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(dataset_fp, period_label) DO UPDATE SET
+                period_from = excluded.period_from,
+                period_to   = excluded.period_to
+            """,
+            (dataset_fp, period_label, period_from, period_to),
+        )
+        self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # totals
+    # ------------------------------------------------------------------
+
+    def upsert_total(
+        self,
+        dataset_fp: str,
+        group_key: str,
+        period_label: str,
+        anomaly_count: int,
+        population: int,
+        rate: float | None,
+        run_id: str,
+    ) -> None:
+        """Insert or replace a totals row on its natural key."""
+        now = _now_utc()
+        self._conn.execute(
+            """
+            INSERT INTO totals
+                (dataset_fp, group_key, period_label, anomaly_count, population, rate, run_id, computed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(dataset_fp, group_key, period_label) DO UPDATE SET
+                anomaly_count = excluded.anomaly_count,
+                population    = excluded.population,
+                rate          = excluded.rate,
+                run_id        = excluded.run_id,
+                computed_at   = excluded.computed_at
+            """,
+            (dataset_fp, group_key, period_label, anomaly_count, population, rate, run_id, now),
+        )
+        self._conn.commit()
+
+    def last_complete_period_label(self, dataset_fp: str) -> str | None:
+        """Return the most recent period_label that has at least one totals row."""
+        row = self._conn.execute(
+            "SELECT MAX(period_label) AS pl FROM totals WHERE dataset_fp=?",
+            (dataset_fp,),
+        ).fetchone()
+        val = row["pl"] if row else None
+        return str(val) if val is not None else None
+
+    def completed_group_keys(self, dataset_fp: str, period_label: str) -> list[str]:
+        """Return group_keys that have a totals row for this (dataset_fp, period_label)."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT group_key FROM totals WHERE dataset_fp=? AND period_label=?",
+            (dataset_fp, period_label),
+        ).fetchall()
+        return [str(r["group_key"]) for r in rows]
+
+    def groups_seen_for_dataset(self, dataset_fp: str) -> set[str]:
+        """Return all group_keys ever seen in totals for a dataset."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT group_key FROM totals WHERE dataset_fp=?",
+            (dataset_fp,),
+        ).fetchall()
+        return {str(r["group_key"]) for r in rows}
+
+    def totals_for_periods(
+        self,
+        dataset_fp: str,
+        period_labels: list[str],
+        group_keys: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return totals rows for the given period labels, optionally filtered by group."""
+        if not period_labels:
+            return []
+        ph = ",".join("?" * len(period_labels))
+        params: list[Any] = [dataset_fp, *period_labels]
+        gk_clause = ""
+        if group_keys is not None:
+            gk_ph = ",".join("?" * len(group_keys))
+            gk_clause = f"AND group_key IN ({gk_ph})"
+            params.extend(group_keys)
+        rows = self._conn.execute(
+            f"SELECT * FROM totals WHERE dataset_fp=? AND period_label IN ({ph}) {gk_clause}",
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def calibration_modes_for_periods(self, dataset_fp: str, period_labels: list[str]) -> set[str]:
+        """Return distinct calibration_mode values across runs that produced totals in these periods."""
+        if not period_labels:
+            return set()
+        ph = ",".join("?" * len(period_labels))
+        sql = (
+            "SELECT DISTINCT json_extract(r.config_json, '$.calibration_mode') AS cal_mode"
+            " FROM totals t JOIN run r ON r.run_id = t.run_id"
+            f" WHERE t.dataset_fp = ? AND t.period_label IN ({ph})"
+        )
+        rows = self._conn.execute(sql, [dataset_fp, *period_labels]).fetchall()
+        return {str(r["cal_mode"]) for r in rows if r["cal_mode"] is not None}
+
+    def delete_totals_for_period(self, dataset_fp: str, period_label: str) -> None:
+        """Remove all totals rows for a (dataset_fp, period_label) to force recomputation."""
+        self._conn.execute(
+            "DELETE FROM totals WHERE dataset_fp=? AND period_label=?",
+            (dataset_fp, period_label),
+        )
+        self._conn.commit()
