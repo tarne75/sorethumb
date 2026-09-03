@@ -440,7 +440,7 @@ def inject_into_readme(rows: list[BenchmarkRow], readme_path: Path) -> bool:
         )
         return False
 
-    auto_gen = "<!-- AUTO-GENERATED — do not edit manually; run `pytest -m benchmark` to regenerate. -->"
+    auto_gen = "<!-- AUTO-GENERATED — do not edit manually; run `sorethumb benchmark` to regenerate. -->"
     table_md = f"{_RESULTS_MARKER_START}\n{auto_gen}\n\n{to_markdown(rows)}{_RESULTS_MARKER_END}"
 
     before = original[: original.index(_RESULTS_MARKER_START)]

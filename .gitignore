@@ -13,6 +13,8 @@ htmlcov/
 *.log
 *.joblib
 sorethumb-workspace/
+.sorethumb_benchmark_cache/
+benchmark_results/
 tmp/
 .idea/
 *.iml

@@ -80,10 +80,22 @@ Average precision (AP) is the headline metric — it accounts for class imbalanc
 in a way ROC-AUC does not.
 
 <!-- benchmark-results-start -->
-<!-- AUTO-GENERATED — do not edit manually; run `pytest -m benchmark` to regenerate. -->
+<!-- AUTO-GENERATED — do not edit manually; run `sorethumb benchmark` to regenerate. -->
 
-_Benchmark not yet run. Execute `pytest -m benchmark` to populate this table._
-
+| dataset | detector | n_rows | n_features | roc_auc | average_precision | precision_at_k | recall_at_k | f1_at_contamination | fit_seconds | score_seconds | peak_rss_mb |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| synthetic_gaussian | isolation_forest | 1050 | 8 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 1.439 | 0.011 | 82.5 |
+| synthetic_gaussian | kmeans_distance | 1050 | 8 | 0.0828 | 0.0258 | 0.0000 | 0.0000 | 0.0000 | 0.335 | 0.000 | 22.5 |
+| synthetic_gaussian | one_class_svm | 1050 | 8 | 0.9127 | 0.2054 | 0.1200 | 0.1200 | 0.1200 | 0.004 | 0.003 | 1.3 |
+| synthetic_highd | isolation_forest | 2100 | 32 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 0.090 | 0.017 | 1.0 |
+| synthetic_highd | kmeans_distance | 2100 | 32 | 0.0002 | 0.0244 | 0.0000 | 0.0000 | 0.0000 | 0.569 | 0.000 | 27.2 |
+| synthetic_highd | one_class_svm | 2100 | 32 | 0.9205 | 0.2204 | 0.0800 | 0.0800 | 0.0800 | 0.014 | 0.014 | 0.1 |
+| kddcup99_sa | isolation_forest | 100655 | 38 | 0.9448 | 0.4652 | 0.2852 | 0.2852 | 0.2852 | 0.164 | 0.225 | 7.6 |
+| kddcup99_sa | kmeans_distance | 100655 | 38 | 0.8024 | 0.0969 | 0.0086 | 0.0086 | 0.0086 | 23.832 | 0.007 | 544.4 |
+| kddcup99_sa | one_class_svm | 100655 | 38 | 0.7695 | 0.0799 | 0.0086 | 0.0086 | 0.0086 | 42.464 | 34.022 | 0.0 |
+| covtype | isolation_forest | 581012 | 54 | 0.9346 | 0.0365 | 0.0346 | 0.0346 | 0.0346 | 0.299 | 1.114 | 0.9 |
+| covtype | kmeans_distance | 581012 | 54 | 0.4669 | 0.0040 | 0.0000 | 0.0000 | 0.0000 | 35.619 | 0.033 | 467.6 |
+| covtype | one_class_svm | 581012 | 54 | 0.7490 | 0.0087 | 0.0000 | 0.0000 | 0.0000 | 1685.427 | 1247.062 | 0.0 |
 <!-- benchmark-results-end -->
 
 ---
