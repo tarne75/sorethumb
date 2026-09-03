@@ -826,9 +826,7 @@ def anomalies(
     workdir: _WORKDIR_OPT = None,
     log_level: _LOG_LEVEL_OPT = "INFO",
     top: Annotated[int, typer.Option("--top", help="Show only the top-N anomalies by rank.")] = 0,
-    reasons: Annotated[
-        int, typer.Option("--reasons", help="Number of reason columns to display.")
-    ] = 3,
+    reasons: Annotated[int, typer.Option("--reasons", help="Number of reason columns to display.")] = 3,
     json_output: _JSON_OPT = False,
 ) -> None:
     """Print flagged rows with their SHAP-derived reasons for a completed run.
@@ -862,9 +860,7 @@ def anomalies(
             if parquet.exists():
                 df = pl.read_parquet(str(parquet))
                 if len(df) > 0:
-                    frames.append(
-                        df.with_columns(pl.lit(str(g.get("group_label", ""))).alias("_group"))
-                    )
+                    frames.append(df.with_columns(pl.lit(str(g.get("group_label", ""))).alias("_group")))
 
     if not frames:
         console.print(f"[yellow]No anomaly rows found for run {run_id}.[/yellow]")
@@ -911,10 +907,7 @@ def anomalies(
         table.add_row(*cells)
 
     console.print(table)
-    console.print(
-        f"  [dim]{len(all_rows)} anomaly row(s)   run={run_id}   "
-        f"workspace={ws_path}[/dim]"
-    )
+    console.print(f"  [dim]{len(all_rows)} anomaly row(s)   run={run_id}   workspace={ws_path}[/dim]")
 
 
 # ---------------------------------------------------------------------------
@@ -1239,7 +1232,9 @@ def benchmark(
 
     md_path, csv_path = write_outputs(rows, Path("benchmark_results"))
     console.print(f"Results written to {md_path} and {csv_path}")
-    console.print(f"\n[bold]Done.[/bold] {len(rows)} result(s) across {len({r.dataset for r in rows})} dataset(s).")
+    console.print(
+        f"\n[bold]Done.[/bold] {len(rows)} result(s) across {len({r.dataset for r in rows})} dataset(s)."
+    )
 
 
 # ---------------------------------------------------------------------------
