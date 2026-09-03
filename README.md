@@ -6,7 +6,7 @@
 column, fits an ensemble of detectors, ranks the records that stand out, and explains
 *why* each one stands out in terms of the original columns.
 
-[![CI](https://github.com/tarnewestcott/sorethumb/actions/workflows/ci.yml/badge.svg)](https://github.com/tarnewestcott/sorethumb/actions/workflows/ci.yml)
+[![CI](https://github.com/tarne75/sorethumb/actions/workflows/ci.yml/badge.svg)](https://github.com/tarne75/sorethumb/actions/workflows/ci.yml)
 
 ---
 

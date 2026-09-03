@@ -4,7 +4,7 @@
 
 ```bash
 # 1. Clone and enter the repo
-git clone https://github.com/tarnewestcott/sorethumb.git
+git clone https://github.com/tarne75/sorethumb.git
 cd sorethumb
 
 # 2. Install uv (if not already installed)
