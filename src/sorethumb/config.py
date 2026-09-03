@@ -24,7 +24,7 @@ class SourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     uri: str = Field(description="Local path or http(s) URL to the source file.")
-    format: Literal["auto", "csv", "tsv", "parquet", "json", "jsonl"] = Field(
+    format: Literal["auto", "csv", "tsv", "parquet", "json", "jsonl", "tsf"] = Field(
         "auto",
         description=(
             "File format. 'auto' infers from the file extension. "

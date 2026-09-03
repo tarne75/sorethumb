@@ -130,7 +130,7 @@ def _extension_from_url(url: str, config: SourceConfig) -> str:
     if fmt != "auto":
         return f".{fmt}"
     path_part = urlparse(url).path
-    for ext in (".parquet", ".csv", ".tsv", ".jsonl", ".ndjson", ".json", ".gz"):
+    for ext in (".parquet", ".csv", ".tsv", ".jsonl", ".ndjson", ".json", ".tsf", ".gz"):
         if path_part.endswith(ext):
             return ext
     return ".bin"
