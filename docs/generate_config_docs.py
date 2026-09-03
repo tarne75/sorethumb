@@ -110,7 +110,7 @@ def _section_table(model: type, section: str) -> str:
     """Render one section's fields as a Markdown table."""
     rows = ["| Field | Type | Default | Description |", "| --- | --- | --- | --- |"]
     for name, field_info in model.model_fields.items():
-        type_s = _type_str(field_info.annotation)
+        type_s = _type_str(field_info.annotation).replace("|", "\\|")
         default_s = _default_str(field_info)
         desc = (field_info.description or "").replace("|", "\\|").replace("\n", " ")
         rows.append(f"| `{section}.{name}` | {type_s} | {default_s} | {desc} |")
