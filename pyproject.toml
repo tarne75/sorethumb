@@ -108,6 +108,8 @@ max-complexity = 25
 "src/sorethumb/store/db.py" = ["S608"]
 # charts.py calls matplotlib.use("Agg") before pyplot import — canonical pattern; renaming to mpl is unconventional
 "src/sorethumb/report/charts.py" = ["ICN001"]
+# _pipeline.py: run_detection and _run_group are intentionally long orchestrators (82 and 72 stmts respectively)
+"src/sorethumb/_pipeline.py" = ["PLR0915"]
 
 # ── Mypy ─────────────────────────────────────────────────────────────────────
 [tool.mypy]
