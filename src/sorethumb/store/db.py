@@ -184,6 +184,16 @@ class Store:
         row = self._conn.execute("SELECT status FROM run WHERE run_id=?", (run_id,)).fetchone()
         return str(row["status"]) if row else None
 
+    def list_runs(self, limit: int = 100) -> list[dict[str, Any]]:
+        """Return recent run rows ordered by started_at descending."""
+        rows = self._conn.execute("SELECT * FROM run ORDER BY started_at DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
+        """Return one run row or None if not found."""
+        row = self._conn.execute("SELECT * FROM run WHERE run_id=?", (run_id,)).fetchone()
+        return dict(row) if row else None
+
     # ------------------------------------------------------------------
     # run_group
     # ------------------------------------------------------------------
