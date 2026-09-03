@@ -182,7 +182,7 @@ def _setup_logging(level: str) -> None:
 
 def _redact_config(config: Config) -> dict[str, Any]:
     """Return config dict with auth credentials redacted."""
-    raw = json.loads(config.model_dump_json())
+    raw: dict[str, Any] = json.loads(config.model_dump_json())
     raw.get("source", {}).pop("auth_env_var", None)
     for env_var in ("SORETHUMB_TOKEN", "SORETHUMB_PASSWORD"):
         if env_var in os.environ:

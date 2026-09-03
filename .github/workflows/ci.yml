@@ -32,7 +32,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: uv sync --all-extras
       - name: Install shap (Python 3.12 workaround — uv pulls incompatible numba)
-        run: .venv/bin/pip install "shap>=0.45"
+        run: uv pip install "shap>=0.45"
       - run: |
           uv run pytest \
             -m "not integration and not benchmark" \

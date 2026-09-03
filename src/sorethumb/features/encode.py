@@ -246,7 +246,7 @@ def build_encoding_exprs(
         elif treatment == Treatment.passthrough:
             exprs.append(pl.col(col).alias(col))
 
-        if dec.emit_missing_indicator and treatment != Treatment.indicator_only:
+        if dec.emit_missing_indicator and treatment != Treatment.indicator_only:  # type: ignore[comparison-overlap]
             exprs.append(_missing_indicator_expr(col))
 
     return exprs

@@ -20,7 +20,7 @@ import warnings
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import polars as pl
@@ -597,8 +597,8 @@ def _run_group(
     # Per-detector scores
     for det_name, raw in raw_scores_map.items():
         records[f"score_raw_{det_name}"] = raw.tolist()
-    for det_name, cal in calibrated_map.items():
-        records[f"score_cal_{det_name}"] = cal.tolist()
+    for det_name, cal_arr in calibrated_map.items():
+        records[f"score_cal_{det_name}"] = cal_arr.tolist()
 
     # Reason columns (null for non-flagged rows)
     for i in range(top_n):
@@ -619,9 +619,9 @@ def _run_group(
             )
             records["attribution_kind"][int(row_pos)] = attr_kind
             for r_i, reason in enumerate(reasons):
-                col_name = reason.get("column")
+                reason_col = cast("str | None", reason.get("column"))
                 raw_val = reason.get("raw_value")
-                label = f"{col_name}={raw_val}" if col_name else None
+                label = f"{reason_col}={raw_val}" if reason_col else None
                 records[f"reason_{r_i + 1}"][int(row_pos)] = label
 
     df_results = pl.DataFrame(records)

@@ -172,7 +172,8 @@ class ScoreEnsemble:
             return np.ones(k) / k
 
         if self._weighting == "manual":
-            w = np.array([self._manual_weights.get(n, 0.0) for n in names], dtype=float)
+            assert self._manual_weights is not None  # validated in __init__ when weighting="manual"
+            w = np.array([self._manual_weights.get(n, 0.0) for n in names], dtype=np.float64)
             total = w.sum()
             if total == 0:
                 logger.warning("manual_weights sum to 0; falling back to equal weights.")

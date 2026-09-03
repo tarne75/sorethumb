@@ -13,7 +13,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from sorethumb.history.periods import period_range, step_back
+from sorethumb.history.periods import PeriodGranularity, period_range, step_back
 
 if TYPE_CHECKING:
     from sorethumb.store.db import Store
@@ -48,7 +48,7 @@ def compute_rolling_windows(
     dataset_fp: str,
     reference_label: str,
     windows: list[int],
-    granularity: str,
+    granularity: PeriodGranularity,
     group_keys: list[str] | None = None,
     low_volume_threshold: int = 100,
 ) -> list[WindowResult]:

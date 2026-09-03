@@ -57,9 +57,9 @@ def fit_pca(
             "Try disabling PCA or increasing the minimum row count."
         ) from exc
 
-    components: np.ndarray = pca.components_  # type: ignore[assignment]
-    mean: np.ndarray = pca.mean_  # type: ignore[assignment]
-    evr: np.ndarray = pca.explained_variance_ratio_  # type: ignore[assignment]
+    components: np.ndarray = pca.components_
+    mean: np.ndarray = pca.mean_
+    evr: np.ndarray = pca.explained_variance_ratio_
 
     assert components.shape == (k, n_features), (
         f"BUG: PCA components_ shape {components.shape} != ({k}, {n_features})"

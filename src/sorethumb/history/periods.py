@@ -50,8 +50,7 @@ def resolve_period(
         if roll_non_business:
             ref_date = _prev_business_day(ref_date)
         label = ref_date.isoformat()
-        nxt = (ref_date + timedelta(days=1)).isoformat()
-        return label, nxt, label
+        return label, (ref_date + timedelta(days=1)).isoformat(), label
 
     if granularity == "week":
         ref_date = ref.date()
@@ -59,15 +58,13 @@ def resolve_period(
         if roll_non_business:
             monday = _prev_business_day(monday)
         label = monday.isoformat()
-        nxt = (monday + timedelta(weeks=1)).isoformat()
-        return label, nxt, label
+        return label, (monday + timedelta(weeks=1)).isoformat(), label
 
     if granularity == "month":
         ref_date = ref.date()
         first = ref_date.replace(day=1)
         label = first.isoformat()
-        nxt = _add_months(first, 1).isoformat()
-        return label, nxt, label
+        return label, _add_months(first, 1).isoformat(), label
 
     msg = f"Unknown granularity: {granularity!r}"
     raise ValueError(msg)
