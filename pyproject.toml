@@ -104,6 +104,7 @@ max-complexity = 25
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ANN", "D", "S", "PLR", "PLC", "FBT", "F401", "DTZ", "F841", "N806", "SLF001", "ARG002", "RUF059"]
+"docs/**" = ["INP001"]
 # db.py builds IN-clause placeholders dynamically using '?' * len(list) — safe parameterised SQL
 "src/sorethumb/store/db.py" = ["S608"]
 # charts.py calls matplotlib.use("Agg") before pyplot import — canonical pattern; renaming to mpl is unconventional
