@@ -762,7 +762,8 @@ def _render_run_report(
             if gsummary.results_path and gsummary.results_path.exists():
                 from sorethumb.store.results import read_results  # noqa: PLC0415
 
-                records_df = read_results(ws, run_id, gsummary.group_key) or pl.DataFrame()
+                _rdf = read_results(ws, run_id, gsummary.group_key)
+                records_df = _rdf if _rdf is not None else pl.DataFrame()
             else:
                 records_df = pl.DataFrame()
 
