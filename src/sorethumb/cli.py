@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import logging.handlers
 import os
 import re
 from datetime import UTC
@@ -163,13 +164,16 @@ def _load_config(
     run_section.setdefault("log_level", log_level)
 
     try:
-        return Config.model_validate(raw)
+        cfg = Config.model_validate(raw)
     except ValidationError as exc:
         err_console.print("[red]Configuration errors:[/red]")
         for err in exc.errors():
             loc = " → ".join(str(p) for p in err["loc"])
             err_console.print(f"  [yellow]{loc}[/yellow]: {err['msg']}")
         raise typer.Exit(2) from exc
+
+    _add_file_handler(Path(cfg.run.workdir), log_level)
+    return cfg
 
 
 def _setup_logging(level: str) -> None:
@@ -178,6 +182,34 @@ def _setup_logging(level: str) -> None:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
     )
+
+
+def _add_file_handler(workdir: Path, level: str) -> None:
+    """Add a rotating file handler to the sorethumb logger.
+
+    Writes to {workdir}/logs/sorethumb.log, rotating at 10 MB, keeping 5 backups.
+    Safe to call multiple times — skips if a file handler already exists.
+    """
+    sorethumb_logger = logging.getLogger("sorethumb")
+    if any(isinstance(h, logging.handlers.RotatingFileHandler) for h in sorethumb_logger.handlers):
+        return
+
+    log_dir = workdir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    handler = logging.handlers.RotatingFileHandler(
+        log_dir / "sorethumb.log",
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    handler.setLevel(getattr(logging, level.upper(), logging.INFO))
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(name)s %(levelname)s %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    )
+    sorethumb_logger.addHandler(handler)
 
 
 def _redact_config(config: Config) -> dict[str, Any]:
