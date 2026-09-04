@@ -87,8 +87,8 @@ so trivial changes do not invalidate cached artefacts.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `scoring.contamination` | str \| float | "auto" | Expected fraction of anomalies. 'auto' estimates from the score distribution. A float in (0, 0.5] sets the threshold directly. |
-| `scoring.combination` | "composite" \| "intersection" \| "union" | "composite" | 'composite' averages normalised detector scores. 'intersection'/'union' use voting across detectors. |
+| `scoring.contamination` | str \| float | "auto" | Expected fraction of anomalies. 'auto' uses each detector's natural boundary (OCSVM zero-hyperplane, KMeans Tukey fence, IsolationForest offset). A float in (0, 0.5] makes each detector flag exactly that fraction of rows and also sets the OneClassSVM nu training parameter to match. |
+| `scoring.combination` | "composite" \| "intersection" \| "union" | "composite" | 'composite' averages normalised detector scores and applies a single global threshold. 'intersection' thresholds each detector independently then flags rows where ALL detectors agree (high precision). 'union' thresholds each detector independently then flags rows where ANY detector agrees (high recall). |
 | `scoring.weighting` | "equal" \| "manual" \| "agreement" | "equal" | How detector weights are determined when combination='composite'. |
 | `scoring.weights` | dict[str, float] | {} | Per-detector weights, used only when weighting='manual'. |
 | `scoring.min_records` | int | 100 | Minimum rows needed to run scoring. Fewer rows raise a CalibrationModeWarning (or error in strict mode). |
@@ -114,7 +114,7 @@ so trivial changes do not invalidate cached artefacts.
 | `run.max_rows` | int \| null | null | Truncate the input to at most this many rows (after filtering). Triggers SampleTruncatedWarning. None uses all rows. |
 | `run.reuse_models` | bool | false | If a matching model artefact exists in workdir, skip retraining. Useful for score-forward runs. |
 | `run.retention_days` | int | 90 | Prune run artefacts older than this many days from workdir. |
-| `run.log_level` | str | "INFO" | Python logging level for the sorethumb logger. Does not affect the config hash. |
+| `run.log_level` | str | "INFO" | Python logging level for the sorethumb logger. Logs are written to both the console and {workdir}/logs/sorethumb.log (rotating, 10 MB limit, 5 backups). Does not affect the config hash. |
 | `run.slow_stage_seconds` | int | 300 | Emit a SlowStageWarning if any pipeline stage exceeds this many seconds. Purely diagnostic; does not affect results. |
 
 ## `[history]` — Period-over-period baseline comparison.

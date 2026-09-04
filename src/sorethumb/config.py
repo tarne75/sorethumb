@@ -290,15 +290,18 @@ class ScoringConfig(BaseModel):
     contamination: str | float = Field(
         "auto",
         description=(
-            "Expected fraction of anomalies. 'auto' estimates from the score distribution. "
-            "A float in (0, 0.5] sets the threshold directly."
+            "Expected fraction of anomalies. 'auto' uses each detector's natural boundary "
+            "(OCSVM zero-hyperplane, KMeans Tukey fence, IsolationForest offset). "
+            "A float in (0, 0.5] makes each detector flag exactly that fraction of rows "
+            "and also sets the OneClassSVM nu training parameter to match."
         ),
     )
     combination: Literal["composite", "intersection", "union"] = Field(
         "composite",
         description=(
-            "'composite' averages normalised detector scores. "
-            "'intersection'/'union' use voting across detectors."
+            "'composite' averages normalised detector scores and applies a single global threshold. "
+            "'intersection' thresholds each detector independently then flags rows where ALL detectors agree (high precision). "
+            "'union' thresholds each detector independently then flags rows where ANY detector agrees (high recall)."
         ),
     )
     weighting: Literal["equal", "manual", "agreement"] = Field(
@@ -402,7 +405,11 @@ class RunConfig(BaseModel):
     )
     log_level: str = Field(
         "INFO",
-        description="Python logging level for the sorethumb logger. Does not affect the config hash.",
+        description=(
+            "Python logging level for the sorethumb logger. "
+            "Logs are written to both the console and {workdir}/logs/sorethumb.log "
+            "(rotating, 10 MB limit, 5 backups). Does not affect the config hash."
+        ),
     )
     slow_stage_seconds: int = Field(
         300,
