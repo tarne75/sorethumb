@@ -19,11 +19,13 @@ import pytest
 
 def test_package_init_reexecuted_under_coverage() -> None:
     import sorethumb
+
     importlib.reload(sorethumb)
 
 
 def test_package_version_after_reload() -> None:
     import sorethumb
+
     importlib.reload(sorethumb)
     assert sorethumb.__version__ == "0.1.0"
 
@@ -33,11 +35,13 @@ def test_package_version_after_reload() -> None:
 
 def test_config_module_reexecuted_under_coverage() -> None:
     import sorethumb.config as m
+
     importlib.reload(m)
 
 
 def test_source_config_defaults() -> None:
     from sorethumb.config import SourceConfig
+
     sc = SourceConfig(uri="/tmp/data.csv")
     assert sc.uri == "/tmp/data.csv"
     assert sc.format == "auto"
@@ -50,6 +54,7 @@ def test_source_config_defaults() -> None:
 
 def test_source_config_all_formats() -> None:
     from sorethumb.config import SourceConfig
+
     for fmt in ("auto", "csv", "tsv", "parquet", "json", "jsonl", "tsf"):
         sc = SourceConfig(uri="/tmp/f", format=fmt)  # type: ignore[arg-type]
         assert sc.format == fmt
@@ -57,6 +62,7 @@ def test_source_config_all_formats() -> None:
 
 def test_source_config_auth_variants() -> None:
     from sorethumb.config import SourceConfig
+
     for auth in ("none", "bearer", "basic"):
         sc = SourceConfig(uri="https://host/data.csv", auth=auth, auth_env_var="TOKEN")  # type: ignore[arg-type]
         assert sc.auth == auth
@@ -64,6 +70,7 @@ def test_source_config_auth_variants() -> None:
 
 def test_columns_config_defaults() -> None:
     from sorethumb.config import ColumnsConfig
+
     cc = ColumnsConfig()
     assert cc.time_column is None
     assert cc.group_by == []
@@ -75,6 +82,7 @@ def test_columns_config_defaults() -> None:
 
 def test_columns_config_all_fields() -> None:
     from sorethumb.config import ColumnsConfig
+
     cc = ColumnsConfig(
         time_column="ts",
         group_by=["site", "region"],
@@ -93,6 +101,7 @@ def test_columns_config_all_fields() -> None:
 
 def test_profiling_config_defaults() -> None:
     from sorethumb.config import ProfilingConfig
+
     pc = ProfilingConfig()
     assert pc.null_ratio_drop == pytest.approx(0.70)
     assert pc.null_ratio_flag == pytest.approx(0.30)
@@ -106,6 +115,7 @@ def test_profiling_config_defaults() -> None:
 
 def test_profiling_config_identifier_detection_variants() -> None:
     from sorethumb.config import ProfilingConfig
+
     for mode in ("conservative", "aggressive", "off"):
         pc = ProfilingConfig(identifier_detection=mode)  # type: ignore[arg-type]
         assert pc.identifier_detection == mode
@@ -113,6 +123,7 @@ def test_profiling_config_identifier_detection_variants() -> None:
 
 def test_features_config_defaults() -> None:
     from sorethumb.config import FeaturesConfig
+
     fc = FeaturesConfig()
     assert fc.one_hot_max_cardinality == 20
     assert fc.max_feature_width == 2000
@@ -130,6 +141,7 @@ def test_features_config_defaults() -> None:
 
 def test_features_config_pca_variants() -> None:
     from sorethumb.config import FeaturesConfig
+
     fc = FeaturesConfig(pca=True, pca_max_components=20, pca_min_explained_variance=0.90)
     assert fc.pca is True
     assert fc.pca_max_components == 20
@@ -137,6 +149,7 @@ def test_features_config_pca_variants() -> None:
 
 def test_features_config_scaler_and_dtype() -> None:
     from sorethumb.config import FeaturesConfig
+
     fc = FeaturesConfig(scaler="standard", dtype="float64")
     assert fc.scaler == "standard"
     assert fc.dtype == "float64"
@@ -144,6 +157,7 @@ def test_features_config_scaler_and_dtype() -> None:
 
 def test_detector_config_defaults() -> None:
     from sorethumb.config import DetectorConfig
+
     dc = DetectorConfig(name="isolation_forest")
     assert dc.name == "isolation_forest"
     assert dc.enabled is True
@@ -153,6 +167,7 @@ def test_detector_config_defaults() -> None:
 
 def test_detector_config_with_params_and_cap() -> None:
     from sorethumb.config import DetectorConfig
+
     dc = DetectorConfig(
         name="one_class_svm",
         enabled=False,
@@ -166,6 +181,7 @@ def test_detector_config_with_params_and_cap() -> None:
 
 def test_default_detectors_factory() -> None:
     from sorethumb.config import _default_detectors
+
     dets = _default_detectors()
     assert len(dets) == 3
     names = {d.name for d in dets}
@@ -174,6 +190,7 @@ def test_default_detectors_factory() -> None:
 
 def test_scoring_config_defaults() -> None:
     from sorethumb.config import ScoringConfig
+
     sc = ScoringConfig()
     assert sc.contamination == "auto"
     assert sc.combination == "composite"
@@ -184,6 +201,7 @@ def test_scoring_config_defaults() -> None:
 
 def test_scoring_config_contamination_float() -> None:
     from sorethumb.config import ScoringConfig
+
     sc = ScoringConfig(contamination=0.05)
     assert sc.contamination == pytest.approx(0.05)
 
@@ -192,6 +210,7 @@ def test_scoring_config_contamination_invalid_string() -> None:
     from pydantic import ValidationError
 
     from sorethumb.config import ScoringConfig
+
     with pytest.raises(ValidationError):
         ScoringConfig(contamination="bad")
 
@@ -200,12 +219,14 @@ def test_scoring_config_contamination_out_of_range() -> None:
     from pydantic import ValidationError
 
     from sorethumb.config import ScoringConfig
+
     with pytest.raises(ValidationError):
         ScoringConfig(contamination=0.6)
 
 
 def test_scoring_config_combination_variants() -> None:
     from sorethumb.config import ScoringConfig
+
     for combo in ("composite", "intersection", "union"):
         sc = ScoringConfig(combination=combo)  # type: ignore[arg-type]
         assert sc.combination == combo
@@ -213,6 +234,7 @@ def test_scoring_config_combination_variants() -> None:
 
 def test_scoring_config_manual_weighting() -> None:
     from sorethumb.config import ScoringConfig
+
     sc = ScoringConfig(weighting="manual", weights={"isolation_forest": 0.7, "kmeans_distance": 0.3})
     assert sc.weighting == "manual"
     assert sc.weights["isolation_forest"] == pytest.approx(0.7)
@@ -220,6 +242,7 @@ def test_scoring_config_manual_weighting() -> None:
 
 def test_explain_config_defaults() -> None:
     from sorethumb.config import ExplainConfig
+
     ec = ExplainConfig()
     assert ec.enabled is True
     assert ec.top_n == 3
@@ -230,6 +253,7 @@ def test_explain_config_defaults() -> None:
 
 def test_explain_config_all_flags() -> None:
     from sorethumb.config import ExplainConfig
+
     ec = ExplainConfig(enabled=False, top_n=7, max_rows=100, kernel_shap=True, permutation_importance=True)
     assert ec.enabled is False
     assert ec.top_n == 7
@@ -239,6 +263,7 @@ def test_explain_config_all_flags() -> None:
 
 def test_run_config_defaults() -> None:
     from sorethumb.config import RunConfig
+
     rc = RunConfig(workdir="/tmp/ws")
     assert rc.workdir == "/tmp/ws"
     assert rc.seed == 42
@@ -253,6 +278,7 @@ def test_run_config_defaults() -> None:
 
 def test_run_config_overrides() -> None:
     from sorethumb.config import RunConfig
+
     rc = RunConfig(
         workdir="/data/ws",
         seed=1234,
@@ -273,6 +299,7 @@ def test_run_config_overrides() -> None:
 
 def test_history_config_defaults() -> None:
     from sorethumb.config import HistoryConfig
+
     hc = HistoryConfig()
     assert hc.period_granularity == "day"
     assert hc.roll_non_business is True
@@ -284,6 +311,7 @@ def test_history_config_defaults() -> None:
 
 def test_history_config_granularity_variants() -> None:
     from sorethumb.config import HistoryConfig
+
     for g in ("hour", "day", "week", "month"):
         hc = HistoryConfig(period_granularity=g)  # type: ignore[arg-type]
         assert hc.period_granularity == g
@@ -291,6 +319,7 @@ def test_history_config_granularity_variants() -> None:
 
 def test_report_config_defaults() -> None:
     from sorethumb.config import ReportConfig
+
     rc = ReportConfig()
     assert rc.formats == ["html", "csv"]
     assert rc.open_after is False
@@ -299,6 +328,7 @@ def test_report_config_defaults() -> None:
 
 def test_report_config_json_only() -> None:
     from sorethumb.config import ReportConfig
+
     rc = ReportConfig(formats=["json"], open_after=True, rolling_windows=[7, 30])
     assert rc.formats == ["json"]
     assert rc.open_after is True
@@ -306,6 +336,7 @@ def test_report_config_json_only() -> None:
 
 def test_top_level_config_minimal() -> None:
     from sorethumb.config import Config, RunConfig, SourceConfig
+
     cfg = Config(
         source=SourceConfig(uri="/tmp/data.csv"),
         run=RunConfig(workdir="/tmp/ws"),
@@ -328,6 +359,7 @@ def test_top_level_config_all_sections() -> None:
         ScoringConfig,
         SourceConfig,
     )
+
     cfg = Config(
         source=SourceConfig(uri="/tmp/data.parquet", format="parquet"),
         columns=ColumnsConfig(id_column="id", time_column="ts"),
@@ -354,6 +386,7 @@ def test_top_level_config_all_sections() -> None:
 
 def test_config_hash_is_stable() -> None:
     from sorethumb.config import Config, RunConfig, SourceConfig
+
     cfg = Config(
         source=SourceConfig(uri="/tmp/data.csv"),
         run=RunConfig(workdir="/tmp/ws"),
@@ -366,6 +399,7 @@ def test_config_hash_is_stable() -> None:
 
 def test_config_hash_excludes_cosmetic_fields() -> None:
     from sorethumb.config import Config, RunConfig, SourceConfig
+
     cfg1 = Config(source=SourceConfig(uri="/tmp/data.csv"), run=RunConfig(workdir="/tmp/ws"))
     cfg2 = Config(
         source=SourceConfig(uri="/tmp/data.csv"),
@@ -376,6 +410,7 @@ def test_config_hash_excludes_cosmetic_fields() -> None:
 
 def test_config_hash_changes_with_result_affecting_fields() -> None:
     from sorethumb.config import Config, RunConfig, SourceConfig
+
     cfg1 = Config(source=SourceConfig(uri="/tmp/data.csv"), run=RunConfig(workdir="/tmp/ws"))
     cfg2 = Config(source=SourceConfig(uri="/tmp/data.csv"), run=RunConfig(workdir="/tmp/ws", seed=999))
     assert cfg1.config_hash() != cfg2.config_hash()
@@ -383,6 +418,7 @@ def test_config_hash_changes_with_result_affecting_fields() -> None:
 
 def test_any_config_alias() -> None:
     from sorethumb.config import AnyConfig, Config, RunConfig, SourceConfig
+
     cfg = Config(source=SourceConfig(uri="/tmp/data.csv"), run=RunConfig(workdir="/tmp/ws"))
     assert isinstance(cfg, Config)
     _ = AnyConfig  # ensure the alias is importable
@@ -393,11 +429,13 @@ def test_any_config_alias() -> None:
 
 def test_detectors_init_reexecuted_under_coverage() -> None:
     import sorethumb.detectors as m
+
     importlib.reload(m)
 
 
 def test_registry_contains_builtins() -> None:
     from sorethumb.detectors import registry
+
     assert "isolation_forest" in registry
     assert "kmeans_distance" in registry
     assert "one_class_svm" in registry
@@ -410,6 +448,7 @@ def test_registry_values_are_detector_classes() -> None:
         OneClassSVMDetector,
         registry,
     )
+
     assert registry["isolation_forest"] is IsolationForestDetector
     assert registry["kmeans_distance"] is KMeansDetector
     assert registry["one_class_svm"] is OneClassSVMDetector
@@ -418,13 +457,22 @@ def test_registry_values_are_detector_classes() -> None:
 def test_register_function_rejects_non_detector() -> None:
     from sorethumb.detectors import register
     from sorethumb.errors import DetectorError
+
     with pytest.raises(DetectorError):
         register(object)  # type: ignore[arg-type]
 
 
 def test_detectors_all_list() -> None:
     import sorethumb.detectors as det
-    expected = {"Detector", "IsolationForestDetector", "KMeansDetector", "OneClassSVMDetector", "register", "registry"}
+
+    expected = {
+        "Detector",
+        "IsolationForestDetector",
+        "KMeansDetector",
+        "OneClassSVMDetector",
+        "register",
+        "registry",
+    }
     assert set(det.__all__) == expected
 
 
@@ -433,11 +481,13 @@ def test_detectors_all_list() -> None:
 
 def test_feature_space_module_reexecuted_under_coverage() -> None:
     import sorethumb.features.space as m
+
     importlib.reload(m)
 
 
 def test_feature_space_make_hash_deterministic() -> None:
     from sorethumb.features.space import FeatureSpace
+
     names = ["amount", "country__US", "country__GB", "hour_of_day"]
     h1 = FeatureSpace.make_hash(names)
     h2 = FeatureSpace.make_hash(names)
@@ -447,6 +497,7 @@ def test_feature_space_make_hash_deterministic() -> None:
 
 def test_feature_space_make_hash_changes_with_order() -> None:
     from sorethumb.features.space import FeatureSpace
+
     h1 = FeatureSpace.make_hash(["a", "b"])
     h2 = FeatureSpace.make_hash(["b", "a"])
     assert h1 != h2
@@ -454,6 +505,7 @@ def test_feature_space_make_hash_changes_with_order() -> None:
 
 def test_feature_space_make_hash_empty() -> None:
     from sorethumb.features.space import FeatureSpace
+
     h = FeatureSpace.make_hash([])
     assert isinstance(h, str)
     assert len(h) == 32
@@ -463,6 +515,7 @@ def test_feature_space_is_dataclass() -> None:
     import dataclasses
 
     from sorethumb.features.space import FeatureSpace
+
     assert dataclasses.is_dataclass(FeatureSpace)
     fields = {f.name for f in dataclasses.fields(FeatureSpace)}
     assert fields == {"matrix", "feature_names", "row_ids", "plan", "feature_schema_hash"}
@@ -472,6 +525,7 @@ def test_feature_space_instantiation() -> None:
     from unittest.mock import MagicMock
 
     from sorethumb.features.space import FeatureSpace
+
     matrix = np.zeros((10, 3), dtype=np.float32)
     row_ids = np.arange(10)
     plan = MagicMock()
