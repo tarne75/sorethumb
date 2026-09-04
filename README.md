@@ -96,6 +96,22 @@ print(f"Found {result.n_anomalies} anomalies across {result.n_succeeded} groups"
 
 ## CLI quickstart — local CSV, watching live output
 
+### Zero-config: point at a file and go
+
+No config file needed. Pass the data file directly and sorethumb runs with
+sensible defaults, writing artefacts to the current directory:
+
+```bash
+cd /path/to/my-analysis
+sorethumb run --log-level INFO /path/to/data.csv
+```
+
+On first run you'll be prompted to save a `sorethumb.toml` for future runs.
+Re-running the same command always uses the file you pass — overriding whatever
+`uri` is in the config — so iterating across datasets is frictionless.
+
+### Config-based workflow (full control)
+
 **1. Create a workspace next to your data**
 
 ```bash
