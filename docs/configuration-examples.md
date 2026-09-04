@@ -392,10 +392,12 @@ workdir = "./workspace"
 contamination = 0.02
 ```
 
-### Conservative flagging with intersection voting
+### Conservative flagging with intersection
 
-A row is only flagged as anomalous if *all* detectors agree it is. Reduces
-false positives at the cost of recall.
+Each detector independently flags its top `contamination` fraction of rows.
+A row is only marked anomalous if **all three detectors** agree — not just the
+combined score. This maximises precision at the cost of recall and also sets
+the OneClassSVM `nu` training parameter to match the contamination rate.
 
 ```toml
 [source]
@@ -408,6 +410,13 @@ workdir = "./workspace"
 combination   = "intersection"
 contamination = 0.05
 ```
+
+Use `combination = "union"` for the opposite: flag a row if *any* detector
+considers it anomalous (maximises recall).
+
+Use `combination = "composite"` (the default) to blend scores into a single
+ranked list and apply one global threshold — better when detectors disagree
+often and you want a smooth ranking rather than a hard vote.
 
 ### Manual detector weighting
 
