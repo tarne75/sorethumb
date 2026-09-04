@@ -20,29 +20,40 @@ agreement:
 Combination strategies
 ----------------------
 composite:
-    Weighted average of calibrated scores. Smooth, suitable for ranking.
+    Weighted average of calibrated scores. A single global threshold is applied
+    to the combined score. Smooth, suitable for ranking.
 intersection:
-    Score = min of calibrated scores. A row is only high-scoring when ALL
-    detectors agree it is anomalous. Conservative.
+    Each detector independently flags its top-contamination fraction of rows
+    (or its natural boundary when contamination="auto"). A row is anomalous
+    only when ALL detectors flag it. Conservative; use when you trust all
+    detectors equally and want high precision.
 union:
-    Score = max of calibrated scores. A row is high-scoring if ANY detector
-    flags it. Permissive.
+    Each detector independently flags its top-contamination fraction of rows
+    (or its natural boundary when contamination="auto"). A row is anomalous
+    when ANY detector flags it. Permissive; maximises recall.
 
 Thresholding
 ------------
-The binary flag is set where composite score >= threshold.
+composite mode:
+    Binary flag is set where combined score >= threshold, where threshold is
+    the (1 − contamination) quantile of the combined score distribution.
+
+intersection / union modes:
+    Each detector's scores are thresholded independently at the
+    (1 − contamination) quantile of that detector's scores, producing a
+    per-detector boolean flag. Set intersection or union of those flags is the
+    final result. No global score threshold is applied.
 
 ``contamination="auto"``:
-    Threshold is set at the (1 − median_natural_flag_rate) quantile of the
-    combined score distribution. The natural flag rate is the fraction of rows
-    that each detector's natural_flag method marks as anomalous; the median
-    across detectors is logged as a heuristic estimate. This is deliberately
-    conservative: auto contamination is always labelled as a heuristic in logs
-    and in the returned metadata dict.
+    composite: threshold derived from median natural_flag rate across detectors.
+    intersection/union: each detector uses its own natural_flag boundary
+    (detector-specific internal threshold, e.g. zero-hyperplane for OCSVM,
+    Tukey fence for KMeans). Each detector independently decides its anomalies;
+    contamination is not assumed to be equal across detectors.
 
 ``contamination=float``:
-    Threshold is set at the (1 − contamination) quantile, e.g. 0.05 → 95th
-    percentile threshold.
+    Each detector (or the combined score in composite mode) is thresholded so
+    that exactly that fraction of rows are flagged as anomalous.
 """
 
 from __future__ import annotations
@@ -132,32 +143,60 @@ class ScoreEnsemble:
         flag_matrix = np.column_stack([natural_flags[d].astype(float) for d in names])  # (n, k)
 
         weights = self._resolve_weights(names, flag_matrix)
-
         combined = self._combine(score_matrix, weights)
 
-        contamination, is_auto = self._resolve_contamination(flag_matrix)
-        threshold = float(np.quantile(combined, 1.0 - contamination))
-
-        anomaly_flag = combined >= threshold
-
-        logger.info(
-            "ScoreEnsemble: weighting=%s combination=%s contamination=%.4f%s threshold=%.4f "
-            "flagged %d/%d (%.1f%%).",
-            self._weighting,
-            self._combination,
-            contamination,
-            " [auto/heuristic]" if is_auto else "",
-            threshold,
-            int(anomaly_flag.sum()),
-            n,
-            100.0 * anomaly_flag.mean(),
-        )
+        if self._combination in ("intersection", "union"):
+            # Per-detector thresholding then set operation.
+            # Each detector independently flags its top-contamination fraction
+            # (or its natural boundary when auto), then flags are AND/OR-ed.
+            per_flags, contamination, is_auto = self._set_combine_flags(
+                score_matrix, natural_flags, names
+            )
+            anomaly_flag = (
+                per_flags.all(axis=1)
+                if self._combination == "intersection"
+                else per_flags.any(axis=1)
+            )
+            per_rates = [round(float(per_flags[:, i].mean() * 100), 1) for i in range(len(names))]
+            logger.info(
+                "ScoreEnsemble: weighting=%s combination=%s contamination=%s%s "
+                "per-detector rates %s → %s: %d/%d (%.1f%%).",
+                self._weighting,
+                self._combination,
+                f"{contamination:.4f}" if not is_auto else "auto",
+                " [heuristic]" if is_auto else "",
+                dict(zip(names, per_rates, strict=True)),
+                self._combination,
+                int(anomaly_flag.sum()),
+                n,
+                100.0 * anomaly_flag.mean(),
+            )
+            threshold = float("nan")
+            contamination_used = float(self._contamination) if not is_auto else contamination
+        else:
+            # composite: single global threshold on combined score
+            contamination, is_auto = self._resolve_contamination(flag_matrix)
+            threshold = float(np.quantile(combined, 1.0 - contamination))
+            anomaly_flag = combined >= threshold
+            contamination_used = contamination
+            logger.info(
+                "ScoreEnsemble: weighting=%s combination=%s contamination=%.4f%s "
+                "threshold=%.4f flagged %d/%d (%.1f%%).",
+                self._weighting,
+                self._combination,
+                contamination,
+                " [auto/heuristic]" if is_auto else "",
+                threshold,
+                int(anomaly_flag.sum()),
+                n,
+                100.0 * anomaly_flag.mean(),
+            )
 
         return {
             "combined_score": combined,
             "anomaly_flag": anomaly_flag,
             "threshold": threshold,
-            "contamination_used": contamination,
+            "contamination_used": contamination_used,
             "weights": dict(zip(names, weights, strict=True)),
             "is_auto_contamination": is_auto,
         }
@@ -202,6 +241,35 @@ class ScoreEnsemble:
 
         # union
         return score_matrix.max(axis=1)
+
+    def _set_combine_flags(
+        self,
+        score_matrix: np.ndarray,
+        natural_flags: dict[str, np.ndarray],
+        names: list[str],
+    ) -> tuple[np.ndarray, float, bool]:
+        """Compute per-detector boolean flags for intersection/union modes.
+
+        Returns (per_flags, contamination_rate, is_auto).
+        per_flags shape: (n_rows, n_detectors), dtype bool.
+        """
+        k = len(names)
+        flags = np.zeros((score_matrix.shape[0], k), dtype=bool)
+
+        if self._contamination == "auto":
+            for i, name in enumerate(names):
+                flags[:, i] = natural_flags[name]
+            rates = np.array([natural_flags[n].mean() for n in names])
+            rate = float(np.median(rates))
+            rate = max(0.001, min(0.5, rate))
+            return flags, rate, True
+
+        # Explicit contamination: threshold each detector at its own quantile
+        c = float(self._contamination)
+        for i in range(k):
+            thr_i = float(np.quantile(score_matrix[:, i], 1.0 - c))
+            flags[:, i] = score_matrix[:, i] >= thr_i
+        return flags, c, False
 
     def _resolve_contamination(self, flag_matrix: np.ndarray) -> tuple[float, bool]:
         if self._contamination != "auto":
