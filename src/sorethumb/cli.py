@@ -133,11 +133,15 @@ def _load_config(
     seed: int | None = None,
     strict: bool = False,
     log_level: str = "INFO",
+    uri_override: str | None = None,
 ) -> Config:
     """Read TOML, apply flag overrides, validate, and return Config.
 
     Validation errors are printed all at once — a config with eight problems
     shows eight problems, not just the first one.
+
+    When *uri_override* is provided and no config file exists, an empty raw dict
+    is used so the caller can proceed with defaults (workdir defaults to ".").
     """
     import tomllib  # noqa: PLC0415 — stdlib, Python 3.11+
 
@@ -145,19 +149,29 @@ def _load_config(
 
     if config_path is None:
         config_path = Path("sorethumb.toml")
-    if not config_path.exists():
-        err_console.print(
-            f"[red]Config file not found:[/red] {config_path}\nRun `sorethumb init` to create one."
-        )
-        raise typer.Exit(2)
 
-    with config_path.open("rb") as fh:
-        raw: dict[str, Any] = tomllib.load(fh)
+    raw: dict[str, Any]
+    if not config_path.exists():
+        if uri_override is None:
+            err_console.print(
+                f"[red]Config file not found:[/red] {config_path}\nRun `sorethumb init` to create one."
+            )
+            raise typer.Exit(2)
+        raw = {}
+    else:
+        with config_path.open("rb") as fh:
+            raw = tomllib.load(fh)
+
+    # URI override always wins (positional argument or explicit flag)
+    if uri_override is not None:
+        raw.setdefault("source", {})["uri"] = uri_override
 
     # Apply flag overrides (flags beat TOML, which beats env)
     run_section: dict[str, Any] = raw.setdefault("run", {})
     if workdir is not None:
         run_section["workdir"] = str(workdir)
+    elif "workdir" not in run_section:
+        run_section["workdir"] = "."
     if seed is not None:
         run_section["seed"] = seed
     run_section.setdefault("strict", strict)
@@ -174,6 +188,22 @@ def _load_config(
 
     _add_file_handler(Path(cfg.run.workdir), log_level)
     return cfg
+
+
+def _write_minimal_toml(path: Path, cfg: Config) -> None:
+    """Write a minimal sorethumb.toml capturing only source.uri and run.workdir."""
+    lines = [
+        "# sorethumb.toml — created by `sorethumb run`",
+        "# Run `sorethumb init` to expand to a full config with all options documented.",
+        "",
+        "[source]",
+        f'uri = "{cfg.source.uri}"',
+        "",
+        "[run]",
+        f'workdir = "{cfg.run.workdir}"',
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def _setup_logging(level: str) -> None:
@@ -441,6 +471,16 @@ def inspect(
 
 @app.command()
 def run(
+    data_file: Annotated[
+        str | None,
+        typer.Argument(
+            help=(
+                "Path to a data file. When supplied, overrides source.uri in the config. "
+                "If no sorethumb.toml exists, all settings default and workdir defaults to '.' — "
+                "you will be prompted to save a config file."
+            )
+        ),
+    ] = None,
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
     log_level: _LOG_LEVEL_OPT = "INFO",
@@ -470,7 +510,21 @@ def run(
     avoids re-downloading, and the completion ledger avoids redundant inference.
     """
     _setup_logging(log_level)
-    cfg = _load_config(config, workdir=workdir, seed=seed, strict=strict, log_level=log_level)
+
+    config_path = config or Path("sorethumb.toml")
+    config_existed = config_path.exists()
+
+    cfg = _load_config(
+        config, workdir=workdir, seed=seed, strict=strict, log_level=log_level, uri_override=data_file
+    )
+
+    if not config_existed and data_file is not None:
+        console.print(
+            f"[dim]No sorethumb.toml found — running with defaults, workdir={cfg.run.workdir!r}.[/dim]"
+        )
+        if typer.confirm("Save settings to sorethumb.toml for future runs?", default=False):
+            _write_minimal_toml(config_path, cfg)
+            console.print(f"[green]Saved {config_path}[/green]")
 
     # Validate group-filter regex up front so an invalid pattern fails before any work
     if group_filter:
