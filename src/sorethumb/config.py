@@ -297,7 +297,7 @@ class ScoringConfig(BaseModel):
         ),
     )
     combination: Literal["composite", "intersection", "union"] = Field(
-        "composite",
+        "intersection",
         description=(
             "'composite' averages normalised detector scores and applies a single global threshold. "
             "'intersection' thresholds each detector independently then flags rows where ALL detectors agree (high precision). "

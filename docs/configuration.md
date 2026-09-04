@@ -95,7 +95,7 @@ so trivial changes do not invalidate cached artefacts.
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `scoring.contamination` | str \| float | "auto" | Expected fraction of anomalies. 'auto' uses each detector's natural boundary (OCSVM zero-hyperplane, KMeans Tukey fence, IsolationForest offset). A float in (0, 0.5] makes each detector flag exactly that fraction of rows and also sets the OneClassSVM nu training parameter to match. |
-| `scoring.combination` | "composite" \| "intersection" \| "union" | "composite" | 'composite' averages normalised detector scores and applies a single global threshold. 'intersection' thresholds each detector independently then flags rows where ALL detectors agree (high precision). 'union' thresholds each detector independently then flags rows where ANY detector agrees (high recall). |
+| `scoring.combination` | "composite" \| "intersection" \| "union" | "intersection" | 'composite' averages normalised detector scores and applies a single global threshold. 'intersection' thresholds each detector independently then flags rows where ALL detectors agree (high precision). 'union' thresholds each detector independently then flags rows where ANY detector agrees (high recall). |
 | `scoring.weighting` | "equal" \| "manual" \| "agreement" | "equal" | How detector weights are determined when combination='composite'. |
 | `scoring.weights` | dict[str, float] | {} | Per-detector weights, used only when weighting='manual'. |
 | `scoring.min_records` | int | 100 | Minimum rows needed to run scoring. Fewer rows raise a CalibrationModeWarning (or error in strict mode). |
