@@ -24,8 +24,11 @@ import importlib.metadata
 import logging
 
 from sorethumb.detectors._protocol import Detector, check_protocol
+from sorethumb.detectors.ecod import ECODDetector
+from sorethumb.detectors.hbos import HBOSDetector
 from sorethumb.detectors.isolation_forest import IsolationForestDetector
 from sorethumb.detectors.kmeans_distance import KMeansDetector
+from sorethumb.detectors.lof import LOFDetector
 from sorethumb.detectors.one_class_svm import OneClassSVMDetector
 
 logger = logging.getLogger(__name__)
@@ -40,10 +43,13 @@ def register(cls: type) -> None:
     logger.debug("Registered detector: %s", cls.name)  # type: ignore[attr-defined]
 
 
-# Register built-ins
+# Register built-ins (alphabetical within tiers)
 register(IsolationForestDetector)
 register(KMeansDetector)
 register(OneClassSVMDetector)
+register(ECODDetector)
+register(HBOSDetector)
+register(LOFDetector)
 
 # Load entry-point extensions
 try:
@@ -59,8 +65,11 @@ except Exception:  # noqa: BLE001
 
 __all__ = [
     "Detector",
+    "ECODDetector",
+    "HBOSDetector",
     "IsolationForestDetector",
     "KMeansDetector",
+    "LOFDetector",
     "OneClassSVMDetector",
     "register",
     "registry",
