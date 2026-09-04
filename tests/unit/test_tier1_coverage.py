@@ -193,7 +193,7 @@ def test_scoring_config_defaults() -> None:
 
     sc = ScoringConfig()
     assert sc.contamination == "auto"
-    assert sc.combination == "composite"
+    assert sc.combination == "intersection"
     assert sc.weighting == "equal"
     assert sc.weights == {}
     assert sc.min_records == 100
