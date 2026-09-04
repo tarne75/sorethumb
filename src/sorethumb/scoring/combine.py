@@ -149,13 +149,9 @@ class ScoreEnsemble:
             # Per-detector thresholding then set operation.
             # Each detector independently flags its top-contamination fraction
             # (or its natural boundary when auto), then flags are AND/OR-ed.
-            per_flags, contamination, is_auto = self._set_combine_flags(
-                score_matrix, natural_flags, names
-            )
+            per_flags, contamination, is_auto = self._set_combine_flags(score_matrix, natural_flags, names)
             anomaly_flag = (
-                per_flags.all(axis=1)
-                if self._combination == "intersection"
-                else per_flags.any(axis=1)
+                per_flags.all(axis=1) if self._combination == "intersection" else per_flags.any(axis=1)
             )
             per_rates = [round(float(per_flags[:, i].mean() * 100), 1) for i in range(len(names))]
             logger.info(
