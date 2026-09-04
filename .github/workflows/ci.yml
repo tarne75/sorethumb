@@ -42,6 +42,7 @@ jobs:
       - uses: codecov/codecov-action@v4
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml
 
   benchmark:
