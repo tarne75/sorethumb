@@ -2,7 +2,7 @@
 
 > Full documentation coming in v1.0.
 
-- [Quick start](quickstart.md)
+- [CLI reference](cli_reference.md)
 - [Configuration reference](configuration.md)
 - [Adapting to your data](adapting-to-your-data.md)
 - [Explanations: exact vs heuristic](explanations.md)
