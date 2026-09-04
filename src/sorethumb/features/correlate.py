@@ -75,7 +75,8 @@ def drop_correlated(
     if matrix is None:
         return df, []
 
-    corr = np.corrcoef(matrix, rowvar=False)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        corr = np.corrcoef(matrix, rowvar=False)
 
     uf = _UnionFind(n)
     for i in range(n):
@@ -120,7 +121,8 @@ def correlated_pairs(df: pl.DataFrame, threshold: float = 0.95) -> pl.DataFrame:
     if matrix is None:
         return pl.DataFrame(schema={"feature_a": pl.String, "feature_b": pl.String, "pearson_r": pl.Float64})
 
-    corr = np.corrcoef(matrix, rowvar=False)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        corr = np.corrcoef(matrix, rowvar=False)
 
     rows: list[tuple[str, str, float]] = []
     for i in range(n):
