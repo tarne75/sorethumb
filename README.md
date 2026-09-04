@@ -239,6 +239,75 @@ in a way ROC-AUC does not.
 
 ---
 
+## Detectors
+
+### Default ensemble
+
+Three detectors run by default, each from a different algorithmic family so
+that no single blind spot dominates the ensemble:
+
+| Detector | Key | Algorithm | Strength | Weakness |
+|----------|-----|-----------|----------|----------|
+| `isolation_forest` | ★ default | Random tree partitioning | Fast, scales to millions of rows, exact TreeSHAP attributions | Struggles with very high-dimensional sparse data |
+| `kmeans_distance` | ★ default | Negative centroid distance | Trivially interpretable (distance to cluster centre) | Assumes roughly spherical clusters; sensitive to `k` |
+| `one_class_svm` | ★ default | RBF kernel boundary | Genuinely different family, useful in ensemble | Quadratic training cost; capped at 25 k rows by default |
+
+### Additional built-in detectors
+
+These are registered and available in config but **not included in the default
+ensemble**. Add any of them to `[[detectors]]` to use them:
+
+| Detector | Algorithm | Best suited for | Limitation |
+|----------|-----------|-----------------|------------|
+| `ecod` | Empirical CDF (two-tailed) | High-dimensional data with marginal outliers; parameter-free, near-linear | Assumes marginal independence — misses joint-distribution anomalies |
+| `lof` | Local Outlier Factor (novelty) | Datasets with varying-density clusters; catches what global methods miss | Stores full kNN graph; capped at 50 k rows by default |
+| `hbos` | Histogram-based density | Speed-critical pipelines; useful as a sanity baseline | Feature-independence assumption; ignores feature interactions |
+
+### Swapping or extending the ensemble
+
+**Remove a detector** — omit its block or set `enabled = false`:
+
+```toml
+[[detectors]]
+name = "isolation_forest"
+train_row_cap = 250_000
+
+[[detectors]]
+name = "ecod"   # replaces one_class_svm
+```
+
+**Add ECOD + LOF alongside the defaults:**
+
+```toml
+[[detectors]]
+name = "isolation_forest"
+train_row_cap = 250_000
+
+[[detectors]]
+name = "kmeans_distance"
+train_row_cap = 200_000
+
+[[detectors]]
+name = "ecod"
+
+[[detectors]]
+name = "lof"
+train_row_cap = 50_000
+```
+
+**Register a third-party detector** without modifying sorethumb — implement the
+[Detector protocol](src/sorethumb/detectors/_protocol.py) and add an entry point
+to your package's `pyproject.toml`:
+
+```toml
+[project.entry-points."sorethumb.detectors"]
+my_detector = "my_package.detectors:MyDetector"
+```
+
+sorethumb picks it up automatically at startup; use it in config by its `name`.
+
+---
+
 ## Scale guide
 
 | Dataset size | Recommended setup |

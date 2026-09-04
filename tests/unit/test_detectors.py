@@ -7,8 +7,11 @@ import pytest
 
 from sorethumb.detectors import registry
 from sorethumb.detectors._protocol import check_protocol
+from sorethumb.detectors.ecod import ECODDetector
+from sorethumb.detectors.hbos import HBOSDetector, _auto_bins
 from sorethumb.detectors.isolation_forest import IsolationForestDetector
 from sorethumb.detectors.kmeans_distance import KMeansDetector, _elbow_index
+from sorethumb.detectors.lof import LOFDetector
 from sorethumb.detectors.one_class_svm import OneClassSVMDetector
 from sorethumb.errors import DetectorError, SlowStageWarning
 
@@ -377,3 +380,251 @@ def test_ocsvm_class_vars():
     assert OneClassSVMDetector.name == "one_class_svm"
     assert OneClassSVMDetector.supports_tree_shap is False
     assert OneClassSVMDetector.default_train_row_cap == 25_000
+
+
+# ---------------------------------------------------------------------------
+# ECOD
+# ---------------------------------------------------------------------------
+
+
+def test_ecod_fit_score_shape():
+    X = _normal_data(n=200)
+    det = ECODDetector()
+    det.fit(X, seed=0)
+    scores = det.score_samples(X)
+    assert scores.shape == (200,)
+
+
+def test_ecod_scores_are_floats():
+    X = _normal_data(n=200)
+    det = ECODDetector()
+    det.fit(X, seed=0)
+    scores = det.score_samples(X)
+    assert scores.dtype.kind == "f"
+
+
+def test_ecod_higher_more_normal():
+    X = _data_with_outliers(n=200, n_outliers=10)
+    det = ECODDetector()
+    det.fit(X, seed=0)
+    scores = det.score_samples(X)
+    assert scores[10:].mean() > scores[:10].mean(), "outliers should score lower than normals"
+
+
+def test_ecod_natural_flag_shape_and_dtype():
+    X = _normal_data(n=200)
+    det = ECODDetector()
+    det.fit(X, seed=0)
+    scores = det.score_samples(X)
+    flags = det.natural_flag(scores)
+    assert flags.shape == (200,)
+    assert flags.dtype == bool
+
+
+def test_ecod_natural_flag_flags_outliers():
+    X = _data_with_outliers(n=200, n_outliers=10)
+    det = ECODDetector()
+    det.fit(X, seed=0)
+    scores = det.score_samples(X)
+    flags = det.natural_flag(scores)
+    assert flags[:10].mean() > flags[10:].mean()
+
+
+def test_ecod_get_params():
+    det = ECODDetector()
+    assert det.get_params() == {}
+
+
+def test_ecod_class_vars():
+    assert ECODDetector.name == "ecod"
+    assert ECODDetector.supports_tree_shap is False
+    assert ECODDetector.default_train_row_cap == 500_000
+
+
+def test_ecod_score_on_unseen_data():
+    rng = np.random.default_rng(7)
+    X_train = rng.standard_normal((200, 4))
+    X_test = rng.standard_normal((50, 4))
+    det = ECODDetector()
+    det.fit(X_train, seed=0)
+    scores = det.score_samples(X_test)
+    assert scores.shape == (50,)
+
+
+# ---------------------------------------------------------------------------
+# LOF
+# ---------------------------------------------------------------------------
+
+
+def test_lof_fit_score_shape():
+    X = _normal_data(n=200)
+    det = LOFDetector(n_neighbors=10)
+    det.fit(X, seed=0)
+    scores = det.score_samples(X)
+    assert scores.shape == (200,)
+
+
+def test_lof_scores_are_floats():
+    X = _normal_data(n=200)
+    det = LOFDetector(n_neighbors=10)
+    det.fit(X, seed=0)
+    scores = det.score_samples(X)
+    assert scores.dtype.kind == "f"
+
+
+def test_lof_higher_more_normal():
+    # LOF novelty mode scores *new* points — test on held-out data
+    rng = np.random.default_rng(42)
+    X_train = rng.standard_normal((200, 4))
+    det = LOFDetector(n_neighbors=10)
+    det.fit(X_train, seed=0)
+    X_normal = rng.standard_normal((20, 4))
+    X_outlier = rng.standard_normal((20, 4)) + 10.0  # far from training distribution
+    assert det.score_samples(X_normal).mean() > det.score_samples(X_outlier).mean()
+
+
+def test_lof_natural_flag_shape_and_dtype():
+    X = _normal_data(n=200)
+    det = LOFDetector(n_neighbors=10)
+    det.fit(X, seed=0)
+    scores = det.score_samples(X)
+    flags = det.natural_flag(scores)
+    assert flags.shape == (200,)
+    assert flags.dtype == bool
+
+
+def test_lof_natural_flag_flags_outliers():
+    # Score held-out outliers against a model trained on normal data
+    rng = np.random.default_rng(5)
+    X_train = rng.standard_normal((200, 4))
+    det = LOFDetector(n_neighbors=10)
+    det.fit(X_train, seed=0)
+    X_normal = rng.standard_normal((20, 4))
+    X_outlier = rng.standard_normal((20, 4)) + 10.0
+    normal_flags = det.natural_flag(det.score_samples(X_normal))
+    outlier_flags = det.natural_flag(det.score_samples(X_outlier))
+    assert outlier_flags.mean() > normal_flags.mean()
+
+
+def test_lof_get_params():
+    det = LOFDetector(n_neighbors=15)
+    assert det.get_params() == {"n_neighbors": 15}
+
+
+def test_lof_class_vars():
+    assert LOFDetector.name == "lof"
+    assert LOFDetector.supports_tree_shap is False
+    assert LOFDetector.default_train_row_cap == 50_000
+
+
+# ---------------------------------------------------------------------------
+# HBOS
+# ---------------------------------------------------------------------------
+
+
+def test_hbos_fit_score_shape():
+    X = _normal_data(n=200)
+    det = HBOSDetector()
+    det.fit(X, seed=0)
+    scores = det.score_samples(X)
+    assert scores.shape == (200,)
+
+
+def test_hbos_scores_are_floats():
+    X = _normal_data(n=200)
+    det = HBOSDetector()
+    det.fit(X, seed=0)
+    scores = det.score_samples(X)
+    assert scores.dtype.kind == "f"
+
+
+def test_hbos_higher_more_normal():
+    X = _data_with_outliers(n=200, n_outliers=10)
+    det = HBOSDetector()
+    det.fit(X, seed=0)
+    scores = det.score_samples(X)
+    assert scores[10:].mean() > scores[:10].mean(), "outliers should score lower than normals"
+
+
+def test_hbos_natural_flag_shape_and_dtype():
+    X = _normal_data(n=200)
+    det = HBOSDetector()
+    det.fit(X, seed=0)
+    scores = det.score_samples(X)
+    flags = det.natural_flag(scores)
+    assert flags.shape == (200,)
+    assert flags.dtype == bool
+
+
+def test_hbos_natural_flag_flags_outliers():
+    X = _data_with_outliers(n=200, n_outliers=10)
+    det = HBOSDetector()
+    det.fit(X, seed=0)
+    scores = det.score_samples(X)
+    flags = det.natural_flag(scores)
+    assert flags[:10].mean() > flags[10:].mean()
+
+
+def test_hbos_fixed_bins():
+    X = _normal_data(n=200)
+    det = HBOSDetector(n_bins=20)
+    det.fit(X, seed=0)
+    scores = det.score_samples(X)
+    assert scores.shape == (200,)
+    assert det.get_params() == {"n_bins": 20}
+
+
+def test_hbos_get_params_auto():
+    det = HBOSDetector()
+    assert det.get_params() == {"n_bins": "auto"}
+
+
+def test_hbos_class_vars():
+    assert HBOSDetector.name == "hbos"
+    assert HBOSDetector.supports_tree_shap is False
+    assert HBOSDetector.default_train_row_cap == 500_000
+
+
+def test_hbos_score_on_unseen_data():
+    rng = np.random.default_rng(99)
+    X_train = rng.standard_normal((200, 4))
+    X_test = rng.standard_normal((50, 4))
+    det = HBOSDetector()
+    det.fit(X_train, seed=0)
+    scores = det.score_samples(X_test)
+    assert scores.shape == (50,)
+
+
+def test_auto_bins_normal_data():
+    rng = np.random.default_rng(0)
+    col = rng.standard_normal(1000)
+    b = _auto_bins(col)
+    assert 10 <= b <= 256
+
+
+def test_auto_bins_constant_column():
+    col = np.ones(500)
+    b = _auto_bins(col)
+    assert b >= 10
+
+
+def test_auto_bins_tiny():
+    b = _auto_bins(np.array([1.0, 2.0]))
+    assert b >= 10
+
+
+# ---------------------------------------------------------------------------
+# Registry: new detectors present
+# ---------------------------------------------------------------------------
+
+
+def test_registry_contains_new_detectors():
+    assert "ecod" in registry
+    assert "lof" in registry
+    assert "hbos" in registry
+
+
+def test_new_detectors_pass_protocol():
+    check_protocol(ECODDetector)
+    check_protocol(LOFDetector)
+    check_protocol(HBOSDetector)

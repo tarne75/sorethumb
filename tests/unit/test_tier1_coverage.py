@@ -467,8 +467,11 @@ def test_detectors_all_list() -> None:
 
     expected = {
         "Detector",
+        "ECODDetector",
+        "HBOSDetector",
         "IsolationForestDetector",
         "KMeansDetector",
+        "LOFDetector",
         "OneClassSVMDetector",
         "register",
         "registry",
