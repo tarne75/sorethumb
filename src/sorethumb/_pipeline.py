@@ -495,7 +495,12 @@ def _run_group(
             continue
 
         det_cfg = next((d for d in config.detectors if d.name == det_name), None)
-        params = det_cfg.params if det_cfg else {}
+        params = dict(det_cfg.params) if det_cfg else {}
+        # Wire scoring contamination → OCSVM nu when not explicitly overridden.
+        # nu is the training-time equivalent of contamination for OneClassSVM.
+        if det_name == "one_class_svm" and "nu" not in params:
+            if isinstance(config.scoring.contamination, float):
+                params["nu"] = config.scoring.contamination
         det = registry[det_name](**params)
         train_X = X
         if det.default_train_row_cap and n_rows > det.default_train_row_cap:
