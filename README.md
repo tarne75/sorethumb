@@ -1,17 +1,21 @@
-# sorethumb
+<div align="center">
+  <img src="docs/banner.svg" alt="sorethumb — unsupervised anomaly detection for tabular data" width="860"/>
+</div>
 
-**Unsupervised anomaly detection for tabular data.**
+<div align="center">
+
+[![CI](https://github.com/tarne75/sorethumb/actions/workflows/ci.yml/badge.svg)](https://github.com/tarne75/sorethumb/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/tarne75/sorethumb/branch/main/graph/badge.svg)](https://codecov.io/gh/tarne75/sorethumb)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue?color=123A66)](https://github.com/tarne75/sorethumb)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?color=2F80ED)](LICENSE)
+
+</div>
 
 `sorethumb` takes a dataset it knows nothing about, works out how to treat every
 column, fits an ensemble of detectors, ranks the records that stand out, and explains
 *why* each one stands out in terms of the original columns.
-
-[![CI](https://github.com/tarne75/sorethumb/actions/workflows/ci.yml/badge.svg)](https://github.com/tarne75/sorethumb/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/tarne75/sorethumb/branch/main/graph/badge.svg)](https://codecov.io/gh/tarne75/sorethumb)
-[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/tarne75/sorethumb)
-[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
-[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 ---
 
