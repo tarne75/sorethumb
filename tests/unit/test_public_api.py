@@ -10,6 +10,7 @@ import importlib
 import logging
 import warnings
 
+import pytest
 
 # ── sorethumb.errors ──────────────────────────────────────────────────────────
 
@@ -70,10 +71,8 @@ def test_sorethumb_errors_can_be_raised_and_caught() -> None:
     from sorethumb.errors import ConfigError, SchemaError, SourceError
 
     for cls in (ConfigError, SchemaError, SourceError):
-        try:
+        with pytest.raises(cls, match="boom"):
             raise cls("boom")
-        except Exception as exc:
-            assert str(exc) == "boom"
 
 
 def test_sorethumb_warnings_can_be_issued() -> None:
