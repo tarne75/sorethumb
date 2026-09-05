@@ -339,6 +339,7 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
 
 - [CLI reference](docs/cli_reference.md)
 - [Configuration reference](docs/configuration.md)
+- [Detector models](docs/models.md)
 - [Configuration examples](docs/configuration-examples.md)
 - [Adapting to your data](docs/adapting-to-your-data.md)
 - [Explanations: exact vs heuristic](docs/explanations.md)
