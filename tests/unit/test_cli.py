@@ -176,6 +176,55 @@ def test_config_schema_emits_json(workspace):
     assert "properties" in schema or "$defs" in schema
 
 
+def _run_and_get_run_id(toml_path: Path, workdir: Path) -> str:
+    runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
+    from sorethumb import Workspace
+
+    with Workspace.open(workdir) as ws:
+        runs = ws.store.list_runs(limit=1)
+    return runs[0]["run_id"]
+
+
+def test_config_show_prints_summary(workspace):
+    _, toml_path, workdir = workspace
+    run_id = _run_and_get_run_id(toml_path, workdir)
+    result = runner.invoke(app, ["config", "show", run_id, "--config", str(toml_path)])
+    assert result.exit_code == 0
+    assert run_id in result.stdout
+    assert "isolation_forest" in result.stdout
+
+
+def test_config_show_json_output(workspace):
+    _, toml_path, workdir = workspace
+    run_id = _run_and_get_run_id(toml_path, workdir)
+    result = runner.invoke(app, ["config", "show", run_id, "--json", "--config", str(toml_path)])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert "source" in data
+    assert "detectors" in data
+
+
+def test_config_show_output_writes_toml(workspace, tmp_path):
+    _, toml_path, workdir = workspace
+    run_id = _run_and_get_run_id(toml_path, workdir)
+    out_path = tmp_path / "recovered.toml"
+    result = runner.invoke(
+        app, ["config", "show", run_id, "--output", str(out_path), "--config", str(toml_path)]
+    )
+    assert result.exit_code == 0
+    assert out_path.exists()
+    with out_path.open("rb") as fh:
+        raw = tomllib.load(fh)
+    assert "source" in raw
+
+
+def test_config_show_unknown_run_exits_1(workspace):
+    _, toml_path, workdir = workspace
+    runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
+    result = runner.invoke(app, ["config", "show", "nonexistent_run_id", "--config", str(toml_path)])
+    assert result.exit_code == 1
+
+
 # ---------------------------------------------------------------------------
 # sorethumb detectors
 # ---------------------------------------------------------------------------
