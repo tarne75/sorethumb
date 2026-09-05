@@ -129,6 +129,10 @@ sorethumb run /path/to/new_data.csv
 # Subset to specific groups
 sorethumb run --only-group store_42 --only-group store_99
 sorethumb run --group-filter "^store_(1|2|3)$"
+
+# Override detector selection on the fly (updates sorethumb.toml automatically)
+sorethumb run --detectors if,km,oc,lof
+sorethumb run -d if,ecod,hbos
 ```
 
 Groups that are already marked complete in the ledger are skipped unless
@@ -151,6 +155,7 @@ Groups that are already marked complete in the ledger are skipped unless
 | `--group-filter REGEX` | — | Run only groups whose label matches this regex. |
 | `--period YYYY-MM-DD` | — | Force a specific period label (for time-series datasets). |
 | `--limit-groups INT` | — | Cap the number of groups processed (reserved for future use). |
+| `--detectors STR`, `-d` | — | Comma-separated detector aliases, replacing the config list. Aliases: `if`=isolation_forest · `km`=kmeans_distance · `oc`=one_class_svm · `ecod` · `lof` · `hbos`. Full names also accepted. Automatically updates `sorethumb.toml`. |
 | `--json` | off | Machine-readable JSON summary on stdout. |
 | `--dry-run` | off | Print planned work without writing anything. |
 
@@ -403,6 +408,39 @@ sorethumb config schema --output schema.json
 | Option | Short | Description |
 |--------|-------|-------------|
 | `--output PATH` | `-o` | Write schema to a file instead of stdout. |
+
+---
+
+### `sorethumb config show <run_id>`
+
+Display the exact config used for a past run — useful for reproducing or
+adapting a previous experiment.
+
+```bash
+sorethumb config show abc12345678           # human-readable summary (default)
+sorethumb config show abc12345678 --json    # raw JSON config
+sorethumb config show abc12345678 --output repro.toml   # write as reusable sorethumb.toml
+```
+
+The default output shows a Rich table of detectors plus key settings
+(source URI, workdir, seed, scoring). `--json` returns the full stored config.
+`--output` reconstructs a minimal `sorethumb.toml` you can edit and re-run.
+
+Exit code `1` if the run ID is not found in the workspace.
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `run_id` | Run ID to inspect. Find run IDs with `sorethumb runs`. |
+
+**Options:**
+
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--json` | | Print the raw stored config as indented JSON. |
+| `--output PATH` | `-o` | Write a minimal `sorethumb.toml` to this path. |
+| `--config`, `--workdir` | | See [Common options](#common-options). |
 
 ---
 
