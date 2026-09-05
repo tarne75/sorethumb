@@ -5,6 +5,7 @@
 - [CLI reference](cli_reference.md)
 - [Configuration reference](configuration.md)
 - [Detector models](models.md)
+- [Example runs](example-runs.md)
 - [Adapting to your data](adapting-to-your-data.md)
 - [Explanations: exact vs heuristic](explanations.md)
 - [Approximations and error characteristics](approximations.md)

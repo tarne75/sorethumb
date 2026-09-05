@@ -15,24 +15,82 @@ REPO_ROOT = Path(__file__).parent.parent
 RESULTS_PATH = REPO_ROOT / "validation" / "results.json"
 OUT_PATH = REPO_ROOT / "docs" / "example-runs.md"
 
-sys.path.insert(0, str(REPO_ROOT / "src"))
-from scripts.run_validation import DATASETS, COMBOS  # reuse specs  # noqa: E402
+# Dataset ordering matches run_validation.py
+DATASET_NAMES = [
+    "kddcup99_sa", "electricity", "weather_australia", "macro_us_quarterly",
+    "elnino_sst", "sunspots_annual", "longley_multicollinear", "natops_mts", "basic_motions_mts",
+]
+
+DATASET_META: dict[str, dict] = {
+    "kddcup99_sa": {"rows": 100_655, "cols": 42,
+        "source": "KDD Cup 1999 (UCI ML Repository) — SA subset, 10 % sample",
+        "description": "Network intrusion detection. 41 connection features (numeric + categorical). "
+                       "Ground-truth `target` label excluded. Industry-standard anomaly benchmark."},
+    "electricity": {"rows": 45_312, "cols": 9,
+        "source": "Harries (1999) via OpenML — Electricity dataset",
+        "description": "Half-hourly Australian electricity demand 1996–1998. "
+                       "Price and demand for NSW and Victoria plus transfer. `class` (UP/DOWN) excluded."},
+    "weather_australia": {"rows": 690, "cols": 15,
+        "source": "Australian Bureau of Meteorology via UCI ML Repository",
+        "description": "Daily weather observations (anonymous columns A1–A14). "
+                       "A15 is the binary RainTomorrow label, excluded from features."},
+    "macro_us_quarterly": {"rows": 203, "cols": 14,
+        "source": "statsmodels macrodata — US Federal Reserve",
+        "description": "Quarterly US macroeconomic indicators 1959–2009 "
+                       "(GDP, inflation, unemployment, interest rates). Year and quarter excluded as indices."},
+    "elnino_sst": {"rows": 61, "cols": 13,
+        "source": "statsmodels elnino — NOAA/TOGA-TAO buoy array",
+        "description": "Annual mean sea-surface temperatures across 12 Pacific buoy locations "
+                       "1950–2010. YEAR excluded as index."},
+    "sunspots_annual": {"rows": 309, "cols": 2,
+        "source": "statsmodels sunspots — Royal Observatory of Belgium",
+        "description": "Annual Wolf sunspot number 1700–2008. Single numeric feature after "
+                       "excluding YEAR."},
+    "longley_multicollinear": {"rows": 16, "cols": 7,
+        "source": "statsmodels longley — Longley (1967)",
+        "description": "Annual US macro data 1947–1962 (7 highly collinear features). "
+                       "16 rows only — extreme edge case. Included for completeness."},
+    "natops_mts": {"rows": 360, "cols": 1_225,
+        "source": "UEA Time Series Classification Archive — NATOPS dataset",
+        "description": "24-channel aircraft hand-signal motion capture (51 timepoints), "
+                       "stored wide (1,224 numeric columns). `label` excluded."},
+    "basic_motions_mts": {"rows": 80, "cols": 601,
+        "source": "UEA Time Series Classification Archive — BasicMotions dataset",
+        "description": "6-axis IMU data for 4 activities (100 timepoints x 6 channels = 600 cols). "
+                       "`label` excluded."},
+}
+
+COMBO_ORDER = [
+    "baseline", "baseline+ecod", "baseline+lof", "baseline+hbos",
+    "baseline+ecod+lof", "baseline+ecod+hbos", "baseline+lof+hbos", "all6",
+]
 
 DATASET_NOTES: dict[str, str] = {
     "sunspots_annual":
         "Only one effective feature (SUNACTIVITY) after excluding YEAR. "
-        "Intersection of three or more detectors on a 1-D signal is very tight; "
-        "zero anomalies with some combos is expected.",
+        "Isolation Forest triggers a TreeSHAP fallback on 1-D data (non-fatal; "
+        "heuristic attribution is used instead). Results are valid.",
     "longley_multicollinear":
-        "16 rows only. LOF's n_neighbors is clamped from 20 to 15. "
-        "Results are illustrative edge-case only — conclusions should not be drawn "
-        "from a 16-row dataset.",
+        "16 rows — all detector combinations produce zero anomalies regardless of "
+        "PCA setting or nu tuning. Intersection of three detectors on 16 points "
+        "requires unanimous agreement that is never achieved on this dataset. "
+        "Included for completeness as an extreme edge case.",
+    "elnino_sst":
+        "61 rows — all detector combinations produce zero anomalies. "
+        "The sea-surface temperature data is too small and homogeneous for the "
+        "intersection of three independent detectors to reach unanimous agreement. "
+        "A union strategy would surface anomalies but is outside the scope of this validation.",
     "natops_mts":
-        "1,224 numeric columns (24 channels × 51 timepoints). "
-        "PCA=off triggers FeatureWidthWarning; PCA=on reduces to a manageable subspace.",
+        "1,224 numeric columns (24 channels x 51 timepoints). "
+        "PCA=off: the raw feature space produces 3 consistent anomalies across all "
+        "8 combos — a robust, stable signal. "
+        "PCA=on: dimensionality reduction collapses the discriminating structure and "
+        "produces zero anomalies across all combos. PCA is counterproductive here.",
     "basic_motions_mts":
-        "600 numeric columns (6 channels × 100 timepoints). "
-        "PCA=off may hit FeatureWidthWarning on strict configurations.",
+        "80 rows, 600 numeric columns (6 channels x 100 timepoints). "
+        "Zero anomalies across all combinations and both PCA settings. "
+        "The dataset is too small for three independent detectors to reach "
+        "intersection consensus; all activity classes contribute similar feature distributions.",
 }
 
 COMBO_LABELS: dict[str, str] = {
@@ -83,7 +141,7 @@ def render_table(results: list[dict], pca: bool) -> str:
     lines.append("| Detectors | Anomalies / Total | Rate | Time | OC-SVM nu |")
     lines.append("|---|---|---|---|---|")
 
-    for combo_name, _ in COMBOS:
+    for combo_name in COMBO_ORDER:
         r = by_combo.get(combo_name)
         label = COMBO_LABELS.get(combo_name, combo_name)
         if r is None:
@@ -129,20 +187,32 @@ def main() -> None:
     )
     sections.append("---\n")
 
-    for spec in DATASETS:
-        results = by_dataset.get(spec.name, [])
-        sections.append(f"## {spec.name}\n")
-        sections.append(f"**Source:** {spec.source}\n")
-        sections.append(f"**Dimensions:** {spec.rows:,} rows × {spec.cols} columns\n")
-        sections.append(f"**Description:** {spec.description}\n")
+    for name in DATASET_NAMES:
+        spec = DATASET_META[name]
+        results = by_dataset.get(name, [])
+        sections.append(f"## {name}\n")
+        sections.append(f"**Source:** {spec['source']}\n")
+        sections.append(f"**Dimensions:** {spec['rows']:,} rows × {spec['cols']} columns\n")
+        sections.append(f"**Description:** {spec['description']}\n")
 
-        if spec.name in DATASET_NOTES:
-            sections.append(f"> **Note:** {DATASET_NOTES[spec.name]}\n")
+        if name in DATASET_NOTES:
+            sections.append(f"> **Note:** {DATASET_NOTES[name]}\n")
 
         if not results:
             sections.append("_Not yet run._\n")
             sections.append("---\n")
             continue
+
+        # Per-dataset params note
+        baseline_off = next((r for r in results if not r["pca"] and r["combo"] == "baseline"), None)
+        baseline_on  = next((r for r in results if r["pca"]     and r["combo"] == "baseline"), None)
+        nu_off = baseline_off["nu"] if baseline_off else "—"
+        nu_on  = baseline_on["nu"]  if baseline_on  else "—"
+        sections.append(
+            f"**Baseline detector params:** `isolation_forest` n_estimators=200 · "
+            f"`kmeans_distance` k=auto · `one_class_svm` nu={nu_off} (PCA=off), nu={nu_on} (PCA=on) · "
+            f"All other params at defaults.\n"
+        )
 
         sections.append("\n### PCA disabled\n")
         sections.append(render_table(results, pca=False))
@@ -178,7 +248,7 @@ def main() -> None:
     out = "\n".join(sections)
     OUT_PATH.write_text(out, encoding="utf-8")
     print(f"Written: {OUT_PATH}")
-    print(f"Datasets: {len(by_dataset)} / {len(DATASETS)}")
+    print(f"Datasets: {len(by_dataset)} / {len(DATASET_NAMES)}")
     total_runs = sum(len(v) for v in by_dataset.values())
     print(f"Total runs documented: {total_runs}")
 
