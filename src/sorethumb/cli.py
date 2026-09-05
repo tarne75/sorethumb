@@ -1253,6 +1253,76 @@ def config_schema(
         typer.echo(schema_str)
 
 
+@config_app.command(name="show")
+def config_show(
+    run_id: Annotated[str, typer.Argument(help="Run ID whose config to display.")],
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    json_output: _JSON_OPT = False,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Write config as a re-usable sorethumb.toml to this path."),
+    ] = None,
+) -> None:
+    """Display the exact config used for a past run.
+
+    By default prints a human-readable summary. Use --json for the raw JSON
+    or --output <path> to reconstruct a sorethumb.toml you can edit and re-run.
+    """
+    cfg = _load_config(config, workdir=workdir)
+    ws_path = Path(cfg.run.workdir)
+
+    with Workspace.open(ws_path) as ws:
+        run_row = ws.store.get_run(run_id)
+
+    if run_row is None:
+        err_console.print(f"[red]Run not found:[/red] {run_id}")
+        raise typer.Exit(1)
+
+    config_json: str = run_row.get("config_json") or "{}"
+
+    if json_output:
+        typer.echo(json.dumps(json.loads(config_json), indent=2))
+        return
+
+    run_cfg = Config.model_validate_json(config_json)
+
+    if output is not None:
+        _write_minimal_toml(output, run_cfg)
+        console.print(f"[green]Config written:[/green] {output}")
+        return
+
+    config_hash = run_row.get("config_hash", "")
+    console.print(f"[bold]Config for run:[/bold] {run_id}  [dim](hash: {config_hash[:8]})[/dim]")
+    console.print(f"  Source URI: {run_cfg.source.uri}")
+    console.print(f"  Workdir:    {run_cfg.run.workdir}")
+    console.print(f"  Seed:       {run_cfg.run.seed}")
+
+    det_table = Table(title="Detectors", show_header=True, header_style="bold cyan")
+    det_table.add_column("Name", style="white")
+    det_table.add_column("Enabled", justify="center")
+    det_table.add_column("Train row cap", justify="right")
+    det_table.add_column("Params")
+
+    for det in run_cfg.detectors:
+        cap = str(det.train_row_cap) if det.train_row_cap is not None else "default"
+        params_str = ", ".join(f"{k}={v}" for k, v in (det.params or {}).items()) or "—"
+        det_table.add_row(
+            det.name,
+            "yes" if det.enabled else "no",
+            cap,
+            params_str,
+        )
+    console.print(det_table)
+
+    scoring = run_cfg.scoring
+    console.print("[bold]Scoring:[/bold]")
+    console.print(f"  combination   = {scoring.combination}")
+    console.print(f"  contamination = {scoring.contamination}")
+
+    console.print("\n[dim]Use --json for the full config or --output <path> to save as sorethumb.toml[/dim]")
+
+
 # ---------------------------------------------------------------------------
 # sorethumb workspace *
 # ---------------------------------------------------------------------------
