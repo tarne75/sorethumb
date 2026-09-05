@@ -45,13 +45,22 @@ class LOFDetector:
         """Fit LOF on X. seed is accepted for API uniformity but unused."""
         from sklearn.neighbors import LocalOutlierFactor  # noqa: PLC0415
 
+        n_rows = X.shape[0]
+        n_neighbors = min(self._n_neighbors, n_rows - 1)
+        if n_neighbors < self._n_neighbors:
+            logger.warning(
+                "LOF: clamped n_neighbors from %d to %d (only %d training rows).",
+                self._n_neighbors,
+                n_neighbors,
+                n_rows,
+            )
         logger.info(
             "LOF: fitting n_neighbors=%d on %d rows x %d features.",
-            self._n_neighbors,
-            X.shape[0],
+            n_neighbors,
+            n_rows,
             X.shape[1],
         )
-        self._model = LocalOutlierFactor(n_neighbors=self._n_neighbors, novelty=True)
+        self._model = LocalOutlierFactor(n_neighbors=n_neighbors, novelty=True)
         self._model.fit(X)
 
     def score_samples(self, X: np.ndarray) -> np.ndarray:

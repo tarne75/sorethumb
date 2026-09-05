@@ -517,6 +517,16 @@ def test_lof_class_vars():
     assert LOFDetector.default_train_row_cap == 50_000
 
 
+def test_lof_nneighbors_clamped_on_small_dataset():
+    """n_neighbors must be clamped to n_rows-1 when dataset is tiny."""
+    rng = np.random.default_rng(0)
+    X_small = rng.normal(size=(10, 3))  # 10 rows, default n_neighbors=20 would crash
+    det = LOFDetector(n_neighbors=20)
+    det.fit(X_small, seed=0)  # must not raise
+    scores = det.score_samples(X_small)
+    assert scores.shape == (10,)
+
+
 # ---------------------------------------------------------------------------
 # HBOS
 # ---------------------------------------------------------------------------
