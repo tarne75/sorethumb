@@ -13,8 +13,6 @@ No network access; all data is generated in-process.
 
 from __future__ import annotations
 
-import json
-import warnings
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -24,13 +22,18 @@ import pytest
 
 from sorethumb import Config
 from sorethumb._pipeline import run_detection
-from sorethumb.config import ColumnsConfig, DetectorConfig, FeaturesConfig, RunConfig, ScoringConfig, SourceConfig
+from sorethumb.config import (
+    ColumnsConfig,
+    DetectorConfig,
+    RunConfig,
+    ScoringConfig,
+    SourceConfig,
+)
 from sorethumb.detectors.isolation_forest import IsolationForestDetector
 from sorethumb.detectors.kmeans_distance import KMeansDetector
 from sorethumb.detectors.one_class_svm import OneClassSVMDetector
+from sorethumb.features.build import apply_feature_plan, fit_features
 from sorethumb.profiling.plan import build_feature_plan
-from sorethumb.features.build import fit_features, apply_feature_plan
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -55,12 +58,14 @@ def _make_planted_csv(path: Path, *, n_normal: int = 280, n_anomaly: int = 5, se
     for i in anomaly_indices:
         num_a[i] = 999.0
 
-    df = pl.DataFrame({
-        "id": list(range(n_total)),
-        "num_a": num_a,
-        "num_b": rng.normal(5.0, 2.0, n_total).tolist(),
-        "cat": ["A" if i % 3 != 0 else "B" for i in range(n_total)],
-    })
+    df = pl.DataFrame(
+        {
+            "id": list(range(n_total)),
+            "num_a": num_a,
+            "num_b": rng.normal(5.0, 2.0, n_total).tolist(),
+            "cat": ["A" if i % 3 != 0 else "B" for i in range(n_total)],
+        }
+    )
     df.write_csv(str(path))
     return anomaly_indices
 
@@ -86,12 +91,14 @@ def _make_time_sorted_parquet(path: Path, *, n: int = 20, anomaly_orig_idx: int 
     num_a = rng.normal(0.0, 1.0, n).tolist()
     num_a[anomaly_orig_idx] = 999.0
 
-    df = pl.DataFrame({
-        "id": list(range(n)),
-        "ts": pl.Series(timestamps).dt.cast_time_unit("us"),  # proper Datetime dtype
-        "num_a": num_a,
-        "num_b": rng.normal(5.0, 2.0, n).tolist(),
-    })
+    df = pl.DataFrame(
+        {
+            "id": list(range(n)),
+            "ts": pl.Series(timestamps).dt.cast_time_unit("us"),  # proper Datetime dtype
+            "num_a": num_a,
+            "num_b": rng.normal(5.0, 2.0, n).tolist(),
+        }
+    )
     df.write_parquet(str(path))
 
 
@@ -293,8 +300,7 @@ def test_run_id_is_deterministic(tmp_path: Path) -> None:
     r2 = run_detection(cfg, no_report=True)
 
     assert r1.run_id == r2.run_id, (
-        f"Expected identical run_ids for identical inputs; "
-        f"got {r1.run_id!r} vs {r2.run_id!r}"
+        f"Expected identical run_ids for identical inputs; got {r1.run_id!r} vs {r2.run_id!r}"
     )
 
 
@@ -343,30 +349,24 @@ def test_fit_apply_schema_is_stable(tmp_path: Path) -> None:
     Uses a column with enough unique values to trigger demotion
     (n_unique > max_feature_width, default 50).
     """
-    from sorethumb.config import ProfilingConfig
+    from sorethumb.config import FeaturesConfig, ProfilingConfig
 
     rng = np.random.default_rng(0)
     n = 200
     # 80 unique categories → above default max_feature_width=50 → triggers demotion
     cats = [f"cat_{i % 80}" for i in range(n)]
-    df = pl.DataFrame({
-        "id": list(range(n)),
-        "num_a": rng.normal(0.0, 1.0, n).tolist(),
-        "high_card": cats,
-    })
+    df = pl.DataFrame(
+        {
+            "id": list(range(n)),
+            "num_a": rng.normal(0.0, 1.0, n).tolist(),
+            "high_card": cats,
+        }
+    )
 
-    from sorethumb.config import FeaturesConfig as FC, ProfilingConfig as PC
-    from sorethumb.profiling.plan import build_feature_plan
-
-    profiling_cfg = PC()
-    features_cfg = FC()  # max_feature_width=50 by default
+    profiling_cfg = ProfilingConfig()
+    features_cfg = FeaturesConfig()  # max_feature_width=50 by default
 
     plan = build_feature_plan(df, profiling_cfg, features_cfg, ColumnsConfig())
-
-    from sorethumb.config import RunConfig as RC
-    run_cfg = RC(workdir=str(tmp_path), seed=0)
-
-    from sorethumb.features.build import fit_features, apply_feature_plan
 
     # Use a dummy config to pass features config
     dummy_cfg = Config(

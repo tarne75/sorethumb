@@ -81,6 +81,7 @@ class KMeansDetector:
             Default 0.90 means the largest clusters covering 90% of the data
             are used; small minority clusters (including anomaly sub-groups) are
             excluded from the reference set.
+
         """
         self._k_fixed = k
         self._k_min = k_min
@@ -136,14 +137,14 @@ class KMeansDetector:
         # Distance from each point to each large centroid: shape (n, n_large)
         # Using broadcasting: X[:, None, :] - centres[None, :, :]
         diffs_all = X[:, np.newaxis, :] - centres[np.newaxis, :, :]  # (n, n_large, d)
-        dist_all = np.linalg.norm(diffs_all, axis=2)                  # (n, n_large)
+        dist_all = np.linalg.norm(diffs_all, axis=2)  # (n, n_large)
 
-        nearest_idx = np.argmin(dist_all, axis=1)                     # (n,)
-        distances = dist_all[np.arange(len(X)), nearest_idx]          # (n,)
+        nearest_idx = np.argmin(dist_all, axis=1)  # (n,)
+        distances = dist_all[np.arange(len(X)), nearest_idx]  # (n,)
 
         # Store for explanation layer: contributions against the nearest large centroid
         self.last_labels = nearest_idx
-        self.last_contributions = X - centres[nearest_idx]            # signed per-dimension
+        self.last_contributions = X - centres[nearest_idx]  # signed per-dimension
 
         return -distances
 
