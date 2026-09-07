@@ -279,6 +279,56 @@ def test_kmeans_class_vars():
     assert KMeansDetector.default_train_row_cap == 200_000
 
 
+def test_kmeans_get_params_includes_cblof_fields():
+    """get_params must expose the CBLOF coverage config and resolved n_large_clusters."""
+    det = KMeansDetector(k=3, large_cluster_coverage=0.85)
+    rng = np.random.default_rng(0)
+    det.fit(rng.normal(size=(100, 4)), seed=0)
+    params = det.get_params()
+    assert params["large_cluster_coverage"] == 0.85
+    assert isinstance(params["n_large_clusters"], int)
+    assert params["n_large_clusters"] >= 1
+
+
+def test_kmeans_cblof_scores_anomaly_cluster_lower():
+    """Tight anomaly cluster must score lower (more anomalous) than inliers.
+
+    This is the CBLOF regression test: before the fix, KMeans gave the anomaly
+    cluster its own centroid → near-zero distance → ranked as most-normal.
+    After the fix, all points are scored against large-cluster centroids, so
+    the far-away anomaly cluster has a large distance and scores very low.
+    """
+    rng = np.random.default_rng(42)
+    n_inliers, n_anomalies = 270, 30
+    X_in = rng.normal(0.0, 1.0, (n_inliers, 4)).astype(np.float32)
+    X_an = rng.normal(10.0, 0.2, (n_anomalies, 4)).astype(np.float32)  # tight, far away
+    X = np.vstack([X_in, X_an])
+
+    det = KMeansDetector()
+    det.fit(X, seed=42)
+    scores = det.score_samples(X)
+
+    inlier_scores = scores[:n_inliers]
+    anomaly_scores = scores[n_inliers:]
+    # Anomalies should score strictly lower (more anomalous) than the median inlier
+    assert anomaly_scores.max() < np.median(inlier_scores), (
+        "Anomaly cluster scored at least as high as the median inlier — "
+        "CBLOF fix may not be working correctly."
+    )
+
+
+def test_kmeans_large_centroids_populated_after_fit():
+    """_large_centroids must be set after fit() and have the correct shape."""
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(200, 3)).astype(np.float32)
+    det = KMeansDetector(k=4)
+    det.fit(X, seed=0)
+    assert det._large_centroids is not None
+    # At least 1 large centroid, at most k
+    assert 1 <= det._large_centroids.shape[0] <= 4
+    assert det._large_centroids.shape[1] == 3
+
+
 def test_elbow_index_monotone():
     inertias = [100.0, 60.0, 40.0, 35.0, 32.0]
     idx = _elbow_index(inertias)
