@@ -64,8 +64,9 @@ def fit_features(df: pl.DataFrame, plan: FeaturePlan, config: Config) -> Feature
 
     row_ids = np.arange(len(df), dtype=np.int64)
 
-    # Width demotion
+    # Width demotion — store result in plan so apply_feature_plan uses the same treatment
     demoted = compute_demotions(plan, config.features.max_feature_width)
+    plan.demoted_columns = demoted
 
     # Compute frequency maps for demoted columns (not stored in plan at build_feature_plan time)
     extra_freq: dict[str, dict[str, float]] = {}
@@ -146,7 +147,7 @@ def apply_feature_plan(df: pl.DataFrame, plan: FeaturePlan) -> FeatureSpace:
 
     row_ids = np.arange(len(df), dtype=np.int64)
 
-    enc_df = _encode(df, plan, set(), None)
+    enc_df = _encode(df, plan, plan.demoted_columns, None)
     scaled_df = apply_scaler(enc_df, plan.scaler_params, enc_df.columns)
     if plan.correlation_drop_list:
         keep = [c for c in scaled_df.columns if c not in plan.correlation_drop_list]

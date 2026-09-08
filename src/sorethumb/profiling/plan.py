@@ -90,6 +90,8 @@ class FeaturePlan:
     pca_explained_variance_ratio: list[float] | None = None
     scaler_type: str = "robust"  # "standard" | "robust"
     output_dtype: str = "float32"  # "float32" | "float64"
+    # Columns demoted from one-hot to frequency encoding due to width control
+    demoted_columns: set[str] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         """Validate that every output feature has a derived_to_original entry."""
@@ -133,6 +135,7 @@ class FeaturePlan:
             "pca_explained_variance_ratio": self.pca_explained_variance_ratio,
             "scaler_type": self.scaler_type,
             "output_dtype": self.output_dtype,
+            "demoted_columns": sorted(self.demoted_columns),
         }
         return json.dumps(d, sort_keys=True)
 
@@ -170,6 +173,7 @@ class FeaturePlan:
             pca_explained_variance_ratio=d.get("pca_explained_variance_ratio"),
             scaler_type=d.get("scaler_type", "robust"),
             output_dtype=d.get("output_dtype", "float32"),
+            demoted_columns=set(d.get("demoted_columns", [])),
         )
 
 

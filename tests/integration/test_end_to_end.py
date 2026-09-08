@@ -313,23 +313,12 @@ def test_resume_skips_completed_group(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "Phase 4: width demotion is computed at fit time but never persisted to "
-        "FeaturePlan. apply_feature_plan passes an empty demoted set, so a "
-        "high-cardinality column is one-hot encoded on apply where it was "
-        "frequency-encoded on fit, producing a different feature_schema_hash."
-    ),
-)
 def test_fit_apply_schema_is_stable(tmp_path: Path) -> None:
     """apply_feature_plan must produce the same feature_schema_hash as build_features.
 
     Uses a column with enough unique values to trigger demotion
     (n_unique > max_feature_width, default 50).
     """
-    from sorethumb.config import FeaturesConfig, ProfilingConfig
-
     rng = np.random.default_rng(0)
     n = 200
     # 80 unique categories → above default max_feature_width=50 → triggers demotion
@@ -342,18 +331,12 @@ def test_fit_apply_schema_is_stable(tmp_path: Path) -> None:
         }
     )
 
-    profiling_cfg = ProfilingConfig()
-    features_cfg = FeaturesConfig()  # max_feature_width=50 by default
-
-    plan = build_feature_plan(df, profiling_cfg, features_cfg, ColumnsConfig())
-
-    # Use a dummy config to pass features config
-    dummy_cfg = Config(
+    cfg = Config(
         source=SourceConfig(uri="dummy"),
         run=RunConfig(workdir=str(tmp_path), seed=0),
     )
-
-    fit_space = fit_features(df, plan, dummy_cfg)
+    plan = build_feature_plan(df, cfg)
+    fit_space = fit_features(df, plan, cfg)
     apply_space = apply_feature_plan(df, plan)
 
     assert fit_space.feature_schema_hash == apply_space.feature_schema_hash, (
