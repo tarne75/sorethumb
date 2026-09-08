@@ -3,32 +3,82 @@
 Each (run_id, group_key, detector_name) triple has three files:
   - <detector_name>.joblib   — the fitted sklearn estimator
   - calibrator.json          — Calibrator quantile points
-  - manifest.json            — feature_schema_hash, plan digest, params, seed, ...
+  - manifest.json            — feature_schema_hash, plan digest, params, seed,
+                               library_versions, ...
 
 score_with_existing() loads a source run's plan and fitted models, applies them
-to new data without re-fitting, and compares feature_schema_hash to detect drift.
+to new data without re-fitting, compares feature_schema_hash to detect drift,
+and checks the fit-time library versions against the current environment.
 """
 
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import logging
+import platform
 import warnings
 from typing import Any
 
 import joblib
 import numpy as np
 
-from sorethumb.errors import ModelSchemaDriftError, ModelSchemaDriftWarning, StoreError
+from sorethumb.errors import (
+    ModelSchemaDriftError,
+    ModelSchemaDriftWarning,
+    ModelVersionMismatchError,
+    ModelVersionMismatchWarning,
+    StoreError,
+)
 from sorethumb.scoring.calibrate import Calibrator
 from sorethumb.store.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
+# Libraries whose version changes can silently change a pickled estimator's
+# scores. Recorded at fit time and checked when the model is reloaded.
+_TRACKED_LIBRARIES = ("sorethumb", "scikit-learn", "numpy", "scipy", "joblib")
+
 
 def _plan_digest(plan_json: str) -> str:
     return hashlib.sha256(plan_json.encode()).hexdigest()[:16]
+
+
+def _library_versions() -> dict[str, str]:
+    """Return {distribution -> version} for the libraries that affect model scores."""
+    versions = {"python": platform.python_version()}
+    for dist in _TRACKED_LIBRARIES:
+        try:
+            versions[dist] = importlib.metadata.version(dist)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+    return versions
+
+
+def _check_library_versions(manifest: dict[str, Any], *, strict: bool) -> None:
+    """Compare the manifest's fit-time library versions against the current env.
+
+    No-op when the manifest predates version recording. On mismatch: raise
+    ModelVersionMismatchError if *strict*, else emit ModelVersionMismatchWarning.
+    """
+    saved = manifest.get("library_versions")
+    if not saved:
+        return
+    current = _library_versions()
+    drifted = {
+        name: (ver, current.get(name, "<absent>")) for name, ver in saved.items() if current.get(name) != ver
+    }
+    if not drifted:
+        return
+    detail = ", ".join(f"{name}: fitted={was!r} now={now!r}" for name, (was, now) in sorted(drifted.items()))
+    msg = (
+        f"Model {manifest.get('model_id', '<unknown>')} was fitted under different "
+        f"library versions; scores may not be reproducible ({detail})."
+    )
+    if strict:
+        raise ModelVersionMismatchError(msg)
+    warnings.warn(msg, ModelVersionMismatchWarning, stacklevel=3)
 
 
 def save_model(
@@ -72,6 +122,7 @@ def save_model(
         "train_row_count": train_row_count,
         "params": params,
         "seed": seed,
+        "library_versions": _library_versions(),
     }
     manifest_path = out_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, default=str), encoding="utf-8")
@@ -112,11 +163,17 @@ def load_model(
     run_id: str,
     group_key: str,
     detector_name: str,
+    *,
+    strict: bool = False,
 ) -> tuple[Any, Calibrator, dict[str, Any]]:
     """Load a fitted detector, its calibrator, and the manifest dict.
 
     Returns (detector, calibrator, manifest).
     Raises StoreError if the model files are absent.
+
+    The fit-time library versions recorded in the manifest are compared against
+    the current environment: a mismatch raises ModelVersionMismatchError when
+    *strict*, otherwise emits ModelVersionMismatchWarning.
     """
     out_dir = workspace.models_dir(run_id, group_key)
 
@@ -124,6 +181,12 @@ def load_model(
     if not estimator_path.exists():
         msg = f"Model file not found: {estimator_path}"
         raise StoreError(msg)
+
+    manifest_path = out_dir / "manifest.json"
+    manifest: dict[str, Any] = {}
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    _check_library_versions(manifest, strict=strict)
 
     detector = joblib.load(str(estimator_path))
 
@@ -133,11 +196,6 @@ def load_model(
         calibrator = Calibrator.from_dict(calibrator_d)
     else:
         calibrator = Calibrator()
-
-    manifest_path = out_dir / "manifest.json"
-    manifest: dict[str, Any] = {}
-    if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     return detector, calibrator, manifest
 
@@ -159,6 +217,10 @@ def score_with_existing(
     - strict=False: emits ModelSchemaDriftWarning; the caller must decide whether
       to refit and mark the result as drift-refitted.
 
+    Also compares the fit-time library versions recorded in each manifest against
+    the current environment: strict=True raises ModelVersionMismatchError, else
+    ModelVersionMismatchWarning is emitted.
+
     Parameters
     ----------
     workspace:
@@ -174,7 +236,7 @@ def score_with_existing(
     detector_names:
         Which detectors to score with. Must match what was saved.
     strict:
-        If True, raise on schema drift instead of warning.
+        If True, raise on schema drift or library-version mismatch instead of warning.
 
     Returns
     -------
@@ -190,7 +252,9 @@ def score_with_existing(
 
     for det_name in detector_names:
         try:
-            detector, calibrator, manifest = load_model(workspace, source_run_id, group_key, det_name)
+            detector, calibrator, manifest = load_model(
+                workspace, source_run_id, group_key, det_name, strict=strict
+            )
         except StoreError:
             logger.warning(
                 "No saved model for detector=%s group=%s run=%s; skipping.",

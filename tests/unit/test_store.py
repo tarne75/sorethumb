@@ -8,7 +8,13 @@ import numpy as np
 import polars as pl
 import pytest
 
-from sorethumb.errors import ModelSchemaDriftError, ModelSchemaDriftWarning, StoreError
+from sorethumb.errors import (
+    ModelSchemaDriftError,
+    ModelSchemaDriftWarning,
+    ModelVersionMismatchError,
+    ModelVersionMismatchWarning,
+    StoreError,
+)
 from sorethumb.store.db import Store
 from sorethumb.store.identifiers import validate_identifier
 from sorethumb.store.models import load_model, save_model, score_with_existing
@@ -350,6 +356,73 @@ def test_save_model_registers_db_row(tmp_path):
 def test_load_model_missing_raises(tmp_path):
     with _open_ws(tmp_path) as ws, pytest.raises(StoreError, match="not found"):
         load_model(ws, "norun", "nogroup", "isolation_forest")
+
+
+# ---------------------------------------------------------------------------
+# Model library-version recording / verification
+# ---------------------------------------------------------------------------
+
+
+def _save_one_model(ws, run_id: str = "run1"):
+    det, X = _fit_detector()
+    cal = _fitted_calibrator(det, X)
+    ws.store.upsert_dataset("fp1", "uri", "sfp", "cfp", 100, 4)
+    ws.store.insert_run(run_id, "fp1", "{}", 0)
+    gk = make_group_key({"g": "A"})
+    save_model(ws, run_id, gk, det, cal, "{}", "hash_abc", 100, 42)
+    return gk, ws.models_dir(run_id, gk) / "manifest.json"
+
+
+def test_manifest_records_library_versions(tmp_path):
+    with _open_ws(tmp_path) as ws:
+        _gk, manifest_path = _save_one_model(ws)
+        versions = json.loads(manifest_path.read_text())["library_versions"]
+    assert "python" in versions
+    assert "numpy" in versions
+    assert "scikit-learn" in versions
+    assert all(isinstance(v, str) and v for v in versions.values())
+
+
+def test_load_model_version_mismatch_warns(tmp_path):
+    with _open_ws(tmp_path) as ws:
+        gk, manifest_path = _save_one_model(ws)
+        manifest = json.loads(manifest_path.read_text())
+        manifest["library_versions"]["numpy"] = "0.0.0-fake"
+        manifest_path.write_text(json.dumps(manifest))
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            load_model(ws, "run1", gk, "isolation_forest")
+
+    matches = [x for x in w if issubclass(x.category, ModelVersionMismatchWarning)]
+    assert matches
+    assert "numpy" in str(matches[0].message)
+
+
+def test_load_model_version_mismatch_strict_raises(tmp_path):
+    with _open_ws(tmp_path) as ws:
+        gk, manifest_path = _save_one_model(ws)
+        manifest = json.loads(manifest_path.read_text())
+        manifest["library_versions"]["scikit-learn"] = "0.0.0-fake"
+        manifest_path.write_text(json.dumps(manifest))
+
+        with pytest.raises(ModelVersionMismatchError, match="scikit-learn"):
+            load_model(ws, "run1", gk, "isolation_forest", strict=True)
+
+
+def test_load_model_without_version_block_is_silent(tmp_path):
+    """A manifest predating version recording must not warn."""
+    with _open_ws(tmp_path) as ws:
+        gk, manifest_path = _save_one_model(ws)
+        manifest = json.loads(manifest_path.read_text())
+        del manifest["library_versions"]
+        manifest_path.write_text(json.dumps(manifest))
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            load_model(ws, "run1", gk, "isolation_forest", strict=True)
+
+    assert not [x for x in w if issubclass(x.category, ModelVersionMismatchWarning)]
 
 
 # ---------------------------------------------------------------------------
