@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Weekly accuracy-regression run (Mondays 06:00 UTC). Only this event
+    # triggers the `benchmark` job below.
+    - cron: "0 6 * * 1"
 
 jobs:
   lint:

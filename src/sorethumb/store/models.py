@@ -152,6 +152,7 @@ def save_model(
             kind="model",
             byte_size=fpath.stat().st_size,
             regenerable=False,
+            run_id=run_id,
         )
 
     logger.info("Saved model %s to %s.", model_id, out_dir)

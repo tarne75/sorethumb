@@ -69,6 +69,7 @@ def write_results(
         kind="results",
         byte_size=byte_size,
         regenerable=False,
+        run_id=run_id,
     )
     return out_path
 
