@@ -497,11 +497,11 @@ def test_build_feature_plan_with_reference_column(tmp_path: Path) -> None:
         columns=ColumnsConfig(reference_column="ref_col"),
     )
     plan = build_feature_plan(df, config)
-    # ref_col should not be classified as identifier_like (it's protected)
+    # ref_col is configured as reference_column — excluded from the feature matrix
     ref_decision = next((d for d in plan.decisions if d.column == "ref_col"), None)
     assert ref_decision is not None
-    # ref_col is numeric, so it should be numeric class (not ignored by protection—just protected from id detection)
-    assert ref_decision.col_class == ColumnClass.numeric
+    assert ref_decision.col_class == ColumnClass.ignored
+    assert all(not f.startswith("ref_col") for f in plan.output_features)
 
 
 def test_build_feature_plan_non_chosen_temporal_dropped(tmp_path: Path) -> None:

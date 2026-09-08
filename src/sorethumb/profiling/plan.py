@@ -220,7 +220,12 @@ def build_feature_plan(df: pl.DataFrame, config: Config) -> FeaturePlan:
         if col_class == ColumnClass.temporal and p.name != chosen_time:
             treatment = Treatment.drop
 
-        emit_indicator = _should_emit_indicator(p, config.profiling, config.features)
+        # Ignored columns (id_column, reference_column, pattern matches) never emit indicators
+        emit_indicator = (
+            _should_emit_indicator(p, config.profiling, config.features)
+            if col_class != ColumnClass.ignored
+            else False
+        )
 
         decisions.append(
             ColumnDecision(

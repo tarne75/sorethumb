@@ -104,7 +104,7 @@ def test_profiling_config_defaults() -> None:
 
     pc = ProfilingConfig()
     assert pc.null_ratio_drop == pytest.approx(0.70)
-    assert pc.null_ratio_flag == pytest.approx(0.30)
+    assert pc.null_ratio_flag == pytest.approx(0.0)
     assert pc.near_constant_distinct == 3
     assert pc.identifier_cardinality_ratio == pytest.approx(0.90)
     assert pc.categorical_cardinality_ratio == pytest.approx(0.01)
