@@ -32,6 +32,7 @@ def compute_totals(
     period_label: str,
     dataset_fp: str,
     run_id: str,
+    config_hash: str = "",
 ) -> pl.DataFrame:
     """Aggregate anomaly counts and join to population at (group, period) grain.
 
@@ -51,6 +52,9 @@ def compute_totals(
         Columns defining the group dimension. Empty list means a single global group.
     period_label, dataset_fp, run_id:
         Stored on every upserted row for cross-period queries.
+    config_hash:
+        Hash of the active configuration. Different values produce separate rows
+        rather than overwriting prior trend points for the same (dataset, group, period).
 
     Returns
     -------
@@ -68,7 +72,7 @@ def compute_totals(
         anomaly_count = int(row["anomaly_count"])
         pop = int(row["population"])
         rate = row.get("rate")
-        store.upsert_total(dataset_fp, gk, period_label, anomaly_count, pop, rate, run_id)
+        store.upsert_total(dataset_fp, gk, period_label, anomaly_count, pop, rate, run_id, config_hash)
 
     return totals.select(["group_key", "anomaly_count", "population", "rate"])
 

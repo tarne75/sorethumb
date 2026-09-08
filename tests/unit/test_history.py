@@ -47,6 +47,7 @@ def _seed_totals(
     anomaly_count: int,
     population: int,
     rate: float | None = None,
+    config_hash: str = "cfg0",
 ) -> None:
     ws.store.upsert_dataset(dataset_fp, "uri", "s", "c", 100, 5)
     ws.store.insert_run(run_id, dataset_fp, "{}", 0)
@@ -58,6 +59,7 @@ def _seed_totals(
         population,
         rate if rate is not None else (anomaly_count / population if population > 0 else None),
         run_id,
+        config_hash,
     )
 
 
@@ -375,7 +377,7 @@ class TestComputeTotals:
                     "anomaly_flag": [True, False, True, True],
                 }
             )
-            df = compute_totals(ws.store, results, None, ["country"], "2026-09-01", self.DS, "run1")
+            df = compute_totals(ws.store, results, None, ["country"], "2026-09-01", self.DS, "run1", "cfg1")
         counts = dict(zip(df["group_key"].to_list(), df["anomaly_count"].to_list(), strict=True))
         gk_us = make_group_key({"country": "US"})
         gk_au = make_group_key({"country": "AU"})
@@ -386,8 +388,8 @@ class TestComputeTotals:
         with ws:
             self._run(ws)
             results = pl.DataFrame({"anomaly_flag": [True, False, True]})
-            compute_totals(ws.store, results, None, [], "2026-09-01", self.DS, "run1")
-            compute_totals(ws.store, results, None, [], "2026-09-01", self.DS, "run1")
+            compute_totals(ws.store, results, None, [], "2026-09-01", self.DS, "run1", "cfg1")
+            compute_totals(ws.store, results, None, [], "2026-09-01", self.DS, "run1", "cfg1")
             rows = ws.store._conn.execute(
                 "SELECT COUNT(*) AS n FROM totals WHERE dataset_fp=? AND period_label=?",
                 (self.DS, "2026-09-01"),
@@ -409,7 +411,9 @@ class TestComputeTotals:
                     "population": [1000, 500],
                 }
             )
-            df = compute_totals(ws.store, results, population, ["country"], "2026-09-01", self.DS, "run1")
+            df = compute_totals(
+                ws.store, results, population, ["country"], "2026-09-01", self.DS, "run1", "cfg1"
+            )
         gk_us = make_group_key({"country": "US"})
         row_us = df.filter(pl.col("group_key") == gk_us)
         assert row_us["population"][0] == 1000
@@ -427,7 +431,9 @@ class TestComputeTotals:
             pop_wrong = pl.DataFrame({"region": ["NA"], "population": [500]})
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always")
-                df = compute_totals(ws.store, results, pop_wrong, ["country"], "2026-09-01", self.DS, "run1")
+                df = compute_totals(
+                    ws.store, results, pop_wrong, ["country"], "2026-09-01", self.DS, "run1", "cfg1"
+                )
         assert any(issubclass(x.category, PopulationMismatchWarning) for x in w)
         assert df["population"][0] == -1
         assert df["rate"][0] is None
@@ -436,7 +442,7 @@ class TestComputeTotals:
         with ws:
             self._run(ws)
             results = pl.DataFrame({"anomaly_flag": [True, True, False]})
-            df = compute_totals(ws.store, results, None, [], "2026-09-01", self.DS, "run1")
+            df = compute_totals(ws.store, results, None, [], "2026-09-01", self.DS, "run1", "cfg1")
         assert len(df) == 1
         assert df["group_key"][0] == "__all__"
         assert df["anomaly_count"][0] == 2
@@ -445,9 +451,24 @@ class TestComputeTotals:
         with ws:
             self._run(ws)
             results = pl.DataFrame({"anomaly_flag": [True]})
-            df = compute_totals(ws.store, results, None, [], "2026-09-01", self.DS, "run1")
+            df = compute_totals(ws.store, results, None, [], "2026-09-01", self.DS, "run1", "cfg1")
         assert df["population"][0] == -1
         assert df["rate"][0] is None
+
+    def test_different_config_hash_produces_separate_rows(self, ws):
+        """Config change must add a new trend point, not overwrite the prior one."""
+        with ws:
+            self._run(ws)
+            results = pl.DataFrame({"anomaly_flag": [True, False]})
+            compute_totals(ws.store, results, None, [], "2026-09-01", self.DS, "run1", "cfgA")
+            compute_totals(ws.store, results, None, [], "2026-09-01", self.DS, "run1", "cfgB")
+            rows = ws.store._conn.execute(
+                "SELECT COUNT(*) AS n FROM totals WHERE dataset_fp=? AND period_label=?",
+                (self.DS, "2026-09-01"),
+            ).fetchone()
+        assert rows["n"] == 2, (
+            "Two different config_hashes for the same (dataset, period) must produce two rows, not one"
+        )
 
 
 # ---------------------------------------------------------------------------
