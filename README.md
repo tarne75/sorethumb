@@ -123,7 +123,7 @@ cd /path/to/my-analysis
 
 ```toml
 [source]
-uri = "/absolute/path/to/your/data.csv"    # also accepts .parquet, .json, s3://…
+uri = "/absolute/path/to/your/data.csv"    # also accepts .parquet, .json, and http(s):// URLs
 
 [run]
 workdir = "."   # where models, results and the SQLite ledger are stored

@@ -138,6 +138,49 @@ class TestWriteGroupCsv:
         write_group_csv(_RECORDS_DF, subdir, "key1234567890123")
         assert subdir.is_dir()
 
+    def test_neutralizes_formula_injection_in_string_cells(self, tmp_path: Path):
+        df = pl.DataFrame(
+            {
+                "row_id": [0, 1, 2, 3, 4],
+                "reason_1": [
+                    "=1+2",
+                    "+cmd|' /C calc'!A0",
+                    "-2+3",
+                    "@SUM(A1)",
+                    "safe_value",
+                ],
+            }
+        )
+        path = write_group_csv(df, tmp_path, "injectkey1234567")
+        raw = path.read_text(encoding="utf-8").splitlines()
+        # Header + 5 rows; every triggering cell is now quote-prefixed.
+        assert raw[1].split(",", 1)[1].startswith("'=1+2") or ",'=1+2" in raw[1]
+        back = pl.read_csv(str(path))
+        assert back["reason_1"].to_list() == [
+            "'=1+2",
+            "'+cmd|' /C calc'!A0",
+            "'-2+3",
+            "'@SUM(A1)",
+            "safe_value",
+        ]
+
+    def test_numeric_columns_are_not_touched(self, tmp_path: Path):
+        df = pl.DataFrame({"row_id": [0, 1], "score": [-0.5, 1.25]})
+        path = write_group_csv(df, tmp_path, "numerickey123456")
+        back = pl.read_csv(str(path))
+        assert back["score"].to_list() == [-0.5, 1.25]
+
+    def test_neutralizes_formula_injection_in_header(self, tmp_path: Path):
+        df = pl.DataFrame({"row_id": [0], "=danger": ["x"]})
+        path = write_group_csv(df, tmp_path, "headerkey1234567")
+        assert "'=danger" in path.read_text(encoding="utf-8").splitlines()[0]
+
+    def test_nulls_survive_neutralization(self, tmp_path: Path):
+        df = pl.DataFrame({"row_id": [0, 1], "reason_1": ["=x", None]})
+        path = write_group_csv(df, tmp_path, "nullskey12345678")
+        back = pl.read_csv(str(path))
+        assert back["reason_1"].to_list() == ["'=x", None]
+
 
 # ---------------------------------------------------------------------------
 # html.py — offline, escaping, CSV links, provenance

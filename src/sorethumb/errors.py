@@ -46,6 +46,10 @@ class ModelSchemaDriftError(SorethumbError):
     """Raised in strict mode when a persisted model's feature schema no longer matches."""
 
 
+class ModelVersionMismatchError(SorethumbError):
+    """Raised in strict mode when a persisted model was fitted under different library versions."""
+
+
 class SorethumbWarning(UserWarning):
     """Base warning. Promoted to an exception when run.strict = True.
 
@@ -80,6 +84,10 @@ class FallbackAttributionWarning(SorethumbWarning):
 
 class ModelSchemaDriftWarning(SorethumbWarning):
     """A persisted model's feature schema no longer matches; the group was refit."""
+
+
+class ModelVersionMismatchWarning(SorethumbWarning):
+    """A persisted model was fitted under different library versions; scores may not be reproducible."""
 
 
 class PopulationMismatchWarning(SorethumbWarning):
