@@ -41,7 +41,6 @@ def _fit_kmeans(n: int = 200, d: int = 4, k: int = 2, seed: int = 0):
     X = _rng_data(n, d, seed)
     det = KMeansDetector(k=k)
     det.fit(X, seed=seed)
-    det.score_samples(X)  # populates last_contributions
     return det, X
 
 
@@ -104,31 +103,30 @@ def test_gradient_consistent_sign_convention():
 
 def test_centroid_shape():
     det, X = _fit_kmeans()
-    attrs, tag = centroid_attributions(det)
+    attrs, tag = centroid_attributions(det, X)
     assert attrs.shape == X.shape
     assert tag == "heuristic"
 
 
 def test_centroid_non_negative():
-    det, _ = _fit_kmeans()
-    attrs, _ = centroid_attributions(det)
+    det, X = _fit_kmeans()
+    attrs, _ = centroid_attributions(det, X)
     assert (attrs >= 0).all(), "centroid attributions are absolute values, must be >= 0"
 
 
-def test_centroid_requires_score_first():
+def test_centroid_requires_fit_first():
     from sorethumb.detectors.kmeans_distance import KMeansDetector
 
     X = _rng_data()
     det = KMeansDetector(k=2)
-    det.fit(X, seed=0)
-    # last_contributions not populated yet
-    with pytest.raises(ValueError, match="score_samples"):
-        centroid_attributions(det)
+    # fit() not called → _large_centroids is None
+    with pytest.raises(ValueError, match="fit"):
+        centroid_attributions(det, X)
 
 
 def test_centroid_dtype():
-    det, _ = _fit_kmeans()
-    attrs, _ = centroid_attributions(det)
+    det, X = _fit_kmeans()
+    attrs, _ = centroid_attributions(det, X)
     assert attrs.dtype == np.float64
 
 

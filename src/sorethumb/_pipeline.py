@@ -454,6 +454,10 @@ def _run_group(
     else:
         df_group = df_raw
 
+    # Sort by time column so raw-value lookup and feature matrix share the same ordering
+    if plan.chosen_time_column and plan.chosen_time_column in df_group.columns:
+        df_group = df_group.sort(plan.chosen_time_column)
+
     # Skip group below minimum records
     if len(df_group) < config.scoring.min_records:
         logger.info(
@@ -580,8 +584,10 @@ def _run_group(
     )
 
     # ── Build result DataFrame ────────────────────────────────────────────
-    # Row IDs come from the FeatureSpace
-    row_ids = group_space.row_ids
+    # Use actual id_column values when configured (joinable back to source);
+    # fall back to positional index from the FeatureSpace otherwise.
+    id_col = config.columns.id_column
+    row_ids = df_group[id_col].to_numpy() if id_col and id_col in df_group.columns else group_space.row_ids
 
     rank_arr = np.zeros(n_rows, dtype=int)
     if n_anomalies > 0:
@@ -683,8 +689,7 @@ def _compute_attributions(
                 full_attr, tag = tree_shap_attributions(det, X, group_name=det_name)
                 attr = full_attr[flagged_idx]
             elif isinstance(det, KMeansDetector):
-                # last_contributions set after score_samples; index flagged rows
-                full_attr, tag = centroid_attributions(det)
+                full_attr, tag = centroid_attributions(det, X)
                 attr = full_attr[flagged_idx]
             else:
                 # Gradient: operate only on flagged rows for cost control

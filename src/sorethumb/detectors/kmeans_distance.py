@@ -148,6 +148,11 @@ class KMeansDetector:
 
         return -distances
 
+    @property
+    def large_centroids(self) -> np.ndarray | None:
+        """Large-cluster centroids used for scoring; None until fit() is called."""
+        return self._large_centroids
+
     def natural_flag(self, scores: np.ndarray) -> np.ndarray:
         """Flag rows whose distance is an outlier by Tukey's method (1.5 × IQR fence)."""
         distances = -scores
