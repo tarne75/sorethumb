@@ -274,13 +274,6 @@ def test_explanation_references_perturbed_column(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "Phase 3: run_id = 'run_<epoch>_<uuid>' (random per invocation); "
-        "the group_status ledger check can never match a prior run."
-    ),
-)
 def test_run_id_is_deterministic(tmp_path: Path) -> None:
     """Two calls with identical config and data must return the same run_id."""
     csv = tmp_path / "data.csv"
@@ -297,13 +290,6 @@ def test_run_id_is_deterministic(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "Phase 3: resume cannot work because run_id is regenerated each invocation; "
-        "the ledger check 'group_status(run_id, group_key)' never finds a prior result."
-    ),
-)
 def test_resume_skips_completed_group(tmp_path: Path) -> None:
     """A second run with identical inputs must skip already-complete groups."""
     csv = tmp_path / "data.csv"

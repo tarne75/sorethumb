@@ -10,12 +10,12 @@ inspects their return values. It does not call any subsystem directly.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
 import sys
 import time
-import uuid
 import warnings
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -182,7 +182,6 @@ def run_detection(
 
     """
     started_at = datetime.now(UTC).isoformat()
-    run_id = f"run_{int(time.time())}_{uuid.uuid4().hex[:8]}"
     ws_path = Path(config.run.workdir)
 
     if ws_path.exists() and (ws_path / "sorethumb.db").exists():
@@ -234,6 +233,10 @@ def run_detection(
             )
 
         # ── 3. Register run ──────────────────────────────────────────────
+        # run_id is derived deterministically so that a repeat call with identical
+        # dataset + config + period finds the same ledger entries and can skip
+        # already-complete groups (resume behaviour).
+        run_id = _make_run_id(dataset_fp, config.config_hash(), period_label)
         config_json = config.model_dump_json()
         ws.store.insert_run(
             run_id=run_id,
@@ -423,6 +426,21 @@ def run_detection(
             finished_at=finished_at,
             warnings_issued=issued_warnings,
         )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_run_id(dataset_fp: str, config_hash: str, period_label: str | None) -> str:
+    """Stable run identifier derived from dataset content, config, and period.
+
+    Same inputs always produce the same ID, so a repeat invocation can find
+    prior ledger entries and skip already-complete groups (resume behaviour).
+    """
+    key = f"{dataset_fp}:{config_hash}:{period_label or '__no_period__'}"
+    return "run_" + hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
 # ---------------------------------------------------------------------------
