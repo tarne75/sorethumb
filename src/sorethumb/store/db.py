@@ -13,6 +13,7 @@ import importlib.resources
 import logging
 import sqlite3
 import sys
+from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Self
@@ -32,13 +33,31 @@ def _config_hash(config_json: str) -> str:
     return hashlib.sha256(config_json.encode()).hexdigest()[:16]
 
 
+def _iter_sql_statements(sql: str) -> Generator[str, None, None]:
+    """Yield non-empty SQL statements from a migration file.
+
+    Splits on ';', strips whitespace and inline comments, and skips any
+    ``INSERT INTO schema_migration`` lines — those are handled by the
+    migration runner itself so the version is recorded atomically with
+    the rest of the migration.
+    """
+    for raw in sql.split(";"):
+        stmt = raw.strip()
+        if not stmt:
+            continue
+        lower = stmt.lower()
+        if lower.startswith("insert into schema_migration"):
+            continue
+        yield stmt
+
+
 class Store:
     """Owns the SQLite connection for a single workspace."""
 
     def __init__(self, db_path: Path) -> None:
         """Open (or create) the database at db_path and apply pending migrations."""
         self._path = db_path
-        self._conn = sqlite3.connect(str(db_path), isolation_level=None, check_same_thread=False)
+        self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
@@ -90,13 +109,12 @@ class Store:
             if version in applied:
                 continue
             logger.info("Applying migration %03d.", version)
-            # Migrations run as a single transaction each
+            # Execute every statement in the migration file and record the version
+            # as one atomic transaction so a crash leaves the schema in a clean state.
             with self._conn:
-                # Migration 001 already creates schema_migration; strip that CREATE to avoid conflict
-                if version == 1:
-                    # The migration file manages its own schema_migration table, skip CREATE
-                    pass
-                self._conn.executescript(sql)
+                for stmt in _iter_sql_statements(sql):
+                    self._conn.execute(stmt)
+                self._conn.execute("INSERT OR IGNORE INTO schema_migration (version) VALUES (?)", (version,))
             logger.info("Migration %03d applied.", version)
 
     # ------------------------------------------------------------------
@@ -429,22 +447,24 @@ class Store:
         population: int,
         rate: float | None,
         run_id: str,
+        config_hash: str = "",
     ) -> None:
-        """Insert or replace a totals row on its natural key."""
+        """Insert or replace a totals row on its natural key (dataset, group, period, config)."""
         now = _now_utc()
         self._conn.execute(
             """
             INSERT INTO totals
-                (dataset_fp, group_key, period_label, anomaly_count, population, rate, run_id, computed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(dataset_fp, group_key, period_label) DO UPDATE SET
+                (dataset_fp, group_key, period_label, config_hash,
+                 anomaly_count, population, rate, run_id, computed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(dataset_fp, group_key, period_label, config_hash) DO UPDATE SET
                 anomaly_count = excluded.anomaly_count,
                 population    = excluded.population,
                 rate          = excluded.rate,
                 run_id        = excluded.run_id,
                 computed_at   = excluded.computed_at
             """,
-            (dataset_fp, group_key, period_label, anomaly_count, population, rate, run_id, now),
+            (dataset_fp, group_key, period_label, config_hash, anomaly_count, population, rate, run_id, now),
         )
         self._conn.commit()
 
