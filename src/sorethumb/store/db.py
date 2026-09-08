@@ -36,17 +36,17 @@ def _config_hash(config_json: str) -> str:
 def _iter_sql_statements(sql: str) -> Generator[str, None, None]:
     """Yield non-empty SQL statements from a migration file.
 
-    Splits on ';', strips whitespace and inline comments, and skips any
-    ``INSERT INTO schema_migration`` lines — those are handled by the
-    migration runner itself so the version is recorded atomically with
-    the rest of the migration.
+    Full-line ``--`` comments are dropped first (so a semicolon inside prose in a
+    comment cannot split a statement), then the remainder is split on ';' and any
+    ``INSERT INTO schema_migration`` statement is skipped — the migration runner
+    records the version itself, atomically with the rest of the migration.
     """
-    for raw in sql.split(";"):
+    code = "\n".join(line for line in sql.splitlines() if not line.lstrip().startswith("--"))
+    for raw in code.split(";"):
         stmt = raw.strip()
         if not stmt:
             continue
-        lower = stmt.lower()
-        if lower.startswith("insert into schema_migration"):
+        if stmt.lower().startswith("insert into schema_migration"):
             continue
         yield stmt
 
@@ -364,14 +364,20 @@ class Store:
         kind: str,
         byte_size: int,
         regenerable: bool,
+        run_id: str | None = None,
     ) -> None:
-        """Register a file artifact in the index."""
+        """Register a file artifact in the index.
+
+        *run_id* is the run that produced the artifact; it lets the prune query
+        join failed runs to their artifacts by equality rather than a path
+        substring match. Pass it whenever the artifact belongs to a run.
+        """
         self._conn.execute(
             """
-            INSERT OR REPLACE INTO artifact (artifact_id, path, kind, byte_size, regenerable)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO artifact (artifact_id, path, kind, byte_size, regenerable, run_id)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (artifact_id, path, kind, byte_size, 1 if regenerable else 0),
+            (artifact_id, path, kind, byte_size, 1 if regenerable else 0, run_id),
         )
         self._conn.commit()
 
@@ -381,8 +387,6 @@ class Store:
         Regenerable artifacts older than retention_days, plus artifacts whose
         run has status='failed' and is older than retention_days.
         """
-        cutoff = datetime.now(tz=UTC)
-        # Use raw SQL date arithmetic with the retention threshold
         rows = self._conn.execute(
             """
             SELECT a.*
@@ -392,13 +396,12 @@ class Store:
             UNION
             SELECT a.*
             FROM artifact a
-            JOIN run r ON instr(a.path, r.run_id) > 0
+            JOIN run r ON a.run_id = r.run_id
             WHERE r.status = 'failed'
               AND julianday('now') - julianday(r.started_at) > ?
             """,
             (retention_days, retention_days),
         ).fetchall()
-        del cutoff  # used for intent documentation only
         return [dict(r) for r in rows]
 
     def delete_artifact(self, artifact_id: str) -> None:

@@ -15,7 +15,7 @@ from sorethumb.errors import (
     ModelVersionMismatchWarning,
     StoreError,
 )
-from sorethumb.store.db import Store
+from sorethumb.store.db import Store, _iter_sql_statements
 from sorethumb.store.identifiers import validate_identifier
 from sorethumb.store.models import load_model, save_model, score_with_existing
 from sorethumb.store.results import read_results, write_results
@@ -175,6 +175,31 @@ def test_store_migrations_applied(tmp_path):
     with Store(db) as store:
         rows = store._conn.execute("SELECT version FROM schema_migration").fetchall()
         assert any(r[0] == 1 for r in rows)
+
+
+def test_iter_sql_statements_ignores_semicolons_in_comments():
+    sql = (
+        "-- a comment with a semicolon; and more prose after it\n"
+        "CREATE TABLE t (a INT);\n"
+        "-- another; comment\n"
+        "CREATE INDEX ix ON t(a);\n"
+        "INSERT INTO schema_migration (version) VALUES (9);\n"
+    )
+    stmts = list(_iter_sql_statements(sql))
+    assert stmts == ["CREATE TABLE t (a INT)", "CREATE INDEX ix ON t(a)"]
+
+
+def test_all_bundled_migrations_apply_cleanly(tmp_path):
+    """Every shipped migration file applies without error and is recorded."""
+    with Store(tmp_path / "m.db") as store:
+        versions = {r[0] for r in store._conn.execute("SELECT version FROM schema_migration")}
+    assert versions == {1, 2, 3}
+
+
+def test_migration_003_adds_artifact_run_id_column(tmp_path):
+    with Store(tmp_path / "m.db") as store:
+        cols = {r[1] for r in store._conn.execute("PRAGMA table_info(artifact)")}
+    assert "run_id" in cols
 
 
 def test_store_second_open_no_duplicate_migration(tmp_path):
@@ -561,3 +586,54 @@ def test_prune_dry_run_same_list_as_real(tmp_path):
         dry = ws.prune(retention_days=1, dry_run=True)
         real = ws.prune(retention_days=1, dry_run=False)
     assert set(dry) == set(real)
+
+
+def test_register_artifact_records_run_id(tmp_path):
+    with _open_ws(tmp_path) as ws:
+        ws.store.upsert_dataset("fp1", "uri", "sfp", "cfp", 10, 2)
+        ws.store.insert_run("run_abc", "fp1", "{}", 0)
+        ws.store.register_artifact("art1", str(tmp_path / "f.parquet"), "results", 1, False, run_id="run_abc")
+        row = ws.store._conn.execute("SELECT run_id FROM artifact WHERE artifact_id='art1'").fetchone()
+    assert row["run_id"] == "run_abc"
+
+
+def test_prune_failed_run_matches_on_run_id_not_path_substring(tmp_path):
+    """A failed run must not drag in another run's artifact just because its
+    run_id is a substring of that artifact's path."""
+    with _open_ws(tmp_path) as ws:
+        ws.store.upsert_dataset("fp1", "uri", "sfp", "cfp", 10, 2)
+        # "run_1" is a substring of "run_10" and of the sibling run's path.
+        ws.store.insert_run("run_1", "fp1", "{}", 0)
+        ws.store.insert_run("run_10", "fp1", "{}", 0)
+        ws.store.mark_run_failed("run_1", "boom")
+        # Age the failed run past the retention window.
+        ws.store._conn.execute("UPDATE run SET started_at='2020-01-01T00:00:00Z' WHERE run_id='run_1'")
+        # Artifact belongs to the healthy run_10; its path contains "run_1".
+        good_file = ws.root / "models" / "run_10" / "iso.joblib"
+        good_file.parent.mkdir(parents=True, exist_ok=True)
+        good_file.write_text("keep me")
+        ws.store.register_artifact("art_run10", str(good_file), "model", 7, False, run_id="run_10")
+        ws.store._conn.commit()
+
+        deleted = ws.prune(retention_days=1, dry_run=False)
+
+    assert str(good_file) not in deleted
+    assert good_file.exists()
+
+
+def test_prune_failed_run_removes_its_own_artifacts(tmp_path):
+    with _open_ws(tmp_path) as ws:
+        ws.store.upsert_dataset("fp1", "uri", "sfp", "cfp", 10, 2)
+        ws.store.insert_run("run_x", "fp1", "{}", 0)
+        ws.store.mark_run_failed("run_x", "boom")
+        ws.store._conn.execute("UPDATE run SET started_at='2020-01-01T00:00:00Z' WHERE run_id='run_x'")
+        doomed = ws.root / "models" / "run_x" / "iso.joblib"
+        doomed.parent.mkdir(parents=True, exist_ok=True)
+        doomed.write_text("bye")
+        ws.store.register_artifact("art_x", str(doomed), "model", 3, False, run_id="run_x")
+        ws.store._conn.commit()
+
+        deleted = ws.prune(retention_days=1, dry_run=False)
+
+    assert str(doomed) in deleted
+    assert not doomed.exists()

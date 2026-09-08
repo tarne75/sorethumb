@@ -17,6 +17,11 @@
 column, fits an ensemble of detectors, ranks the records that stand out, and explains
 *why* each one stands out in terms of the original columns.
 
+> **Status: pre-release (0.1.0).** The API and on-disk formats may still change
+> between minor versions, and the package is not yet published to PyPI — install
+> from source (see below). See [Honest limitations](#honest-limitations) for what
+> it does not do.
+
 ---
 
 ## Why sorethumb?
@@ -39,14 +44,18 @@ Databricks, or any cloud vendor.
 
 ## Installation
 
+Not yet on PyPI. Install from a clone:
+
 ```bash
-pip install sorethumb
+git clone https://github.com/tarne75/sorethumb
+cd sorethumb
+pip install .
 ```
 
 For the benchmark harness:
 
 ```bash
-pip install "sorethumb[benchmark]"
+pip install ".[benchmark]"
 ```
 
 ---
