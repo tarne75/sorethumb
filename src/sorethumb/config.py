@@ -115,12 +115,13 @@ class ProfilingConfig(BaseModel):
         ),
     )
     null_ratio_flag: float = Field(
-        0.30,
+        0.0,
         ge=0.0,
         le=1.0,
         description=(
             "Columns with null_ratio > this (and <= null_ratio_drop) get a "
-            "'<col>__is_missing' indicator feature appended."
+            "'<col>__is_missing' indicator feature appended. "
+            "Default 0.0 means any column with at least one null emits an indicator."
         ),
     )
     near_constant_distinct: int = Field(

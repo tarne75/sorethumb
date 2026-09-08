@@ -97,6 +97,11 @@ def classify_column(
     """
     col = profile.name
 
+    # 0. Configured id/reference columns are identifiers — excluded from the feature matrix
+    _id_ref = {c for c in (columns_config.id_column, columns_config.reference_column) if c}
+    if col in _id_ref:
+        return ColumnClass.ignored, "configured id_column or reference_column; excluded from features"
+
     # 1. Ignored by pattern
     if _is_ignored(col, profile.dtype_str, columns_config.ignore, protected_columns):
         return ColumnClass.ignored, "matches ignore pattern"
@@ -118,8 +123,8 @@ def classify_column(
     if _is_temporal(dtype):
         return ColumnClass.temporal, f"temporal dtype ({dtype})"
 
-    # 6. Near-constant (applies to numeric, string, list, and other types)
-    if profile.n_unique <= config.near_constant_distinct and profile.n_unique > 0:
+    # 6. Near-constant — binary columns (n_unique == 2) are exempt: they carry signal
+    if profile.n_unique > 2 and profile.n_unique <= config.near_constant_distinct:
         return (
             ColumnClass.near_constant,
             f"only {profile.n_unique} distinct value(s) (threshold={config.near_constant_distinct})",

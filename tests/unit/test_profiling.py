@@ -502,3 +502,69 @@ def test_feature_plan_imputation_medians_round_trip(tmp_path: object) -> None:
     plan = build_feature_plan(df, cfg)
     restored = FeaturePlan.from_json(plan.to_json())
     assert plan.imputation_medians == restored.imputation_medians
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — binary retention, rare-null indicator, numeric id exclusion
+# ---------------------------------------------------------------------------
+
+
+def test_binary_string_column_is_retained(tmp_path: object) -> None:
+    """A string column with exactly 2 distinct values must not be dropped as near_constant."""
+    df = pl.DataFrame({"flag": ["yes", "no"] * 50, "x": list(range(100, 200))})
+    df = df.with_columns(pl.col("x").cast(pl.Float64))
+    cfg = _build_config(tmp_path)
+    plan = build_feature_plan(df, cfg)
+    flag_dec = next(d for d in plan.decisions if d.column == "flag")
+    assert flag_dec.col_class != ColumnClass.near_constant, (
+        "binary string column should not be classified near_constant and dropped"
+    )
+    assert any(f.startswith("flag__") for f in plan.output_features), (
+        "binary string column should produce one-hot features"
+    )
+
+
+def test_binary_numeric_column_is_retained(tmp_path: object) -> None:
+    """A numeric column with exactly 2 distinct values must not be dropped as near_constant."""
+    df = pl.DataFrame({"score": [0.0, 1.0] * 50, "x": list(range(100, 200))})
+    cfg = _build_config(tmp_path)
+    plan = build_feature_plan(df, cfg)
+    score_dec = next(d for d in plan.decisions if d.column == "score")
+    assert score_dec.col_class == ColumnClass.numeric, (
+        "binary numeric column should classify as numeric, not near_constant"
+    )
+    assert "score" in plan.output_features
+
+
+def test_numeric_id_column_excluded_from_plan(tmp_path: object) -> None:
+    """A numeric id_column must not appear in output features."""
+    df = pl.DataFrame(
+        {
+            "row_id": list(range(50)),
+            "value_a": [float(i) for i in range(50)],
+            "value_b": [float(i) * 2 for i in range(50)],
+        }
+    )
+    from sorethumb.config import ColumnsConfig
+
+    cfg = _build_config(tmp_path, columns=ColumnsConfig(id_column="row_id"))
+    plan = build_feature_plan(df, cfg)
+    id_dec = next(d for d in plan.decisions if d.column == "row_id")
+    assert id_dec.col_class == ColumnClass.ignored, (
+        "numeric id_column should be classified ignored (excluded from features)"
+    )
+    assert not any(f.startswith("row_id") for f in plan.output_features)
+
+
+def test_rare_null_emits_missing_indicator(tmp_path: object) -> None:
+    """With default null_ratio_flag=0.0, even one null triggers an __is_missing indicator."""
+    # 1 null out of 100 rows — null_ratio = 0.01, well below the old default of 0.30
+    vals: list[float | None] = [None] + [float(i) for i in range(1, 100)]
+    df = pl.DataFrame({"x": vals, "y": list(range(100))})
+    df = df.with_columns(pl.col("y").cast(pl.Float64))
+    cfg = _build_config(tmp_path)
+    plan = build_feature_plan(df, cfg)
+    assert "x__is_missing" in plan.output_features, (
+        "x has 1 null (null_ratio=0.01 > 0.0 default), so __is_missing indicator must be emitted"
+    )
+    assert "x" in plan.output_features, "original x column should still be included (imputed)"

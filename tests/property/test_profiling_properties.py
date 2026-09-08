@@ -52,10 +52,12 @@ def test_high_null_iff_ratio_exceeds_threshold(n_null: int, n_total: int, thresh
     elif n_non_null == 1:
         # Only one distinct non-null value → constant wins
         assert col_class == ColumnClass.constant
-    elif n_non_null <= near_constant_threshold:
-        # n_unique ≤ near_constant_distinct → near_constant wins before high_null
+    elif n_non_null > 2 and n_non_null <= near_constant_threshold:
+        # n_unique in (3..threshold] → near_constant wins before high_null
         assert col_class == ColumnClass.near_constant
     elif null_ratio > threshold:
+        # Binary columns (n_non_null == 2) no longer fire near_constant,
+        # so high_null can win if the ratio exceeds the drop threshold
         assert col_class == ColumnClass.high_null
     else:
         assert col_class != ColumnClass.high_null
@@ -79,6 +81,9 @@ def test_near_constant_iff_n_unique_at_or_below_threshold(n_unique: int, n_rows:
 
     if n_unique == 1:
         assert col_class == ColumnClass.constant
+    elif n_unique == 2:
+        # Binary columns are exempt from near_constant regardless of threshold
+        assert col_class == ColumnClass.categorical
     elif n_unique <= threshold:
         assert col_class == ColumnClass.near_constant
     else:

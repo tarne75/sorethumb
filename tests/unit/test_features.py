@@ -418,7 +418,9 @@ def test_apply_feature_plan_identical_scores_for_identical_record():
 
 def test_fit_features_with_pca():
     df = _make_cat_df()
-    config = _make_config(pca=True, pca_max_components=3, correlation_reduction=False)
+    config = _make_config(
+        pca=True, pca_max_components=3, pca_min_explained_variance=0.70, correlation_reduction=False
+    )
     plan = build_feature_plan(df, config)
     space = fit_features(df, plan, config)
     # With PCA on, feature names are pc_0, pc_1, ...
@@ -428,7 +430,9 @@ def test_fit_features_with_pca():
 
 def test_apply_feature_plan_with_pca():
     df = _make_cat_df()
-    config = _make_config(pca=True, pca_max_components=3, correlation_reduction=False)
+    config = _make_config(
+        pca=True, pca_max_components=3, pca_min_explained_variance=0.70, correlation_reduction=False
+    )
     plan = build_feature_plan(df, config)
     fit_space = fit_features(df, plan, config)
     apply_space = apply_feature_plan(df, plan)
