@@ -61,7 +61,7 @@ def test_group_key_is_hex():
 
 def test_group_key_length():
     k = make_group_key({"a": "1"})
-    assert len(k) == 16
+    assert len(k) == 32
 
 
 def test_group_key_stable():
@@ -80,7 +80,7 @@ def test_group_key_special_chars_round_trip():
     # Special chars: quotes, semicolon, slash, newline
     group = {"val": 'it\'s a "test"; /path\nnewline'}
     k = make_group_key(group)
-    assert len(k) == 16
+    assert len(k) == 32
     # Same key reconstructed from the same values
     assert k == make_group_key(group)
 

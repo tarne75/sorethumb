@@ -30,7 +30,7 @@ def _now_utc() -> str:
 
 
 def _config_hash(config_json: str) -> str:
-    return hashlib.sha256(config_json.encode()).hexdigest()[:16]
+    return hashlib.sha256(config_json.encode()).hexdigest()[:32]
 
 
 def _iter_sql_statements(sql: str) -> Generator[str, None, None]:

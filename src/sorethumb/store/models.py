@@ -42,7 +42,7 @@ _TRACKED_LIBRARIES = ("sorethumb", "scikit-learn", "numpy", "scipy", "joblib")
 
 
 def _plan_digest(plan_json: str) -> str:
-    return hashlib.sha256(plan_json.encode()).hexdigest()[:16]
+    return hashlib.sha256(plan_json.encode()).hexdigest()[:32]
 
 
 def _library_versions() -> dict[str, str]:

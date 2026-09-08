@@ -23,13 +23,13 @@ _MARKER_DB = "sorethumb.db"
 
 
 def make_group_key(group_values: dict[str, str]) -> str:
-    """Return a stable 16-character hex digest of the sorted group-values JSON.
+    """Return a stable 32-character (128-bit) hex digest of the sorted group-values JSON.
 
     The digest is the only value that appears in key positions (filesystem paths,
     SQL primary keys). Raw group values live in the JSON column only.
     """
     json_str = json.dumps(group_values, sort_keys=True, ensure_ascii=False)
-    return hashlib.sha256(json_str.encode()).hexdigest()[:16]
+    return hashlib.sha256(json_str.encode()).hexdigest()[:32]
 
 
 class Workspace:
