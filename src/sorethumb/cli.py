@@ -808,7 +808,7 @@ def backfill(
             df_raw = unnest_all(df_raw, cfg.source.max_nesting_depth)
 
         schema_fp = schema_fingerprint(df_raw)
-        dataset_fp = f"{content_fp[:16]}_{schema_fp[:8]}"
+        dataset_fp = f"{content_fp[:32]}_{schema_fp[:16]}"
 
         ref = datetime.now(UTC)
         _, _, ref_label = resolve_period(ref, cfg.history.period_granularity, cfg.history.roll_non_business)
@@ -880,7 +880,7 @@ def history(
             df_raw = unnest_all(df_raw, cfg.source.max_nesting_depth)
 
         schema_fp = schema_fingerprint(df_raw)
-        dataset_fp = f"{content_fp[:16]}_{schema_fp[:8]}"
+        dataset_fp = f"{content_fp[:32]}_{schema_fp[:16]}"
 
         from datetime import datetime  # noqa: PLC0415
 

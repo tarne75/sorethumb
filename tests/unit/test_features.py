@@ -214,8 +214,8 @@ def test_robust_scaler_center_and_scale():
     assert params["x"]["scale"] == pytest.approx(50.0, abs=1.0)
 
 
-def test_robust_scaler_zero_iqr_clamped_to_one():
-    """Constant column → IQR=0 → clamped to 1.0, so (x - median) / 1.0 = 0."""
+def test_robust_scaler_zero_iqr_uses_unit_scale():
+    """Constant column → IQR=0 → scale 1.0, so (x - median) / 1.0 = 0."""
     df = pl.DataFrame({"c": [5.0] * 20})
     params = fit_scaler(df, ["c"], "robust")
     assert params["c"]["scale"] == 1.0
@@ -223,11 +223,43 @@ def test_robust_scaler_zero_iqr_clamped_to_one():
     assert scaled["c"].to_list() == pytest.approx([0.0] * 20)
 
 
-def test_standard_scaler_zero_std_clamped():
-    """Constant column → std=0 → clamped to 1.0."""
+def test_standard_scaler_zero_std_uses_unit_scale():
+    """Constant column → std=0 → scale 1.0."""
     df = pl.DataFrame({"c": [3.0] * 20})
     params = fit_scaler(df, ["c"], "standard")
     assert params["c"]["scale"] == 1.0
+
+
+def test_robust_scaler_small_nonzero_iqr_not_clamped_up():
+    """A genuine sub-1.0 IQR is used as-is, not inflated to 1.0 (which would
+    flatten a fine-grained column to near-zero variance)."""
+    df = pl.DataFrame({"x": [i * 0.001 for i in range(101)]})  # range 0..0.1
+    params = fit_scaler(df, ["x"], "robust")
+    assert params["x"]["scale"] == pytest.approx(0.05, abs=5e-3)
+    scaled = apply_scaler(df, params, ["x"])
+    # Spread is preserved, not flattened. Under the old max(iqr, 1.0) clamp the
+    # scaled std would be ~0.029 (divided by 1.0); dividing by the real IQR
+    # restores it to order-1.
+    assert scaled["x"].std() > 0.3
+
+
+def test_binary_indicator_column_survives_scaling():
+    """A sparse 0/1 indicator (IQR 0) keeps unit scale, not a blow-up."""
+    df = pl.DataFrame({"flag": [0.0] * 95 + [1.0] * 5})
+    params = fit_scaler(df, ["flag"], "robust")
+    assert params["flag"]["scale"] == 1.0
+    scaled = apply_scaler(df, params, ["flag"])
+    assert max(scaled["flag"].to_list()) == pytest.approx(1.0)
+
+
+def test_standard_scaler_fit_resists_extreme_rows():
+    """Standard-mode mean/std are trimmed, so a few extreme anomalies do not
+    inflate the centre or the spread of the normal bulk."""
+    normal = [float(i % 10) for i in range(1000)]
+    clean = fit_scaler(pl.DataFrame({"x": normal}), ["x"], "standard")
+    contaminated = fit_scaler(pl.DataFrame({"x": [*normal, 1e6, 1e6, -1e6]}), ["x"], "standard")
+    assert contaminated["x"]["center"] == pytest.approx(clean["x"]["center"], abs=0.5)
+    assert contaminated["x"]["scale"] == pytest.approx(clean["x"]["scale"], rel=0.2)
 
 
 def test_apply_scaler_passthrough_unknown_col():

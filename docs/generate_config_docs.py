@@ -145,7 +145,7 @@ def generate() -> str:
         "",
         "## Config hash",
         "",
-        "`Config.config_hash()` is a 16-character hex digest that covers all",
+        "`Config.config_hash()` is a 32-character hex digest that covers all",
         "result-affecting fields. Cosmetic fields (`run.log_level`,",
         "`run.slow_stage_seconds`, and the entire `[report]` section) are excluded",
         "so trivial changes do not invalidate cached artefacts.",

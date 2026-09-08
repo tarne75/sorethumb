@@ -56,7 +56,7 @@ def write_group_csv(df: pl.DataFrame, out_dir: Path, group_key: str) -> Path:
     out_dir:
         The run's report directory (``reports/<run_id>/``).
     group_key:
-        16-character group digest used as the file stem.
+        32-character group digest used as the file stem.
 
     Returns
     -------

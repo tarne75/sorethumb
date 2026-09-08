@@ -21,6 +21,21 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - The migration runner now strips full-line `--` comments before splitting on
   `;`, so prose containing a semicolon in a migration comment can no longer
   truncate the following statement.
+- Scaler no longer clamps a genuine sub-1.0 spread up to `1.0`, which flattened
+  fine-grained columns to near-zero variance. A spread is now used as-is; only
+  an effectively-zero spread (constant or degenerate column) falls back to
+  `1.0`.
+- Standard-mode scaling fits mean and std over each column's 1st–99th percentile
+  range, so a handful of anomalous rows can no longer inflate the centre or the
+  spread used to standardise the normal bulk. (Robust mode already used
+  outlier-resistant median/IQR.)
+
+### Compatibility
+
+- Identity digests widened from 64-bit (16 hex) to 128-bit (32 hex):
+  `run_id`, `group_key`, `dataset_fp`, `config_hash`, and the model plan digest.
+  Run IDs and group directories therefore have new names — existing workspaces
+  will start fresh runs rather than resuming. Pre-release, no migration provided.
 
 ### Changed
 

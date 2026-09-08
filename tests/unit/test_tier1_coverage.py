@@ -394,7 +394,7 @@ def test_config_hash_is_stable() -> None:
     h1 = cfg.config_hash()
     h2 = cfg.config_hash()
     assert h1 == h2
-    assert len(h1) == 16
+    assert len(h1) == 32
 
 
 def test_config_hash_excludes_cosmetic_fields() -> None:

@@ -501,7 +501,7 @@ class Config(BaseModel):
     report: ReportConfig = Field(default_factory=ReportConfig)
 
     def config_hash(self) -> str:
-        """16-char hex hash covering only result-affecting fields.
+        """32-char (128-bit) hex hash covering only result-affecting fields.
 
         Excludes run.workdir, run.log_level, run.slow_stage_seconds, and the
         entire report section so purely cosmetic changes don't bust artefact caches.
@@ -512,7 +512,7 @@ class Config(BaseModel):
             run.pop(key, None)
         d.pop("report", None)
         serialised = json.dumps(d, sort_keys=True, default=str)
-        return hashlib.sha256(serialised.encode()).hexdigest()[:16]
+        return hashlib.sha256(serialised.encode()).hexdigest()[:32]
 
 
 # Convenience type alias used across the codebase

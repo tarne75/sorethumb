@@ -206,7 +206,7 @@ def run_detection(
 
         content_fp = content_fingerprint(local_path)
         schema_fp = schema_fingerprint(df_raw)
-        dataset_fp = f"{content_fp[:16]}_{schema_fp[:8]}"
+        dataset_fp = f"{content_fp[:32]}_{schema_fp[:16]}"
 
         ws.store.upsert_dataset(
             dataset_fp=dataset_fp,
@@ -440,7 +440,7 @@ def _make_run_id(dataset_fp: str, config_hash: str, period_label: str | None) ->
     prior ledger entries and skip already-complete groups (resume behaviour).
     """
     key = f"{dataset_fp}:{config_hash}:{period_label or '__no_period__'}"
-    return "run_" + hashlib.sha256(key.encode()).hexdigest()[:16]
+    return "run_" + hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
 # ---------------------------------------------------------------------------
