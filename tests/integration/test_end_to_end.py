@@ -159,8 +159,8 @@ def test_planted_anomalies_are_detected(tmp_path: Path) -> None:
     df_anomalies = pl.read_parquet(parquet_path)
     flagged_ids = set(df_anomalies["row_id"].to_list())
 
-    # row_id is currently positional (0-based in the group frame).
-    # Planted anomalies are at the last n_anomaly rows.
+    # row_id is the actual id column value (id = positional index in this CSV,
+    # so 0-based). Planted anomalies are at the last n_anomaly rows (ids 280-284).
     n_total = 285
     n_anomaly = 5
     planted_positions = set(range(n_total - n_anomaly, n_total))
@@ -221,13 +221,6 @@ def test_kmeans_auc_above_half() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "Phase 2: df_group.to_dicts() is unsorted but row_pos is from the "
-        "time-sorted feature space; reasons reference the wrong source row."
-    ),
-)
 def test_explanation_references_perturbed_column(tmp_path: Path) -> None:
     """When num_a is perturbed in a time-sorted frame, reason_1 must say 'num_a=…'.
 

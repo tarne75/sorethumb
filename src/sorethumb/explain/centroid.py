@@ -1,14 +1,16 @@
 """KMeans centroid attributions.
 
-The per-dimension signed contribution to the distance from the assigned centroid
-is simply x - c (where c is the centroid for the assigned cluster). This is a
-direct decomposition of the L2 distance: ||x - c||² = Σ_d (x_d - c_d)².
+The per-dimension signed contribution to the distance from the nearest large-cluster
+centroid is x - c_nearest. This is a direct decomposition of the L2 distance:
+||x - c||² = Σ_d (x_d - c_d)².
 
-We take the absolute value of each component and normalise to unit L2 norm so
-the magnitude is comparable with attributions from other detectors after blending.
+We take the absolute value of each component so the magnitude reflects how far each
+dimension is from the centroid, regardless of sign. This is comparable with
+attributions from other detectors after blending.
 
-The raw signed differences are stored in detector.last_contributions after
-score_samples() is called — this module just retrieves and normalises them.
+Contributions are recomputed from X and the detector's stored large-cluster centroids
+rather than read from mutable scorer state, making attribution deterministic and
+independent of call ordering.
 
 Tag is "heuristic" because this decomposition is exact for the distance metric
 but does not generalise outside KMeans (e.g. it ignores the relative importance
@@ -30,26 +32,34 @@ logger = logging.getLogger(__name__)
 
 def centroid_attributions(
     detector: KMeansDetector,
+    X: np.ndarray,
 ) -> tuple[np.ndarray, str]:
     """Return per-row attributions derived from centroid distance components.
 
-    Requires that detector.score_samples() has been called first so that
-    last_contributions is populated.
+    Parameters
+    ----------
+    detector:
+        A fitted KMeansDetector (fit() must have been called).
+    X:
+        Feature matrix, shape (n_rows, n_features).
 
     Returns
     -------
     attributions:
-        Shape (n_rows, n_features). Positive = pushes row away from centroid
-        (more anomalous). Values are unsigned (absolute) differences.
+        Shape (n_rows, n_features). Values are unsigned (absolute) per-dimension
+        differences from the nearest large-cluster centroid.
     tag:
         Always "heuristic".
 
     """
-    if detector.last_contributions is None:
-        msg = "centroid_attributions requires score_samples() to have been called first."
+    if detector.large_centroids is None:
+        msg = "centroid_attributions requires fit() to have been called first."
         raise ValueError(msg)
 
-    contributions = detector.last_contributions  # signed (x - c), shape (n_rows, n_features)
-    # Use absolute value: direction doesn't matter for anomaly attribution, magnitude does
-    attributions = np.abs(contributions).astype(np.float64)
-    return attributions, "heuristic"
+    centres = detector.large_centroids  # (n_large, d)
+    # Distance from each point to each large centroid: (n, n_large)
+    diffs = X[:, np.newaxis, :] - centres[np.newaxis, :, :]
+    dist = np.linalg.norm(diffs, axis=2)
+    nearest = np.argmin(dist, axis=1)  # (n,)
+    contributions = X - centres[nearest]  # signed (x - c_nearest), (n, d)
+    return np.abs(contributions).astype(np.float64), "heuristic"

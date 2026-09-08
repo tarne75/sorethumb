@@ -318,15 +318,15 @@ def test_kmeans_cblof_scores_anomaly_cluster_lower():
 
 
 def test_kmeans_large_centroids_populated_after_fit():
-    """_large_centroids must be set after fit() and have the correct shape."""
+    """large_centroids must be set after fit() and have the correct shape."""
     rng = np.random.default_rng(0)
     X = rng.normal(size=(200, 3)).astype(np.float32)
     det = KMeansDetector(k=4)
     det.fit(X, seed=0)
-    assert det._large_centroids is not None
+    assert det.large_centroids is not None
     # At least 1 large centroid, at most k
-    assert 1 <= det._large_centroids.shape[0] <= 4
-    assert det._large_centroids.shape[1] == 3
+    assert 1 <= det.large_centroids.shape[0] <= 4
+    assert det.large_centroids.shape[1] == 3
 
 
 def test_elbow_index_monotone():
