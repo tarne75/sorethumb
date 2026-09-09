@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import tomllib
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -360,6 +361,146 @@ def test_score_from_missing_run_fails(workspace):
         app, ["score", "--from-run", "run_nope", "--config", str(toml_path), "--no-report"]
     )
     assert result.exit_code == 2
+
+
+# ---------------------------------------------------------------------------
+# sorethumb backfill
+# ---------------------------------------------------------------------------
+
+
+def _write_timeseries_parquet(path: Path, day_labels: list[str], *, per_day: int = 40, seed: int = 0) -> None:
+    """Write a Parquet file with ``per_day`` rows on each of ``day_labels``.
+
+    A few rows per day carry ``value_a = 999`` so each day has real anomalies.
+    """
+    rng = np.random.default_rng(seed)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ids: list[int] = []
+    ts: list[datetime] = []
+    value_a: list[float] = []
+    for d, label in enumerate(day_labels):
+        base = datetime.fromisoformat(label).replace(tzinfo=UTC) + timedelta(hours=8)
+        col = rng.normal(0.0, 1.0, per_day).tolist()
+        for k in (1, 7, 19):
+            col[k] = 999.0
+        for r in range(per_day):
+            ids.append(d * per_day + r)
+            ts.append(base + timedelta(minutes=r))
+            value_a.append(col[r])
+    pl.DataFrame(
+        {
+            "id": ids,
+            "ts": pl.Series(ts).dt.cast_time_unit("us"),
+            "value_a": value_a,
+            "value_b": rng.normal(5.0, 2.0, len(ids)).tolist(),
+        }
+    ).write_parquet(str(path))
+
+
+def _write_timeseries_toml(path: Path, parquet_path: Path, workdir: Path, *, bootstrap: int = 3) -> Path:
+    """Write a sorethumb.toml with a time column and a shallow backfill window."""
+    toml = f"""\
+[source]
+uri = {json.dumps(str(parquet_path))}
+format = "parquet"
+
+[run]
+workdir = {json.dumps(str(workdir))}
+seed = 0
+
+[columns]
+id_column = "id"
+time_column = "ts"
+group_by = []
+
+[history]
+period_granularity = "day"
+roll_non_business = true
+bootstrap_periods = {bootstrap}
+lookback_periods = {bootstrap}
+max_backfill_periods = 30
+
+[scoring]
+contamination = 0.1
+combination = "composite"
+weighting = "equal"
+min_records = 10
+
+[[detectors]]
+name = "isolation_forest"
+enabled = true
+
+[explain]
+enabled = false
+"""
+    path.write_text(toml, encoding="utf-8")
+    return path
+
+
+def _recent_day_labels(n: int) -> list[str]:
+    """The ``n`` day labels ending yesterday (what a cold-start backfill targets)."""
+    today = datetime.now(UTC).date()
+    return [(today - timedelta(days=k)).isoformat() for k in range(n, 0, -1)]
+
+
+@pytest.fixture
+def timeseries_workspace(tmp_path: Path):
+    """(toml_path, workdir, day_labels) for a 3-day time-series dataset."""
+    labels = _recent_day_labels(3)
+    parquet = tmp_path / "data" / "ts.parquet"
+    _write_timeseries_parquet(parquet, labels)
+    workdir = tmp_path / "ws"
+    toml_path = tmp_path / "sorethumb.toml"
+    _write_timeseries_toml(toml_path, parquet, workdir, bootstrap=3)
+    return toml_path, workdir, labels
+
+
+def _totals_period_labels(workdir: Path) -> set[str]:
+    from sorethumb import Workspace
+
+    with Workspace.open(workdir) as ws:
+        rows = ws.store._conn.execute("SELECT DISTINCT period_label FROM totals").fetchall()
+    return {str(r["period_label"]) for r in rows}
+
+
+def test_backfill_processes_pending_periods_and_writes_totals(timeseries_workspace):
+    toml_path, workdir, labels = timeseries_workspace
+
+    result = runner.invoke(app, ["backfill", "--config", str(toml_path)])
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+    assert "3 pending periods" in result.stdout
+    assert "Backfill complete." in result.stdout
+
+    # every backfilled period now has a totals row (this is what makes it idempotent)
+    assert _totals_period_labels(workdir) == set(labels)
+
+
+def test_backfill_is_idempotent(timeseries_workspace):
+    toml_path, workdir, _ = timeseries_workspace
+
+    first = runner.invoke(app, ["backfill", "--config", str(toml_path)])
+    assert first.exit_code == 0, first.stdout + (first.stderr or "")
+
+    second = runner.invoke(app, ["backfill", "--config", str(toml_path)])
+    assert second.exit_code == 0
+    assert "Nothing to backfill" in second.stdout
+
+
+def test_backfill_dry_run_writes_no_totals(timeseries_workspace):
+    toml_path, workdir, labels = timeseries_workspace
+
+    result = runner.invoke(app, ["backfill", "--config", str(toml_path), "--dry-run"])
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+    for label in labels:
+        assert label in result.stdout
+    assert _totals_period_labels(workdir) == set()
+
+
+def test_backfill_no_time_column_exits_cleanly(workspace):
+    _, toml_path, _ = workspace  # the plain fixture has no time_column
+    result = runner.invoke(app, ["backfill", "--config", str(toml_path)])
+    assert result.exit_code == 0
+    assert "No time_column configured" in result.stdout
 
 
 # ---------------------------------------------------------------------------
