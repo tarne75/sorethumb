@@ -33,6 +33,14 @@ Versioning: [Semantic Versioning](https://semver.org/).
   `plan.json`) are now atomic — a sibling temp file, `fsync`, then
   `os.replace` — so a crash mid-write can no longer leave a half-written file
   for a later score-forward run to load.
+- Historical period selection: a `period_label` override (every
+  `sorethumb backfill` label) is now resolved to concrete
+  `[period_from, period_to)` bounds and the dataset is filtered to that window.
+  Previously the filter ran only for the auto-resolved current period, so every
+  backfilled label processed the *entire* dataset. The window bounds are
+  coerced to the time column's dtype (Date / Datetime / tz-aware Datetime /
+  Utf8), which also fixes the auto path for real temporal columns — Polars will
+  not compare a temporal column to a string. New `history.periods.period_bounds`.
 
 ### Changed
 

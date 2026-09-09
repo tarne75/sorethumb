@@ -70,6 +70,18 @@ def resolve_period(
     raise ValueError(msg)
 
 
+def period_bounds(label: str, granularity: PeriodGranularity) -> tuple[str, str]:
+    """Return ``(period_from, period_to_exclusive)`` for an existing period label.
+
+    ``label == period_from`` by construction (see :func:`resolve_period`), so the
+    window is ``[label, step_forward(label))``. Use this to filter a dataset to a
+    historical period given only its label — e.g. ``sorethumb backfill``, which
+    replays past labels. The label already encodes any business-day rolling, so
+    it is not re-applied here.
+    """
+    return label, step_forward(label, granularity)
+
+
 def step_back(label: str, granularity: PeriodGranularity, n: int = 1) -> str:
     """Return the period label n periods before *label*."""
     if granularity == "hour":

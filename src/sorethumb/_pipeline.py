@@ -19,7 +19,7 @@ import time
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any, cast
@@ -29,7 +29,7 @@ import polars as pl
 
 from sorethumb.config import Config, SourceConfig
 from sorethumb.detectors import registry
-from sorethumb.errors import SorethumbWarning, StoreError
+from sorethumb.errors import SchemaError, SorethumbWarning, StoreError
 from sorethumb.explain.blend import blend
 from sorethumb.explain.project import aggregate_to_original, top_n_reasons
 from sorethumb.features.build import apply_feature_plan, fit_features
@@ -148,6 +148,81 @@ def list_detectors() -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _period_window_expr(time_col: str, dtype: pl.DataType, period_from: str, period_to: str) -> pl.Expr:
+    """Return a ``[period_from, period_to)`` filter for *time_col*.
+
+    ``resolve_period`` / ``period_bounds`` hand back ISO **strings**; Polars will
+    not compare a temporal column to a string, so the bounds are coerced to the
+    column's own dtype (Date, Datetime naive/tz, or left as strings for a
+    still-unparsed Utf8 column — lexical order is valid for ISO strings).
+    """
+    col = pl.col(time_col)
+    if dtype in (pl.String, pl.Categorical):
+        lo: object
+        hi: object
+        lo, hi = period_from, period_to
+    elif dtype == pl.Date:
+        lo, hi = date.fromisoformat(period_from), date.fromisoformat(period_to)
+    else:  # Datetime — any time unit, with or without a time zone
+        lo, hi = datetime.fromisoformat(period_from), datetime.fromisoformat(period_to)
+        if getattr(dtype, "time_zone", None):
+            # Period bounds are UTC by construction (see resolve_period).
+            lo, hi = lo.replace(tzinfo=UTC), hi.replace(tzinfo=UTC)
+    return (col >= lo) & (col < hi)
+
+
+def _resolve_and_filter_period(
+    df_raw: pl.DataFrame,
+    config: Config,
+    period_label_override: str | None,
+) -> tuple[pl.DataFrame, str | None]:
+    """Resolve the period label and filter *df_raw* to that period's window.
+
+    - No ``columns.time_column``: the override (or None) passes through and
+      nothing is filtered.
+    - No override: resolve the current period from the wall clock.
+    - Override given (e.g. a ``sorethumb backfill`` label): treat it as an
+      existing label and derive its ``[period_from, period_to)`` window.
+
+    Whenever a time column exists the frame is filtered to that window, so a
+    historical label processes only its own rows — not the whole dataset.
+    """
+    time_col = config.columns.time_column
+    if not time_col:
+        if period_label_override is not None:
+            logger.warning(
+                "period_label_override=%r ignored: no columns.time_column configured.",
+                period_label_override,
+            )
+        return df_raw, period_label_override
+
+    from sorethumb.history.periods import period_bounds, resolve_period  # noqa: PLC0415
+
+    granularity = config.history.period_granularity
+    if period_label_override is None:
+        period_from, period_to, label = resolve_period(
+            datetime.now(UTC), granularity, config.history.roll_non_business
+        )
+    else:
+        label = period_label_override
+        period_from, period_to = period_bounds(label, granularity)
+
+    if time_col not in df_raw.columns:
+        msg = f"columns.time_column={time_col!r} is not in the dataset."
+        raise SchemaError(msg)
+
+    filtered = df_raw.filter(_period_window_expr(time_col, df_raw[time_col].dtype, period_from, period_to))
+    logger.info(
+        "Period %s: window [%s, %s) selects %d of %d rows.",
+        label,
+        period_from,
+        period_to,
+        len(filtered),
+        len(df_raw),
+    )
+    return filtered, label
+
+
 def run_detection(
     config: Config,
     *,
@@ -219,20 +294,8 @@ def run_detection(
             n_cols=len(df_raw.columns),
         )
 
-        # ── 2. Period resolution ─────────────────────────────────────────
-        period_label: str | None = period_label_override
-        if period_label is None and config.columns.time_column:
-            from sorethumb.history.periods import resolve_period  # noqa: PLC0415
-
-            _ref = datetime.now(UTC)
-            _pf, _pt, period_label = resolve_period(
-                _ref,
-                config.history.period_granularity,
-                config.history.roll_non_business,
-            )
-            df_raw = df_raw.filter(
-                (pl.col(config.columns.time_column) >= _pf) & (pl.col(config.columns.time_column) < _pt)
-            )
+        # ── 2. Period resolution + window filter ────────────────────────
+        df_raw, period_label = _resolve_and_filter_period(df_raw, config, period_label_override)
 
         # ── 3. Register run ──────────────────────────────────────────────
         # run_id is derived deterministically so that a repeat call with identical
@@ -452,19 +515,8 @@ def score_forward(
             n_cols=len(df_raw.columns),
         )
 
-        # ── Period resolution (same rules as run_detection) ──────────────
-        period_label: str | None = period_label_override
-        if period_label is None and config.columns.time_column:
-            from sorethumb.history.periods import resolve_period  # noqa: PLC0415
-
-            _pf, _pt, period_label = resolve_period(
-                datetime.now(UTC),
-                config.history.period_granularity,
-                config.history.roll_non_business,
-            )
-            df_raw = df_raw.filter(
-                (pl.col(config.columns.time_column) >= _pf) & (pl.col(config.columns.time_column) < _pt)
-            )
+        # ── Period resolution + window filter (same rules as run_detection) ──
+        df_raw, period_label = _resolve_and_filter_period(df_raw, config, period_label_override)
 
         # ── Register the score-forward run ──────────────────────────────
         new_run_id = _make_score_run_id(dataset_fp, config.config_hash(), period_label, source_run_id)
