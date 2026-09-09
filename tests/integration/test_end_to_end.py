@@ -25,6 +25,7 @@ from sorethumb._pipeline import run_detection
 from sorethumb.config import (
     ColumnsConfig,
     DetectorConfig,
+    HistoryConfig,
     RunConfig,
     ScoringConfig,
     SourceConfig,
@@ -345,3 +346,96 @@ def test_fit_apply_schema_is_stable(tmp_path: Path) -> None:
         f"Fit features: {fit_space.feature_names[:10]}… "
         f"Apply features: {apply_space.feature_names[:10]}…"
     )
+
+
+# ---------------------------------------------------------------------------
+# Historical period selection: an override must filter to that period's window
+# ---------------------------------------------------------------------------
+
+
+def _two_period_parquet(path: Path, *, per_day: int = 100, seed: int = 0) -> dict[str, list[int]]:
+    """Two calendar days of data with distinct planted anomalies per day.
+
+    Day 2024-01-15: ids [n_a0..] have num_a = +999.
+    Day 2024-01-16: a *different* set of ids have num_a = -999.
+    Returns {"2024-01-15": [ids...], "2024-01-16": [ids...]}.
+    """
+    rng = np.random.default_rng(seed)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    n = per_day * 2
+    ids = list(range(n))
+    ts = [datetime(2024, 1, 15, 8, tzinfo=UTC) + timedelta(minutes=i) for i in range(per_day)]
+    ts += [datetime(2024, 1, 16, 8, tzinfo=UTC) + timedelta(minutes=i) for i in range(per_day)]
+    num_a = rng.normal(0.0, 1.0, n).tolist()
+
+    planted = {
+        "2024-01-15": [3, 17, 42],
+        "2024-01-16": [per_day + 5, per_day + 8, per_day + 60, per_day + 91],
+    }
+    for i in planted["2024-01-15"]:
+        num_a[i] = 999.0
+    for i in planted["2024-01-16"]:
+        num_a[i] = -999.0
+
+    pl.DataFrame(
+        {
+            "id": ids,
+            "ts": pl.Series(ts).dt.cast_time_unit("us"),
+            "num_a": num_a,
+            "num_b": rng.normal(5.0, 2.0, n).tolist(),
+        }
+    ).write_parquet(str(path))
+    return planted
+
+
+def _period_config(parquet: Path, workdir: Path) -> Config:
+    return Config(
+        source=SourceConfig(uri=str(parquet), format="parquet"),
+        run=RunConfig(workdir=str(workdir), seed=42),
+        columns=ColumnsConfig(id_column="id", time_column="ts"),
+        history=HistoryConfig(period_granularity="day", roll_non_business=False),
+        detectors=[DetectorConfig(name="isolation_forest")],
+        scoring=ScoringConfig(
+            combination="composite", contamination="auto", weighting="equal", min_records=5
+        ),
+    )
+
+
+@pytest.mark.parametrize("label", ["2024-01-15", "2024-01-16"])
+def test_period_override_filters_to_that_window(tmp_path: Path, label: str) -> None:
+    parquet = tmp_path / "two_periods.parquet"
+    per_day = 100
+    planted = _two_period_parquet(parquet, per_day=per_day)
+    cfg = _period_config(parquet, tmp_path / "ws")
+
+    result = run_detection(cfg, period_label_override=label, no_report=True)
+
+    assert result.period_label == label
+    assert result.n_succeeded == 1
+    group = result.groups[0]
+    # Only that day's rows entered the pipeline — not the whole 200-row dataset.
+    assert group.n_records == per_day
+
+    flagged = set(pl.read_parquet(group.results_path)["row_id"].to_list())
+    this_day = set(planted[label])
+    other_day = set(planted["2024-01-16" if label == "2024-01-15" else "2024-01-15"])
+
+    # This period's planted anomalies are caught; the other period's ids are
+    # absent entirely (they were never in the filtered frame).
+    assert this_day <= flagged, f"missed planted anomalies {this_day - flagged}"
+    assert not (flagged & other_day)
+    assert all(rid < per_day for rid in flagged) == (label == "2024-01-15")
+
+
+def test_period_overrides_produce_distinct_runs(tmp_path: Path) -> None:
+    parquet = tmp_path / "two_periods.parquet"
+    _two_period_parquet(parquet)
+    cfg = _period_config(parquet, tmp_path / "ws")
+
+    r15 = run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+    r16 = run_detection(cfg, period_label_override="2024-01-16", no_report=True)
+
+    assert r15.run_id != r16.run_id
+    assert r15.n_anomalies > 0
+    assert r16.n_anomalies > 0

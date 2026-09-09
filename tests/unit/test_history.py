@@ -19,6 +19,7 @@ from sorethumb.history.ledger import (
     resolve_backfill_range,
 )
 from sorethumb.history.periods import (
+    period_bounds,
     period_range,
     resolve_period,
     step_back,
@@ -119,6 +120,23 @@ class TestResolvePeriod:
         frm, to, label = resolve_period(ref, "hour", False)
         assert label == frm == "2026-09-03T14"
         assert to == "2026-09-03T15"
+
+
+class TestPeriodBounds:
+    """period_bounds(label, g) must reproduce the window resolve_period built."""
+
+    @pytest.mark.parametrize(
+        ("ref", "granularity"),
+        [
+            (datetime(2026, 9, 3, 14, 30, tzinfo=UTC), "day"),
+            (datetime(2026, 9, 2, tzinfo=UTC), "week"),
+            (datetime(2026, 12, 20, tzinfo=UTC), "month"),
+            (datetime(2026, 9, 3, 14, 45, tzinfo=UTC), "hour"),
+        ],
+    )
+    def test_round_trips_resolve_period(self, ref, granularity):
+        frm, to, label = resolve_period(ref, granularity, roll_non_business=False)
+        assert period_bounds(label, granularity) == (frm, to)
 
 
 # ---------------------------------------------------------------------------
