@@ -29,6 +29,10 @@ Versioning: [Semantic Versioning](https://semver.org/).
   `<detector>.manifest.json`; `load_model` falls back to the old names for
   workspaces written by an earlier version. The bug was latent because the
   fit path uses in-memory calibrators and single-detector runs are unaffected.
+- Model-side writes (`.joblib`, `.calibrator.json`, `.manifest.json`,
+  `plan.json`) are now atomic — a sibling temp file, `fsync`, then
+  `os.replace` — so a crash mid-write can no longer leave a half-written file
+  for a later score-forward run to load.
 
 ### Changed
 
