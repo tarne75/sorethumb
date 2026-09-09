@@ -83,13 +83,24 @@ n_estimators = 200        # more trees = more stable, slower
 
 **Analogy.** Imagine sorting your records into natural groups — customers who
 buy frequently and spend a little, customers who buy rarely and spend a lot,
-and so on. Once those groups are formed, you measure how far each record sits
-from the centre of its group. Someone right in the middle of their group is
-completely normal. Someone at the edge is borderline. Someone nowhere near any
-group at all is an anomaly.
+and so on. The *big* groups are what "normal" looks like. Every record is then
+scored by how far it sits from the nearest **big** group's centre — not its own
+group's centre. A small clump of records that formed its own little group still
+scores as anomalous, because it is nowhere near a big one.
 
-This detector groups your records into clusters (groups of similar records)
-and flags the ones that are far from any group's centre.
+This is CBLOF-style scoring, and it matters: score every record against *its
+own* centre and a tight cluster of anomalies gets handed its own centroid and
+is rated perfectly normal. That was a real bug — `kmeans_distance` used to
+score planted anomalies as the *most* normal records (benchmark ROC-AUC
+~0.0002). Measuring against the big clusters only removes that failure mode.
+
+"Big" is controlled by **`large_cluster_coverage`** (default `0.90`): the
+largest groups that together hold 90% of the training rows are the reference
+set; every other cluster is a candidate for anomalies. A consequence of that
+default: the detector assumes anomalies are no more than about **10%** of your
+data. If your true anomaly rate is higher, lower `large_cluster_coverage` so
+more groups count as "big"; raise it toward `1.0` to be stricter, at the cost
+of re-exposing the own-centroid failure for a larger anomaly cluster.
 
 **What it catches well.**
 - Straightforward numerical outliers — records that don't fit any natural
@@ -99,6 +110,9 @@ and flags the ones that are far from any group's centre.
   fall into behavioural segments)
 
 **Where it struggles.**
+- Contamination above ~10% at the default `large_cluster_coverage` — an anomaly
+  group big enough to count as a reference cluster is scored normal. Lower
+  `large_cluster_coverage` for higher anomaly rates.
 - Unusual-combination anomalies: a record with individually normal values that
   combine in an impossible way (e.g. age=5, income=£200k). It only cares about
   distance, not plausibility.
@@ -114,7 +128,8 @@ and flags the ones that are far from any group's centre.
 [[detectors]]
 name = "kmeans_distance"
 train_row_cap = 200_000
-# [detectors.params]
+[detectors.params]
+large_cluster_coverage = 0.90   # lower it if anomalies are more than ~10% of rows
 # extra_params = { max_iter = 500, tol = 1e-5 }   # any other sklearn KMeans argument
 ```
 
@@ -293,7 +308,7 @@ n_bins = "auto"   # "auto" uses Freedman-Diaconis bin selection per column
 | Detector | Default | Train cap | Best for | Main weakness | Explanations |
 |---|---|---|---|---|---|
 | `isolation_forest` | ★ | 250k | General purpose; combination anomalies | Dense anomaly clusters | Exact (TreeSHAP) |
-| `kmeans_distance` | ★ | 200k | Datasets with clear natural groupings | Non-spherical clusters; unusual combos | Heuristic |
+| `kmeans_distance` | ★ | 200k | Datasets with clear natural groupings | Non-spherical clusters; anomalies > ~10% of rows; unusual combos | Heuristic |
 | `one_class_svm` | ★ | 25k | Ensemble diversity; compact normal regions | Slow on large data | Heuristic |
 | `ecod` | — | 500k | Marginal (single-column) outliers; many features | Combination anomalies | Heuristic |
 | `lof` | — | 50k | Local density anomalies; mixed-density clusters | Large datasets; high dimensionality | Heuristic |

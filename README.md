@@ -269,7 +269,7 @@ that no single blind spot dominates the ensemble:
 | Detector | Key | Algorithm | Strength | Weakness |
 |----------|-----|-----------|----------|----------|
 | `isolation_forest` | ★ default | Random tree partitioning | Fast, scales to millions of rows, exact TreeSHAP attributions | Struggles with very high-dimensional sparse data |
-| `kmeans_distance` | ★ default | Negative centroid distance | Trivially interpretable (distance to cluster centre) | Assumes roughly spherical clusters; sensitive to `k` |
+| `kmeans_distance` | ★ default | CBLOF: negative distance to nearest *large*-cluster centroid | Interpretable; a tight anomaly cluster can't hide by capturing its own centroid | Assumes anomalies are ≲ 10 % of rows (tune `large_cluster_coverage`); spherical clusters; sensitive to `k` |
 | `one_class_svm` | ★ default | RBF kernel boundary | Genuinely different family, useful in ensemble | Quadratic training cost; capped at 25 k rows by default |
 
 ### Additional built-in detectors

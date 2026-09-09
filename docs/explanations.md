@@ -32,12 +32,13 @@ still directionally correct and comparable across features within a row.
 ### Centroid attributions (KMeans)
 
 **Method:** For each anomalous row, compute the vector distance from the row to
-its nearest cluster centroid. The contribution of feature *i* is the absolute
-difference between the row's value and the centroid's value on feature *i*,
-scaled by that feature's importance in the distance measure.
+its nearest *large-cluster* centroid (the same CBLOF reference set the detector
+scores against — small clusters are excluded). The contribution of feature *i*
+is the absolute difference between the row's value and the centroid's value on
+feature *i*, scaled by that feature's importance in the distance measure.
 
 **What it measures:** Which features are most responsible for the row being far
-from any cluster centre. This is not a Shapley value — it does not have the
+from any large cluster's centre. This is not a Shapley value — it does not have the
 theoretical guarantees (efficiency, symmetry, dummy) that SHAP values carry.
 In practice it is a reliable proxy for "why this row is a KMeans outlier."
 
