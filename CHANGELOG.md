@@ -28,12 +28,20 @@ Versioning: [Semantic Versioning](https://semver.org/).
   ROC-AUC floor on the network-free synthetic datasets. Restores a real
   accuracy-regression signal — the scheduled `benchmark` CI job previously
   selected zero tests — and locks in the `kmeans_distance` CBLOF fix.
+- `KMeansDetector.large_cluster_coverage` (constructor argument, default `0.90`)
+  tunes the CBLOF reference set — the fraction of training rows the "large"
+  clusters must cover. Surfaced in `get_params()` alongside the resolved
+  `n_large_clusters`; the fitted reference centroids are exposed as the
+  `large_centroids` property.
 
 ### Docs
 
 - Regenerated the README benchmark table. `kmeans_distance` on the synthetic
   datasets now reads ROC-AUC 1.00 (was 0.08 / 0.0002) — the table still carried
   pre-CBLOF-fix numbers. Other detectors' accuracy metrics are unchanged.
+- `docs/models.md` and the README detector table now describe `kmeans_distance`
+  as CBLOF (distance to the nearest large-cluster centroid, not its own) and
+  document `large_cluster_coverage` and its ~10 % contamination ceiling.
 
 ### Security
 
@@ -43,6 +51,16 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `kmeans_distance` no longer lets a tight anomaly cluster capture its own
+  centroid and be scored normal — the previous behaviour ranked planted
+  anomalies as the *most* normal records (benchmark ROC-AUC ~0.0002). Scoring
+  is now CBLOF-style: every row is measured against the nearest *large-cluster*
+  centroid, where "large" is the set of clusters that together cover
+  `large_cluster_coverage` (default `0.90`) of the training data; small
+  clusters — anomaly sub-groups included — are excluded from the reference set.
+  Consequence of the 0.90 default: the detector assumes anomalies are ≲ 10 % of
+  the data. Lower `large_cluster_coverage` for a higher true anomaly rate;
+  raise it toward `1.0` to be stricter.
 - Artefact pruning no longer matches a failed run to its files by a path
   substring (`instr(path, run_id)`), which could delete another run's files
   when one `run_id` was a substring of another. Artefacts now carry their
