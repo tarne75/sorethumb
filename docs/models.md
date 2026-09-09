@@ -13,16 +13,18 @@ equations — and helps you choose which ones belong in your ensemble.
 
 ## How anomaly scoring works
 
-Every detector answers the same question for every row: *how normal does this
+Every detector answers the same question for every row: *how unusual does this
 look, compared to everything the model was trained on?*
 
-The answer is a score between 0 and 1, where **1 = perfectly normal** and
-**0 = extremely unusual**. All six detectors produce scores on this scale, so
-they can be compared and combined.
+Each detector's answer is put on a common 0–1 scale and the detectors are
+combined into a single `composite_score`, where **1 = extremely unusual** and
+**0 = looks completely normal**. This is the score shown in the results table,
+the HTML report and `--json` output; rows are listed from the highest score
+(most anomalous) down.
 
-Each detector also has a *flag threshold*: a score below which it considers a
-record anomalous. That threshold is learned from your training data, not
-hard-coded.
+A record is flagged as anomalous when its score crosses a threshold learned
+from your data — the top `contamination` fraction of rows, or each detector's
+own natural boundary when `contamination = "auto"`. Nothing is hard-coded.
 
 ---
 
