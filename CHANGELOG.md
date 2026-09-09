@@ -23,6 +23,11 @@ Versioning: [Semantic Versioning](https://semver.org/).
   the [configuration reference](docs/configuration.md#detector-extra_params)
   lists them per detector. Each wrapper class exposes
   `available_extra_params()` for programmatic discovery.
+- Accuracy-floor benchmark (`tests/benchmark/test_accuracy_floors.py`, marker
+  `benchmark`): each guarded detector must clear a committed per-detector
+  ROC-AUC floor on the network-free synthetic datasets. Restores a real
+  accuracy-regression signal — the scheduled `benchmark` CI job previously
+  selected zero tests — and locks in the `kmeans_distance` CBLOF fix.
 
 ### Security
 
