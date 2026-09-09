@@ -1,0 +1,54 @@
+name: Publish
+
+# Publishes to PyPI via trusted publishing (OIDC — no API token stored).
+# One-time setup on PyPI: add a trusted publisher for this project with
+#   owner = tarne75, repository = sorethumb,
+#   workflow = publish.yml, environment = pypi
+# and create a `pypi` deployment environment in the repo settings.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Verify the tag matches project.version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          echo "tag=$tag  project.version=$pkg"
+          test "$tag" = "$pkg" || { echo "::error::tag $tag does not match project.version $pkg"; exit 1; }
+      - name: Build sdist and wheel
+        run: uv build
+      - name: Check distribution metadata
+        run: uvx twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/sorethumb
+    permissions:
+      id-token: write # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

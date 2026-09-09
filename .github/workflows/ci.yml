@@ -49,6 +49,30 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml
 
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Build sdist and wheel
+        run: uv build
+      - name: Check distribution metadata
+        run: uvx twine check dist/*
+      - name: Assert package data is shipped in the wheel
+        run: |
+          unzip -l dist/*.whl | grep -q 'sorethumb/py.typed'
+          unzip -l dist/*.whl | grep -q 'sorethumb/store/migrations/001_initial.sql'
+      - name: Install the wheel into a clean venv and smoke-test
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --upgrade pip
+          /tmp/smoke/bin/pip install dist/*.whl
+          /tmp/smoke/bin/sorethumb --version
+          /tmp/smoke/bin/python -c "import sorethumb; from sorethumb import Config, SourceConfig, run_detection; print('import OK', sorethumb.__version__)"
+
   benchmark:
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule'

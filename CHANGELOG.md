@@ -6,6 +6,14 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.1.0] - 2026-09-09
+
+First tagged release. The Fixed / Compatibility entries record corrections made
+during pre-release hardening; there is no prior published version to diff
+against.
+
 ### Added
 
 - Detector `extra_params`: an escape hatch to pass arbitrary constructor kwargs
@@ -33,21 +41,37 @@ Versioning: [Semantic Versioning](https://semver.org/).
   clusters must cover. Surfaced in `get_params()` alongside the resolved
   `n_large_clusters`; the fitted reference centroids are exposed as the
   `large_centroids` property.
+- Packaging metadata: PyPI trove classifiers, keywords, and `[project.urls]`
+  (Homepage, Repository, Documentation, Changelog, Issues). `py.typed` ships in
+  the wheel.
+- Release workflow (`.github/workflows/publish.yml`): a `vMAJOR.MINOR.PATCH`
+  tag builds the sdist + wheel, runs `twine check`, verifies the tag matches
+  `project.version`, and publishes to PyPI via trusted publishing (OIDC — no
+  API token). Needs a one-time PyPI trusted-publisher entry and a `pypi`
+  deployment environment.
 
-### Docs
+### Changed
 
-- Regenerated the README benchmark table. `kmeans_distance` on the synthetic
-  datasets now reads ROC-AUC 1.00 (was 0.08 / 0.0002) — the table still carried
-  pre-CBLOF-fix numbers. Other detectors' accuracy metrics are unchanged.
-- `docs/models.md` and the README detector table now describe `kmeans_distance`
-  as CBLOF (distance to the nearest large-cluster centroid, not its own) and
-  document `large_cluster_coverage` and its ~10 % contamination ceiling.
+- Persisted models now record the fit-time versions of Python, sorethumb,
+  scikit-learn, numpy, scipy and joblib in `manifest.json`. `load_model` and
+  `score_with_existing` compare them against the current environment and emit
+  `ModelVersionMismatchWarning` (or, in strict mode, raise
+  `ModelVersionMismatchError`) so a dependency upgrade can no longer change
+  scores silently.
+- CI adds a `build` job: builds the distribution, `twine check`s it, asserts
+  the package data (`py.typed`, SQL migrations) is shipped, then installs the
+  wheel into a clean virtualenv and smoke-tests `sorethumb --version` and
+  `import sorethumb`.
+- CI declares a weekly `schedule` trigger so the `benchmark` job (guarded by
+  `if: github.event_name == 'schedule'`) can actually run — restoring the
+  accuracy-regression signal.
+- README marked pre-release (0.1.0); install instructions build from a clone.
 
-### Security
+### Removed
 
-- CSV report cells and column names are now neutralised against spreadsheet
-  formula injection: a leading `=`, `+`, `-`, `@`, or control character is
-  prefixed with `'` before the frame is written.
+- Dropped the unsupported `s3://` example from the README; only local paths and
+  `http(s)://` URLs are accepted (an `s3://` URI already raised
+  `SourceError: Unsupported URI scheme`).
 
 ### Fixed
 
@@ -77,29 +101,30 @@ Versioning: [Semantic Versioning](https://semver.org/).
   spread used to standardise the normal bulk. (Robust mode already used
   outlier-resistant median/IQR.)
 
+### Security
+
+- CSV report cells and column names are neutralised against spreadsheet formula
+  injection: a leading `=`, `+`, `-`, `@`, or control character is prefixed with
+  `'` before the frame is written.
+
 ### Compatibility
 
 - Identity digests widened from 64-bit (16 hex) to 128-bit (32 hex):
   `run_id`, `group_key`, `dataset_fp`, `config_hash`, and the model plan digest.
   Run IDs and group directories therefore have new names — existing workspaces
-  will start fresh runs rather than resuming. Pre-release, no migration provided.
+  start fresh runs rather than resuming. No migration provided.
 
-### Changed
+### Docs
 
-- Persisted models now record the fit-time versions of Python, sorethumb,
-  scikit-learn, numpy, scipy and joblib in `manifest.json`. `load_model` and
-  `score_with_existing` compare them against the current environment and emit
-  `ModelVersionMismatchWarning` (or, in strict mode, raise
-  `ModelVersionMismatchError`) so a dependency upgrade can no longer change
-  scores silently.
-- CI declares a weekly `schedule` trigger so the `benchmark` job (guarded by
-  `if: github.event_name == 'schedule'`) can actually run — restoring the
-  accuracy-regression signal.
-- README marked pre-release (0.1.0); install instructions now build from a
-  clone rather than implying a published PyPI package.
+- Regenerated the README benchmark table. `kmeans_distance` on the synthetic
+  datasets now reads ROC-AUC 1.00 (was 0.08 / 0.0002) — the table still carried
+  pre-CBLOF-fix numbers. Other detectors' accuracy metrics are unchanged.
+- `docs/models.md`, `docs/explanations.md` and the README detector table now
+  describe `kmeans_distance` as CBLOF (distance to the nearest large-cluster
+  centroid, not its own) and document `large_cluster_coverage` and its ~10 %
+  contamination ceiling.
+- `docs/models.md` "How anomaly scoring works" corrected: `composite_score` is
+  1 = most anomalous, 0 = normal (it was documented inverted).
 
-### Removed
-
-- Dropped the unsupported `s3://` example from the README; only local paths and
-  `http(s)://` URLs are accepted (an `s3://` URI already raised
-  `SourceError: Unsupported URI scheme`).
+[Unreleased]: https://github.com/tarne75/sorethumb/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/tarne75/sorethumb/releases/tag/v0.1.0

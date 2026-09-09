@@ -10,6 +10,35 @@ readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
 authors = [{ name = "Tarne Westcott", email = "tarne.westcott@gmail.com" }]
+keywords = [
+    "anomaly-detection",
+    "outlier-detection",
+    "unsupervised-learning",
+    "tabular-data",
+    "machine-learning",
+    "isolation-forest",
+    "one-class-svm",
+    "ensemble",
+    "polars",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Typing :: Typed",
+]
 dependencies = [
     "polars>=1.0.0",
     "pyarrow>=14.0.0",
@@ -46,6 +75,13 @@ dev = [
 
 [project.scripts]
 sorethumb = "sorethumb.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/tarne75/sorethumb"
+Repository = "https://github.com/tarne75/sorethumb"
+Documentation = "https://github.com/tarne75/sorethumb/blob/main/docs/index.md"
+Changelog = "https://github.com/tarne75/sorethumb/blob/main/CHANGELOG.md"
+Issues = "https://github.com/tarne75/sorethumb/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sorethumb"]
