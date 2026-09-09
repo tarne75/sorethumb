@@ -1,10 +1,14 @@
 """Detector and calibrator persistence, plus score-forward.
 
-Each (run_id, group_key, detector_name) triple has three files:
-  - <detector_name>.joblib   — the fitted sklearn estimator
-  - calibrator.json          — Calibrator quantile points
-  - manifest.json            — feature_schema_hash, plan digest, params, seed,
-                               library_versions, ...
+Each (run_id, group_key, detector_name) triple has three files, all namespaced
+by detector so several detectors can share a group directory:
+  - <detector_name>.joblib          — the fitted sklearn estimator
+  - <detector_name>.calibrator.json — Calibrator quantile points
+  - <detector_name>.manifest.json   — feature_schema_hash, plan digest, params,
+                                      seed, library_versions, ...
+
+The run's fitted FeaturePlan is written once per run at models/<run_id>/plan.json
+(save_plan / load_plan) for score-forward reuse.
 
 score_with_existing() loads a source run's plan and fitted models, applies them
 to new data without re-fitting, compares feature_schema_hash to detect drift,
@@ -19,6 +23,7 @@ import json
 import logging
 import platform
 import warnings
+from pathlib import Path
 from typing import Any
 
 import joblib
@@ -43,6 +48,49 @@ _TRACKED_LIBRARIES = ("sorethumb", "scikit-learn", "numpy", "scipy", "joblib")
 
 def _plan_digest(plan_json: str) -> str:
     return hashlib.sha256(plan_json.encode()).hexdigest()[:32]
+
+
+_PLAN_FILENAME = "plan.json"
+
+
+def save_plan(workspace: Workspace, run_id: str, plan_json: str) -> str:
+    """Persist the run's fitted FeaturePlan JSON. Returns the digest.
+
+    Written once per run (after ``fit_features``) so a later score-forward run
+    (``sorethumb score --from-run``) can reload the exact fitted plan —
+    frequency maps, scaler params, PCA components, correlation-drop list — and
+    apply it to new data without re-fitting.
+    """
+    path = workspace.run_dir(run_id) / _PLAN_FILENAME
+    path.write_text(plan_json, encoding="utf-8")
+    digest = _plan_digest(plan_json)
+    workspace.store.register_artifact(
+        artifact_id=f"{run_id}_plan",
+        path=str(path),
+        kind="plan",
+        byte_size=path.stat().st_size,
+        regenerable=False,
+        run_id=run_id,
+    )
+    logger.info("Saved FeaturePlan for run %s (digest=%s).", run_id, digest[:8])
+    return digest
+
+
+def load_plan(workspace: Workspace, run_id: str) -> Any:
+    """Load the fitted FeaturePlan persisted for *run_id*.
+
+    Raises StoreError if the run predates plan persistence or the file is gone.
+    """
+    from sorethumb.profiling.plan import FeaturePlan  # noqa: PLC0415
+
+    path = workspace.run_dir(run_id) / _PLAN_FILENAME
+    if not path.exists():
+        msg = (
+            f"No persisted FeaturePlan for run {run_id!r} at {path}. "
+            "The run may predate plan persistence; re-run it to enable score-forward."
+        )
+        raise StoreError(msg)
+    return FeaturePlan.from_json(path.read_text(encoding="utf-8"))
 
 
 def _library_versions() -> dict[str, str]:
@@ -101,12 +149,12 @@ def save_model(
 
     out_dir = workspace.models_dir(run_id, group_key)
 
-    # Write estimator
+    # Every file is namespaced by detector — a group can hold several detectors
+    # and they must not clobber each other's calibrator / manifest.
     estimator_path = out_dir / f"{detector_name}.joblib"
     joblib.dump(detector, str(estimator_path))
 
-    # Write calibrator
-    calibrator_path = out_dir / "calibrator.json"
+    calibrator_path = out_dir / f"{detector_name}.calibrator.json"
     calibrator_d = calibrator.to_dict()
     calibrator_path.write_text(json.dumps(calibrator_d), encoding="utf-8")
 
@@ -124,7 +172,7 @@ def save_model(
         "seed": seed,
         "library_versions": _library_versions(),
     }
-    manifest_path = out_dir / "manifest.json"
+    manifest_path = out_dir / f"{detector_name}.manifest.json"
     manifest_path.write_text(json.dumps(manifest, default=str), encoding="utf-8")
 
     # Register with the database
@@ -183,22 +231,31 @@ def load_model(
         msg = f"Model file not found: {estimator_path}"
         raise StoreError(msg)
 
-    manifest_path = out_dir / "manifest.json"
+    # Namespaced paths; fall back to the pre-namespacing filenames for
+    # workspaces written by an older sorethumb.
+    manifest_path = _first_existing(out_dir / f"{detector_name}.manifest.json", out_dir / "manifest.json")
     manifest: dict[str, Any] = {}
-    if manifest_path.exists():
+    if manifest_path is not None:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     _check_library_versions(manifest, strict=strict)
 
     detector = joblib.load(str(estimator_path))
 
-    calibrator_path = out_dir / "calibrator.json"
-    if calibrator_path.exists():
+    calibrator_path = _first_existing(
+        out_dir / f"{detector_name}.calibrator.json", out_dir / "calibrator.json"
+    )
+    if calibrator_path is not None:
         calibrator_d = json.loads(calibrator_path.read_text(encoding="utf-8"))
         calibrator = Calibrator.from_dict(calibrator_d)
     else:
         calibrator = Calibrator()
 
     return detector, calibrator, manifest
+
+
+def _first_existing(*paths: Path) -> Path | None:
+    """Return the first path that exists, or None."""
+    return next((p for p in paths if p.exists()), None)
 
 
 def score_with_existing(
@@ -242,13 +299,22 @@ def score_with_existing(
     Returns
     -------
     dict with keys:
-        "scores": dict[detector_name -> np.ndarray]
-        "calibrated": dict[detector_name -> np.ndarray]
-        "drifted": bool
+        "scores":        dict[detector_name -> np.ndarray]  (raw, higher = more normal)
+        "calibrated":    dict[detector_name -> np.ndarray]  (via the persisted calibrator)
+        "natural_flags": dict[detector_name -> np.ndarray[bool]]
+        "detectors":     dict[detector_name -> loaded detector instance]
+        "missing":       list[detector_name]  (requested but no persisted model)
+        "drifted":       bool
+
+    No detector is re-fitted: each is unpickled from the source run and only
+    ``score_samples`` / ``natural_flag`` are called.
 
     """
     scores: dict[str, np.ndarray] = {}
     calibrated: dict[str, np.ndarray] = {}
+    natural_flags: dict[str, np.ndarray] = {}
+    detectors: dict[str, Any] = {}
+    missing: list[str] = []
     drifted = False
 
     for det_name in detector_names:
@@ -263,6 +329,7 @@ def score_with_existing(
                 group_key,
                 source_run_id,
             )
+            missing.append(det_name)
             continue
 
         saved_hash = manifest.get("feature_schema_hash", "")
@@ -277,8 +344,16 @@ def score_with_existing(
             drifted = True
 
         raw_scores = detector.score_samples(new_feature_matrix)
-        cal_scores = calibrator.transform(raw_scores)
         scores[det_name] = raw_scores
-        calibrated[det_name] = cal_scores
+        calibrated[det_name] = calibrator.transform(raw_scores)
+        natural_flags[det_name] = detector.natural_flag(raw_scores)
+        detectors[det_name] = detector
 
-    return {"scores": scores, "calibrated": calibrated, "drifted": drifted}
+    return {
+        "scores": scores,
+        "calibrated": calibrated,
+        "natural_flags": natural_flags,
+        "detectors": detectors,
+        "missing": missing,
+        "drifted": drifted,
+    }

@@ -6,7 +6,36 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- `sorethumb score --from-run RUN_ID` is now real (it previously ignored
+  `--from-run` and did a full fitted run). It loads the source run's persisted
+  FeaturePlan and, per group, its per-detector models and calibrators; applies
+  the plan to the new data (`apply_feature_plan`); scores each unpickled
+  detector without re-fitting; reuses the persisted calibrators so scores map
+  onto the source run's reference distribution; and writes a new, distinct
+  `score_…` run recording `source_run_id` (migration 004). Schema drift and
+  library-version drift are detected per group (`--strict` → errors). New
+  public API `sorethumb.score_forward(config, source_run_id)`; the fitted plan
+  is persisted at `models/<run_id>/plan.json` (`save_plan` / `load_plan`).
+
+### Fixed
+
+- Model persistence: a group's `calibrator.json` and `manifest.json` were not
+  namespaced by detector, so in a multi-detector group the second `save_model`
+  overwrote the first's calibrator and manifest. `load_model` /
+  `score_with_existing` then returned the wrong detector's calibrator (garbage
+  calibrated scores). Files are now `<detector>.calibrator.json` /
+  `<detector>.manifest.json`; `load_model` falls back to the old names for
+  workspaces written by an earlier version. The bug was latent because the
+  fit path uses in-memory calibrators and single-detector runs are unaffected.
+
+### Changed
+
+- `_pipeline`: the per-group ledger/status bookkeeping and the
+  ensemble→threshold→explain→write tail are factored into shared helpers
+  (`_execute_group`, `_finalize_group`) used by both `run_detection` and
+  `score_forward`, so the two paths cannot diverge.
 
 ## [0.1.0] - 2026-09-09
 

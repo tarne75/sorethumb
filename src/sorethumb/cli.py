@@ -32,11 +32,13 @@ import sorethumb
 from sorethumb import (
     Config,
     RunResult,
+    SorethumbError,
     Workspace,
     build_feature_plan,
     list_detectors,
     load_dataset,
     run_detection,
+    score_forward,
 )
 
 console = Console()
@@ -733,11 +735,14 @@ def score(
     no_report: Annotated[bool, typer.Option("--no-report")] = False,
     json_output: _JSON_OPT = False,
 ) -> None:
-    """Score new data with a previous run's persisted models.
+    """Score new data with a previous run's persisted plan and models.
 
-    The source run's FeaturePlan is applied to the new data without re-fitting,
-    and its calibrators are reused so scores are comparable across runs.
-    Schema drift is detected and reported per group.
+    The source run's fitted FeaturePlan and per-detector models + calibrators are
+    loaded and applied to the new data without re-fitting. The calibrators map
+    scores onto the source run's reference distribution, so the numbers are
+    comparable across runs. Schema and library-version drift are detected per
+    group (``--strict`` makes them errors). A new, distinct run is written that
+    records the source run.
     """
     _setup_logging(log_level)
     cfg = _load_config(config, workdir=workdir, seed=seed, strict=strict, log_level=log_level)
@@ -745,13 +750,19 @@ def score(
     if not json_output:
         console.print(f"[bold]sorethumb score[/bold]  from_run={from_run}")
 
-    result: RunResult = run_detection(cfg, no_report=no_report)
+    try:
+        result: RunResult = score_forward(cfg, from_run, strict=strict, no_report=no_report)
+    except SorethumbError as exc:
+        err_console.print(f"[red]score --from-run failed:[/red] {exc}")
+        raise typer.Exit(2) from exc
 
     if json_output:
         typer.echo(json.dumps(_run_result_to_dict(result), default=str))
         raise typer.Exit(1 if result.n_failed else 0)
 
     _print_run_summary(result)
+    if any(g.drifted for g in result.groups):
+        console.print("[yellow]note:[/yellow] one or more groups showed schema/version drift.")
     raise typer.Exit(1 if result.n_failed else 0)
 
 

@@ -3,7 +3,7 @@
 Public API
 ----------
 run_detection(config)          — full pipeline: profile → features → detect → explain → report
-score_with_existing(...)       — score new data with persisted models (no refit)
+score_forward(config, run_id)  — score new data with a prior run's plan + models (no refit)
 load_dataset(source_config)    — resolve a source, read and unnest
 build_feature_plan(df, config) — profile + classify + plan (no fitting)
 apply_feature_plan(df, plan)   — apply a pre-fitted plan to new data
@@ -25,6 +25,7 @@ from sorethumb._pipeline import (
     list_detectors,
     load_dataset,
     run_detection,
+    score_forward,
 )
 
 # Config
@@ -67,4 +68,5 @@ __all__ = [
     "list_detectors",
     "load_dataset",
     "run_detection",
+    "score_forward",
 ]

@@ -162,8 +162,13 @@ class Store:
         seed: int,
         library_version: str = "",
         python_version: str = "",
+        source_run_id: str | None = None,
     ) -> None:
-        """Record a new run in status 'running'."""
+        """Record a new run in status 'running'.
+
+        *source_run_id* is set for score-forward runs (``sorethumb score
+        --from-run``) and NULL for ordinary fitted runs.
+        """
         now = _now_utc()
         cfg_hash = _config_hash(config_json)
         lib_ver = library_version or "0.1.0"
@@ -174,10 +179,10 @@ class Store:
             """
             INSERT OR IGNORE INTO run
                 (run_id, dataset_fp, config_hash, config_json, seed,
-                 library_version, python_version, started_at, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running')
+                 library_version, python_version, started_at, status, source_run_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
             """,
-            (run_id, dataset_fp, cfg_hash, config_json, seed, lib_ver, py_ver, now),
+            (run_id, dataset_fp, cfg_hash, config_json, seed, lib_ver, py_ver, now, source_run_id),
         )
         self._conn.commit()
 

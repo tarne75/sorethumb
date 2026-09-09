@@ -193,7 +193,7 @@ def test_all_bundled_migrations_apply_cleanly(tmp_path):
     """Every shipped migration file applies without error and is recorded."""
     with Store(tmp_path / "m.db") as store:
         versions = {r[0] for r in store._conn.execute("SELECT version FROM schema_migration")}
-    assert versions == {1, 2, 3}
+    assert versions == {1, 2, 3, 4}
 
 
 def test_migration_003_adds_artifact_run_id_column(tmp_path):
@@ -383,6 +383,51 @@ def test_load_model_missing_raises(tmp_path):
         load_model(ws, "norun", "nogroup", "isolation_forest")
 
 
+def test_two_detectors_in_one_group_keep_separate_calibrators(tmp_path):
+    """A group with several detectors: each detector's calibrator/manifest must
+    survive — the files are namespaced by detector, not shared."""
+    from sorethumb.detectors.kmeans_distance import KMeansDetector
+
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((120, 4))
+
+    det_if, _ = _fit_detector(n=120)
+    cal_if = _fitted_calibrator(det_if, X)
+
+    det_km = KMeansDetector(k=3)
+    det_km.fit(X, seed=0)
+    cal_km = _fitted_calibrator(det_km, X)
+
+    with _open_ws(tmp_path) as ws:
+        ws.store.upsert_dataset("fp1", "uri", "sfp", "cfp", 120, 4)
+        ws.store.insert_run("run1", "fp1", "{}", 0)
+        gk = make_group_key({"g": "A"})
+        save_model(ws, "run1", gk, det_if, cal_if, "{}", "hash_abc", 120, 0)
+        save_model(ws, "run1", gk, det_km, cal_km, "{}", "hash_abc", 120, 0)
+
+        _, loaded_if_cal, man_if = load_model(ws, "run1", gk, "isolation_forest")
+        _, loaded_km_cal, man_km = load_model(ws, "run1", gk, "kmeans_distance")
+
+    # Each loaded calibrator matches the one it was saved with — not the other's.
+    np.testing.assert_array_equal(loaded_if_cal._quantile_values, cal_if._quantile_values)
+    np.testing.assert_array_equal(loaded_km_cal._quantile_values, cal_km._quantile_values)
+    assert man_if["detector_name"] == "isolation_forest"
+    assert man_km["detector_name"] == "kmeans_distance"
+
+
+def test_save_load_plan_roundtrip(tmp_path):
+    from sorethumb.store.models import load_plan, save_plan
+
+    with _open_ws(tmp_path) as ws:
+        plan_json = '{"chosen_time_column": null, "scaler_params": {"a": {"center": 0.0, "scale": 1.0}}}'
+        digest = save_plan(ws, "run1", plan_json)
+        assert len(digest) == 32
+        assert (ws.run_dir("run1") / "plan.json").exists()
+
+        with pytest.raises(StoreError, match="No persisted FeaturePlan"):
+            load_plan(ws, "run_without_plan")
+
+
 # ---------------------------------------------------------------------------
 # Model library-version recording / verification
 # ---------------------------------------------------------------------------
@@ -395,7 +440,7 @@ def _save_one_model(ws, run_id: str = "run1"):
     ws.store.insert_run(run_id, "fp1", "{}", 0)
     gk = make_group_key({"g": "A"})
     save_model(ws, run_id, gk, det, cal, "{}", "hash_abc", 100, 42)
-    return gk, ws.models_dir(run_id, gk) / "manifest.json"
+    return gk, ws.models_dir(run_id, gk) / f"{det.name}.manifest.json"
 
 
 def test_manifest_records_library_versions(tmp_path):

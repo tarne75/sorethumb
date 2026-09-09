@@ -4,8 +4,8 @@ This module is the only place that sequences the library's subsystems:
 source resolution → profiling → feature construction → detection →
 calibration → scoring → explanation → persistence → reporting.
 
-The client (cli.py) calls run_detection() and score_with_existing() and
-inspects their return values. It does not call any subsystem directly.
+The client (cli.py) calls run_detection() and score_forward() and inspects
+their return values. It does not call any subsystem directly.
 """
 
 from __future__ import annotations
@@ -17,8 +17,10 @@ import re
 import sys
 import time
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -27,7 +29,7 @@ import polars as pl
 
 from sorethumb.config import Config, SourceConfig
 from sorethumb.detectors import registry
-from sorethumb.errors import SorethumbWarning
+from sorethumb.errors import SorethumbWarning, StoreError
 from sorethumb.explain.blend import blend
 from sorethumb.explain.project import aggregate_to_original, top_n_reasons
 from sorethumb.features.build import apply_feature_plan, fit_features
@@ -40,7 +42,7 @@ from sorethumb.profiling.plan import FeaturePlan, build_feature_plan
 from sorethumb.report.html import GroupSection, RunMeta, render_report
 from sorethumb.scoring.calibrate import Calibrator
 from sorethumb.scoring.combine import ScoreEnsemble
-from sorethumb.store.models import save_model
+from sorethumb.store.models import load_plan, save_model, save_plan, score_with_existing
 from sorethumb.store.results import write_results
 from sorethumb.store.workspace import Workspace, make_group_key
 
@@ -72,7 +74,7 @@ class GroupSummary:
 
 @dataclass
 class RunResult:
-    """Return value from run_detection / score_with_existing."""
+    """Return value from run_detection / score_forward."""
 
     run_id: str
     dataset_uri: str
@@ -274,6 +276,10 @@ def run_detection(
         # stable across groups — each group's matrix is a subset of this space.
         full_space = fit_features(df_raw, plan, config)
 
+        # Persist the fitted plan so a later `sorethumb score --from-run` can
+        # reload and apply it without re-fitting.
+        save_plan(ws, run_id, plan.to_json())
+
         # ── 5. Discover groups ───────────────────────────────────────────
         group_by = config.columns.group_by
         if group_by:
@@ -298,107 +304,33 @@ def run_detection(
             group_key = make_group_key(group_values)
             group_label = _group_label(ginfo, group_by) if group_by else "__all__"
 
-            # Skip ledger-complete groups unless forced
-            if not force:
-                status = ws.store.group_status(run_id, group_key)
-                if status == "complete":
-                    group_results.append(
-                        GroupSummary(
-                            group_key=group_key,
-                            group_label=group_label,
-                            n_records=n_records,
-                            n_anomalies=0,
-                            anomaly_rate=None,
-                            results_path=None,
-                            status="skipped",
-                            error=None,
-                            elapsed_seconds=0.0,
-                            drifted=False,
-                            refit_reason=None,
-                            warnings_issued=[],
-                        )
-                    )
-                    continue
-
-            # Record as running
-            ws.store.upsert_run_group(
-                run_id=run_id,
-                group_key=group_key,
-                group_values_json=json.dumps(group_values),
-                group_label=group_label,
-                status="running",
-                record_count=n_records,
+            gsummary = _execute_group(
+                ws,
+                run_id,
+                group_key,
+                group_label,
+                group_values,
+                n_records,
+                force=force,
+                body=partial(
+                    _run_group,
+                    ws=ws,
+                    run_id=run_id,
+                    config=config,
+                    plan=plan,
+                    full_space=full_space,
+                    df_raw=df_raw,
+                    group_by=group_by,
+                    group_values=group_values,
+                    group_key=group_key,
+                    group_label=group_label,
+                    n_records=n_records,
+                    period_label=period_label,
+                    dataset_fp=dataset_fp,
+                ),
             )
-
-            t0 = time.time()
-            group_warns: list[str] = []
-
-            try:
-                with warnings.catch_warnings(record=True) as caught:
-                    warnings.simplefilter("always", SorethumbWarning)
-                    gsummary = _run_group(
-                        ws=ws,
-                        run_id=run_id,
-                        config=config,
-                        plan=plan,
-                        full_space=full_space,
-                        df_raw=df_raw,
-                        group_by=group_by,
-                        group_values=group_values,
-                        group_key=group_key,
-                        group_label=group_label,
-                        n_records=n_records,
-                        period_label=period_label,
-                        dataset_fp=dataset_fp,
-                    )
-                    group_warns = [str(w.message) for w in caught]
-
-                gsummary.elapsed_seconds = time.time() - t0
-                gsummary.warnings_issued = group_warns
-                issued_warnings.extend(group_warns)
-
-                ws.store.upsert_run_group(
-                    run_id=run_id,
-                    group_key=group_key,
-                    group_values_json=json.dumps(group_values),
-                    group_label=group_label,
-                    status="complete",
-                    record_count=n_records,
-                    anomaly_count=gsummary.n_anomalies,
-                    rate=gsummary.anomaly_rate,
-                    timing_seconds=gsummary.elapsed_seconds,
-                )
-                group_results.append(gsummary)
-
-            except Exception as exc:
-                elapsed = time.time() - t0
-                err_msg = f"{type(exc).__name__}: {exc!s}"
-                logger.exception("Group %s failed: %s", group_key, err_msg)
-                ws.store.upsert_run_group(
-                    run_id=run_id,
-                    group_key=group_key,
-                    group_values_json=json.dumps(group_values),
-                    group_label=group_label,
-                    status="failed",
-                    error=err_msg[:500],
-                    timing_seconds=elapsed,
-                )
-                group_results.append(
-                    GroupSummary(
-                        group_key=group_key,
-                        group_label=group_label,
-                        n_records=n_records,
-                        n_anomalies=0,
-                        anomaly_rate=None,
-                        results_path=None,
-                        status="failed",
-                        error=err_msg[:500],
-                        elapsed_seconds=elapsed,
-                        drifted=False,
-                        refit_reason=None,
-                        warnings_issued=group_warns,
-                    )
-                )
+            issued_warnings.extend(gsummary.warnings_issued)
+            group_results.append(gsummary)
 
         # ── 7. Mark run complete / failed ────────────────────────────────
         any_failed = any(g.status == "failed" for g in group_results)
@@ -429,6 +361,189 @@ def run_detection(
 
 
 # ---------------------------------------------------------------------------
+# Score-forward pipeline
+# ---------------------------------------------------------------------------
+
+
+def _make_score_run_id(
+    dataset_fp: str, config_hash: str, period_label: str | None, source_run_id: str
+) -> str:
+    """Deterministic id for a score-forward run.
+
+    Distinct from a fitted run's id (``score_`` vs ``run_`` prefix) and keyed on
+    the source run, so re-scoring the same new data against the same source is
+    idempotent.
+    """
+    key = f"{dataset_fp}:{config_hash}:{period_label or '__no_period__'}:{source_run_id}"
+    return "score_" + hashlib.sha256(key.encode()).hexdigest()[:32]
+
+
+def score_forward(
+    config: Config,
+    source_run_id: str,
+    *,
+    strict: bool = False,
+    force: bool = False,
+    no_report: bool = False,
+    period_label_override: str | None = None,
+) -> RunResult:
+    """Score new data with a previous run's persisted artefacts — no re-fitting.
+
+    Loads *source_run_id*'s fitted FeaturePlan and, per group, its persisted
+    per-detector models and calibrators. The plan is applied to the new data
+    (``apply_feature_plan``); each detector is unpickled and only
+    ``score_samples`` / ``natural_flag`` is called; the persisted calibrator's
+    ``transform`` maps scores onto the source run's reference distribution so the
+    numbers are comparable across runs. Schema drift and library-version drift
+    are detected (``strict`` promotes both to errors). A new, distinct run is
+    written with ``source_run_id`` recorded.
+
+    Parameters
+    ----------
+    config:
+        Configuration for the *new* data (``config.run.workdir`` must be the
+        workspace that holds *source_run_id*).
+    source_run_id:
+        The fitted run to reuse.
+    strict:
+        Raise on schema / version drift instead of warning.
+    force:
+        Re-score groups already marked complete for this score-forward run.
+    no_report:
+        Skip HTML report rendering.
+    period_label_override:
+        Force a specific period label instead of resolving from the reference date.
+
+    """
+    started_at = datetime.now(UTC).isoformat()
+    ws_path = Path(config.run.workdir)
+    if not (ws_path.exists() and (ws_path / "sorethumb.db").exists()):
+        msg = f"No workspace at {ws_path}; cannot score against run {source_run_id!r}."
+        raise StoreError(msg)
+
+    issued_warnings: list[str] = []
+
+    with Workspace.open(ws_path) as ws:
+        if ws.store.get_run(source_run_id) is None:
+            msg = f"Source run {source_run_id!r} not found in workspace {ws_path}."
+            raise StoreError(msg)
+
+        # The exact fitted plan from the source run (frequency maps, scaler
+        # params, PCA components, correlation-drop list). Raises if the source
+        # run predates plan persistence.
+        plan = load_plan(ws, source_run_id)
+
+        # ── Load the new dataset ─────────────────────────────────────────
+        cache_dir = ws.root / "cache" / "datasets"
+        local_path = resolve_source(config.source, cache_dir)
+        df_raw = read_frame(local_path, config.source).collect()
+        if config.source.max_nesting_depth > 0:
+            df_raw = unnest_all(df_raw, config.source.max_nesting_depth)
+
+        content_fp = content_fingerprint(local_path)
+        schema_fp = schema_fingerprint(df_raw)
+        dataset_fp = f"{content_fp[:32]}_{schema_fp[:16]}"
+        ws.store.upsert_dataset(
+            dataset_fp=dataset_fp,
+            source_uri=config.source.uri,
+            schema_fingerprint=schema_fp,
+            content_fingerprint=content_fp,
+            n_rows=len(df_raw),
+            n_cols=len(df_raw.columns),
+        )
+
+        # ── Period resolution (same rules as run_detection) ──────────────
+        period_label: str | None = period_label_override
+        if period_label is None and config.columns.time_column:
+            from sorethumb.history.periods import resolve_period  # noqa: PLC0415
+
+            _pf, _pt, period_label = resolve_period(
+                datetime.now(UTC),
+                config.history.period_granularity,
+                config.history.roll_non_business,
+            )
+            df_raw = df_raw.filter(
+                (pl.col(config.columns.time_column) >= _pf) & (pl.col(config.columns.time_column) < _pt)
+            )
+
+        # ── Register the score-forward run ──────────────────────────────
+        new_run_id = _make_score_run_id(dataset_fp, config.config_hash(), period_label, source_run_id)
+        ws.store.insert_run(
+            run_id=new_run_id,
+            dataset_fp=dataset_fp,
+            config_json=config.model_dump_json(),
+            seed=config.run.seed,
+            source_run_id=source_run_id,
+        )
+        logger.info("score-forward run %s from source %s", new_run_id, source_run_id)
+
+        # ── Discover groups (from the new data) ─────────────────────────
+        group_by = config.columns.group_by
+        if group_by:
+            groups_info = df_raw.group_by(group_by).agg(pl.len().alias("__n__")).to_dicts()
+        else:
+            groups_info = [{"__n__": len(df_raw)}]
+
+        group_results: list[GroupSummary] = []
+        for ginfo in groups_info:
+            n_records: int = ginfo.pop("__n__", 0)
+            group_values = {col: str(ginfo[col]) for col in group_by} if group_by else {}
+            group_key = make_group_key(group_values)
+            group_label = _group_label(ginfo, group_by) if group_by else "__all__"
+
+            gsummary = _execute_group(
+                ws,
+                new_run_id,
+                group_key,
+                group_label,
+                group_values,
+                n_records,
+                force=force,
+                body=partial(
+                    _score_forward_group,
+                    ws=ws,
+                    source_run_id=source_run_id,
+                    run_id=new_run_id,
+                    config=config,
+                    plan=plan,
+                    df_raw=df_raw,
+                    group_by=group_by,
+                    group_values=group_values,
+                    group_key=group_key,
+                    group_label=group_label,
+                    n_records=n_records,
+                    period_label=period_label,
+                    strict=strict,
+                ),
+            )
+            issued_warnings.extend(gsummary.warnings_issued)
+            group_results.append(gsummary)
+
+        if any(g.status == "failed" for g in group_results):
+            ws.store.mark_run_failed(new_run_id, "one or more groups failed")
+        else:
+            ws.store.mark_run_complete(new_run_id)
+
+        report_path: Path | None = None
+        if not no_report and group_results:
+            report_path = _render_run_report(ws, new_run_id, config, plan, group_results)
+
+        return RunResult(
+            run_id=new_run_id,
+            dataset_uri=config.source.uri,
+            dataset_fp=dataset_fp,
+            config_hash=config.config_hash(),
+            period_label=period_label,
+            workspace_path=ws_path,
+            groups=group_results,
+            report_path=report_path,
+            started_at=started_at,
+            finished_at=datetime.now(UTC).isoformat(),
+            warnings_issued=issued_warnings,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -448,6 +563,130 @@ def _make_run_id(dataset_fp: str, config_hash: str, period_label: str | None) ->
 # ---------------------------------------------------------------------------
 
 
+def _slice_group_frame(
+    df_raw: pl.DataFrame,
+    group_by: list[str],
+    group_values: dict[str, str],
+    plan: FeaturePlan,
+) -> pl.DataFrame:
+    """Filter *df_raw* to one group and time-sort it.
+
+    Sorting on the plan's time column keeps raw-value lookups and the feature
+    matrix in the same row order.
+    """
+    if group_by:
+        expr = pl.lit(True)
+        for col_name, col_val in group_values.items():
+            expr = expr & (pl.col(col_name).cast(pl.Utf8) == col_val)
+        df_group = df_raw.filter(expr)
+    else:
+        df_group = df_raw
+    if plan.chosen_time_column and plan.chosen_time_column in df_group.columns:
+        df_group = df_group.sort(plan.chosen_time_column)
+    return df_group
+
+
+def _group_summary(
+    group_key: str,
+    group_label: str,
+    n_records: int,
+    *,
+    status: str,
+    error: str | None = None,
+    n_anomalies: int = 0,
+    anomaly_rate: float | None = None,
+    results_path: Path | None = None,
+    drifted: bool = False,
+    refit_reason: str | None = None,
+) -> GroupSummary:
+    return GroupSummary(
+        group_key=group_key,
+        group_label=group_label,
+        n_records=n_records,
+        n_anomalies=n_anomalies,
+        anomaly_rate=anomaly_rate,
+        results_path=results_path,
+        status=status,
+        error=error,
+        elapsed_seconds=0.0,
+        drifted=drifted,
+        refit_reason=refit_reason,
+        warnings_issued=[],
+    )
+
+
+def _execute_group(
+    ws: Workspace,
+    run_id: str,
+    group_key: str,
+    group_label: str,
+    group_values: dict[str, str],
+    n_records: int,
+    *,
+    force: bool,
+    body: Callable[[], GroupSummary],
+) -> GroupSummary:
+    """Run one group's *body* inside the shared ledger/status bookkeeping.
+
+    Used by both ``run_detection`` and ``score_forward``: skip if already
+    complete, mark running, capture warnings + timing, mark complete or failed.
+    ``body`` returns a GroupSummary; its ``elapsed_seconds`` and
+    ``warnings_issued`` are filled in here.
+    """
+    gv_json = json.dumps(group_values)
+
+    if not force and ws.store.group_status(run_id, group_key) == "complete":
+        return _group_summary(group_key, group_label, n_records, status="skipped")
+
+    ws.store.upsert_run_group(
+        run_id=run_id,
+        group_key=group_key,
+        group_values_json=gv_json,
+        group_label=group_label,
+        status="running",
+        record_count=n_records,
+    )
+
+    t0 = time.time()
+    warns: list[str] = []
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", SorethumbWarning)
+            gsummary = body()
+            warns = [str(w.message) for w in caught]
+        gsummary.elapsed_seconds = time.time() - t0
+        gsummary.warnings_issued = warns
+        ws.store.upsert_run_group(
+            run_id=run_id,
+            group_key=group_key,
+            group_values_json=gv_json,
+            group_label=group_label,
+            status="complete",
+            record_count=n_records,
+            anomaly_count=gsummary.n_anomalies,
+            rate=gsummary.anomaly_rate,
+            timing_seconds=gsummary.elapsed_seconds,
+        )
+        return gsummary
+    except Exception as exc:
+        elapsed = time.time() - t0
+        err_msg = f"{type(exc).__name__}: {exc!s}"
+        logger.exception("Group %s failed: %s", group_key, err_msg)
+        ws.store.upsert_run_group(
+            run_id=run_id,
+            group_key=group_key,
+            group_values_json=gv_json,
+            group_label=group_label,
+            status="failed",
+            error=err_msg[:500],
+            timing_seconds=elapsed,
+        )
+        summary = _group_summary(group_key, group_label, n_records, status="failed", error=err_msg[:500])
+        summary.elapsed_seconds = elapsed
+        summary.warnings_issued = warns
+        return summary
+
+
 def _run_group(
     ws: Workspace,
     run_id: str,
@@ -463,20 +702,13 @@ def _run_group(
     period_label: str | None,
     dataset_fp: str,  # noqa: ARG001 — passed for future ledger integration
 ) -> GroupSummary:
-    # Filter raw df to this group
-    if group_by:
-        filter_expr = pl.lit(True)
-        for col_name, col_val in group_values.items():
-            filter_expr = filter_expr & (pl.col(col_name).cast(pl.Utf8) == col_val)
-        df_group = df_raw.filter(filter_expr)
-    else:
-        df_group = df_raw
+    """Fit + score one group.
 
-    # Sort by time column so raw-value lookup and feature matrix share the same ordering
-    if plan.chosen_time_column and plan.chosen_time_column in df_group.columns:
-        df_group = df_group.sort(plan.chosen_time_column)
+    Fits each enabled detector, persists the models, then hands off to
+    :func:`_finalize_group` for calibrate / combine / explain / write.
+    """
+    df_group = _slice_group_frame(df_raw, group_by, group_values, plan)
 
-    # Skip group below minimum records
     if len(df_group) < config.scoring.min_records:
         logger.info(
             "Skipping group %s: %d records < min_records=%d.",
@@ -484,22 +716,8 @@ def _run_group(
             len(df_group),
             config.scoring.min_records,
         )
-        return GroupSummary(
-            group_key=group_key,
-            group_label=group_label,
-            n_records=n_records,
-            n_anomalies=0,
-            anomaly_rate=None,
-            results_path=None,
-            status="too_few_records",
-            error=None,
-            elapsed_seconds=0.0,
-            drifted=False,
-            refit_reason=None,
-            warnings_issued=[],
-        )
+        return _group_summary(group_key, group_label, n_records, status="too_few_records")
 
-    # Apply the pre-fitted plan to the group's rows
     group_space = apply_feature_plan(df_group, plan)
     X = group_space.matrix.astype(np.float64)
     n_rows = len(X)
@@ -555,23 +773,134 @@ def _run_group(
         )
 
     if not raw_scores_map:
-        return GroupSummary(
-            group_key=group_key,
-            group_label=group_label,
-            n_records=n_records,
-            n_anomalies=0,
-            anomaly_rate=None,
-            results_path=None,
-            status="failed",
-            error="No detectors produced scores.",
-            elapsed_seconds=0.0,
-            drifted=False,
-            refit_reason=None,
-            warnings_issued=[],
+        return _group_summary(
+            group_key, group_label, n_records, status="failed", error="No detectors produced scores."
         )
 
-    # Calibrated scores: higher = more anomalous
     calibrated_map = {d: calibrators[d].transform(raw_scores_map[d]) for d in raw_scores_map}
+    return _finalize_group(
+        ws=ws,
+        run_id=run_id,
+        config=config,
+        plan=plan,
+        df_group=df_group,
+        group_space=group_space,
+        group_key=group_key,
+        group_label=group_label,
+        n_records=n_records,
+        period_label=period_label,
+        X=X,
+        raw_scores_map=raw_scores_map,
+        calibrated_map=calibrated_map,
+        natural_flags_map=natural_flags_map,
+        det_instances=det_instances,
+        drifted=False,
+    )
+
+
+def _score_forward_group(
+    ws: Workspace,
+    source_run_id: str,
+    run_id: str,
+    config: Config,
+    plan: FeaturePlan,
+    df_raw: pl.DataFrame,
+    group_by: list[str],
+    group_values: dict[str, str],
+    group_key: str,
+    group_label: str,
+    n_records: int,
+    period_label: str | None,
+    *,
+    strict: bool,
+) -> GroupSummary:
+    """Score one group against a previous run's persisted models — no fitting.
+
+    Applies *plan* (the source run's fitted FeaturePlan) to the new data, then
+    calls :func:`score_with_existing`, which unpickles each detector + calibrator
+    and calls only ``score_samples`` / ``natural_flag`` / ``transform``. Schema
+    and library-version drift are detected there.
+    """
+    df_group = _slice_group_frame(df_raw, group_by, group_values, plan)
+
+    if len(df_group) < config.scoring.min_records:
+        return _group_summary(group_key, group_label, n_records, status="too_few_records")
+
+    group_space = apply_feature_plan(df_group, plan)
+    X = group_space.matrix.astype(np.float64)
+
+    enabled_names = [d.name for d in config.detectors if d.enabled]
+    res = score_with_existing(
+        ws,
+        source_run_id,
+        group_key,
+        X,
+        group_space.feature_schema_hash,
+        enabled_names,
+        strict=strict,
+    )
+    raw_scores_map: dict[str, np.ndarray] = res["scores"]
+    if not raw_scores_map:
+        return _group_summary(
+            group_key,
+            group_label,
+            n_records,
+            status="failed",
+            error=f"No persisted models for group {group_key} in source run {source_run_id}.",
+        )
+    if res["missing"]:
+        logger.warning(
+            "Group %s: source run %s has no model for %s; scoring with the rest.",
+            group_key,
+            source_run_id,
+            res["missing"],
+        )
+
+    return _finalize_group(
+        ws=ws,
+        run_id=run_id,
+        config=config,
+        plan=plan,
+        df_group=df_group,
+        group_space=group_space,
+        group_key=group_key,
+        group_label=group_label,
+        n_records=n_records,
+        period_label=period_label,
+        X=X,
+        raw_scores_map=raw_scores_map,
+        calibrated_map=res["calibrated"],
+        natural_flags_map=res["natural_flags"],
+        det_instances=res["detectors"],
+        drifted=bool(res["drifted"]),
+    )
+
+
+def _finalize_group(
+    *,
+    ws: Workspace,
+    run_id: str,
+    config: Config,
+    plan: FeaturePlan,
+    df_group: pl.DataFrame,
+    group_space: FeatureSpace,
+    group_key: str,
+    group_label: str,
+    n_records: int,
+    period_label: str | None,
+    X: np.ndarray,
+    raw_scores_map: dict[str, np.ndarray],
+    calibrated_map: dict[str, np.ndarray],
+    natural_flags_map: dict[str, np.ndarray],
+    det_instances: dict[str, Any],
+    drifted: bool,
+) -> GroupSummary:
+    """Ensemble-combine, threshold, explain, and write one group's results.
+
+    The shared tail of both paths (fit and score-forward), so they cannot
+    diverge on how scores become a results frame.
+    """
+    n_rows = len(X)
 
     # ── Ensemble combination ───────────────────────────────────────────────
     ensemble = ScoreEnsemble(
@@ -658,19 +987,15 @@ def _run_group(
 
     results_path = write_results(ws, run_id, group_key, df_anomalies)
 
-    return GroupSummary(
-        group_key=group_key,
-        group_label=group_label,
-        n_records=n_records,
+    return _group_summary(
+        group_key,
+        group_label,
+        n_records,
+        status="success",
         n_anomalies=n_anomalies,
         anomaly_rate=anomaly_rate,
         results_path=results_path,
-        status="success",
-        error=None,
-        elapsed_seconds=0.0,
-        drifted=False,
-        refit_reason=None,
-        warnings_issued=[],
+        drifted=drifted,
     )
 
 
