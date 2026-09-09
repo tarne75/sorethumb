@@ -383,36 +383,73 @@ def test_load_model_missing_raises(tmp_path):
         load_model(ws, "norun", "nogroup", "isolation_forest")
 
 
-def test_two_detectors_in_one_group_keep_separate_calibrators(tmp_path):
-    """A group with several detectors: each detector's calibrator/manifest must
-    survive — the files are namespaced by detector, not shared."""
+def test_three_detector_group_round_trips_per_detector(tmp_path):
+    """The default 3-detector ensemble in one group: every detector's calibrator,
+    manifest and estimator must round-trip independently — the per-detector files
+    must not clobber each other, and the writes leave no ``.tmp`` debris."""
     from sorethumb.detectors.kmeans_distance import KMeansDetector
+    from sorethumb.detectors.one_class_svm import OneClassSVMDetector
 
     rng = np.random.default_rng(0)
-    X = rng.standard_normal((120, 4))
+    X = rng.standard_normal((150, 4))
 
-    det_if, _ = _fit_detector(n=120)
-    cal_if = _fitted_calibrator(det_if, X)
-
+    det_if, _ = _fit_detector(n=150)
     det_km = KMeansDetector(k=3)
     det_km.fit(X, seed=0)
-    cal_km = _fitted_calibrator(det_km, X)
+    det_oc = OneClassSVMDetector(nu=0.1)
+    det_oc.fit(X, seed=0)
+
+    saved = {
+        "isolation_forest": (det_if, _fitted_calibrator(det_if, X)),
+        "kmeans_distance": (det_km, _fitted_calibrator(det_km, X)),
+        "one_class_svm": (det_oc, _fitted_calibrator(det_oc, X)),
+    }
 
     with _open_ws(tmp_path) as ws:
-        ws.store.upsert_dataset("fp1", "uri", "sfp", "cfp", 120, 4)
+        ws.store.upsert_dataset("fp1", "uri", "sfp", "cfp", 150, 4)
         ws.store.insert_run("run1", "fp1", "{}", 0)
         gk = make_group_key({"g": "A"})
-        save_model(ws, "run1", gk, det_if, cal_if, "{}", "hash_abc", 120, 0)
-        save_model(ws, "run1", gk, det_km, cal_km, "{}", "hash_abc", 120, 0)
+        for det, cal in saved.values():
+            save_model(ws, "run1", gk, det, cal, "{}", "hash_abc", 150, 0)
 
-        _, loaded_if_cal, man_if = load_model(ws, "run1", gk, "isolation_forest")
-        _, loaded_km_cal, man_km = load_model(ws, "run1", gk, "kmeans_distance")
+        out_dir = ws.models_dir("run1", gk)
+        # No cross-detector clobbering: each namespaced trio is present, the
+        # legacy shared names are not, and no atomic-write temp files remain.
+        for name in saved:
+            for suffix in ("joblib", "calibrator.json", "manifest.json"):
+                assert (out_dir / f"{name}.{suffix}").exists()
+        assert not (out_dir / "calibrator.json").exists()
+        assert not (out_dir / "manifest.json").exists()
+        assert list(out_dir.glob(".*.tmp")) == []
+        assert list(out_dir.glob("*.tmp")) == []
 
-    # Each loaded calibrator matches the one it was saved with — not the other's.
-    np.testing.assert_array_equal(loaded_if_cal._quantile_values, cal_if._quantile_values)
-    np.testing.assert_array_equal(loaded_km_cal._quantile_values, cal_km._quantile_values)
-    assert man_if["detector_name"] == "isolation_forest"
-    assert man_km["detector_name"] == "kmeans_distance"
+        for name, (_, cal) in saved.items():
+            det_loaded, cal_loaded, manifest = load_model(ws, "run1", gk, name)
+            assert det_loaded.name == name
+            assert manifest["detector_name"] == name
+            np.testing.assert_array_equal(cal_loaded._quantile_values, cal._quantile_values)
+
+        # DB rows: one model per detector.
+        rows = ws.store.models_for_run_group("run1", gk)
+        assert {r["detector_name"] for r in rows} == set(saved)
+
+
+def test_atomic_write_text_leaves_original_on_failure(tmp_path, monkeypatch):
+    from sorethumb.store import models as m
+
+    target = tmp_path / "f.json"
+    target.write_text("original", encoding="utf-8")
+
+    def _boom(*_a):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(m.os, "replace", _boom)
+    with pytest.raises(OSError, match="disk full"):
+        m._atomic_write_text(target, "new content")
+    monkeypatch.undo()
+
+    assert target.read_text(encoding="utf-8") == "original"  # untouched
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]  # temp cleaned up
 
 
 def test_save_load_plan_roundtrip(tmp_path):
