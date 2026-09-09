@@ -117,6 +117,56 @@ def _section_table(model: type, section: str) -> str:
     return "\n".join(rows)
 
 
+def _extra_params_section() -> list[str]:
+    """Document the detector ``extra_params`` escape hatch and enumerate the
+    accepted keys per detector from the installed scikit-learn."""
+    from sorethumb.detectors import registry
+
+    lines = [
+        "## Detector `extra_params`",
+        "",
+        "A pass-through to the underlying scikit-learn estimator.",
+        "",
+        "`isolation_forest`, `lof`, `kmeans_distance` and `one_class_svm` each wrap a",
+        "scikit-learn estimator. Any constructor argument the wrapper does not expose",
+        "directly can be handed to it through a nested `extra_params` table:",
+        "",
+        "```toml",
+        "[[detectors]]",
+        'name = "isolation_forest"',
+        "params = { n_estimators = 300, extra_params = { n_jobs = 4, max_features = 0.8 } }",
+        "```",
+        "",
+        "Keys are validated when the detector is constructed, before any training runs:",
+        "",
+        "- Keys sorethumb manages itself — `random_state`, `contamination`, `novelty`,",
+        "  `n_clusters` — are rejected. Use `run.seed`, `scoring.contamination`, or the",
+        "  detector's own `k` instead.",
+        "- Keys already exposed as a wrapper argument (`n_estimators`, `nu`, `n_neighbors`,",
+        "  `n_init`, …) are rejected, so there is one unambiguous source.",
+        "- Any other key the estimator does not accept is rejected up front, with the",
+        "  estimator's full parameter list in the error message.",
+        "",
+        "`ecod` and `hbos` have no underlying estimator and reject any non-empty",
+        "`extra_params`.",
+        "",
+        "### Accepted keys",
+        "",
+        "Generated from the installed scikit-learn; the exact set may shift between",
+        "scikit-learn releases.",
+        "",
+    ]
+    for name in ("isolation_forest", "lof", "kmeans_distance", "one_class_svm"):
+        cls = registry.get(name)
+        getter = getattr(cls, "available_extra_params", None)
+        if not callable(getter):
+            continue
+        lines += [f"#### `{name}`", "", "| Key | scikit-learn default |", "| --- | --- |"]
+        lines += [f"| `{k}` | `{v!r}` |" for k, v in getter().items()]
+        lines.append("")
+    return lines
+
+
 def generate() -> str:
     """Return the full configuration.md content."""
     lines = [
@@ -159,6 +209,8 @@ def generate() -> str:
             _section_table(model, section),
             "",
         ]
+
+    lines += _extra_params_section()
 
     return "\n".join(lines)
 

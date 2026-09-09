@@ -314,19 +314,22 @@ train_row_cap = 300_000
 
 ### Tune Isolation Forest hyperparameters
 
+Curated wrapper arguments go directly under `[detectors.params]`. Determinism is
+set once with `run.seed`, not per detector.
+
 ```toml
 [source]
 uri = "/data/transactions.csv"
 
 [run]
 workdir = "./workspace"
+seed    = 42
 
 [[detectors]]
 name = "isolation_forest"
 [detectors.params]
-n_estimators  = 300
-max_samples   = 0.8
-random_state  = 42
+n_estimators = 300
+max_samples  = 0.8
 
 [[detectors]]
 name = "kmeans_distance"
@@ -335,6 +338,41 @@ name = "kmeans_distance"
 name          = "one_class_svm"
 train_row_cap = 20_000
 ```
+
+### Pass extra scikit-learn arguments to a detector
+
+`isolation_forest`, `lof`, `kmeans_distance` and `one_class_svm` wrap a
+scikit-learn estimator. Anything the wrapper does not expose directly goes in a
+nested `extra_params` table — here, parallelism for Isolation Forest and tighter
+KMeans convergence. See the [configuration reference](configuration.md#detector-extra_params) for
+the full list of accepted keys per detector.
+
+```toml
+[source]
+uri = "/data/events.parquet"
+
+[run]
+workdir = "./workspace"
+
+[[detectors]]
+name = "isolation_forest"
+[detectors.params]
+n_estimators = 300
+[detectors.params.extra_params]
+n_jobs       = -1        # use all cores
+max_features = 0.75
+
+[[detectors]]
+name = "kmeans_distance"
+[detectors.params.extra_params]
+max_iter = 500
+tol      = 1e-5
+```
+
+Invalid keys fail fast when the detector is built: `random_state` (use
+`run.seed`), `contamination` (use `scoring.contamination`), a key already
+exposed as a wrapper argument, or a typo such as `n_jbos` are all rejected
+before any training runs.
 
 ### Lightweight single-detector run
 

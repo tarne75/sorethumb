@@ -18,6 +18,7 @@ import logging
 import logging.handlers
 import os
 import re
+from collections.abc import Callable
 from datetime import UTC
 from pathlib import Path
 from typing import Annotated, Any
@@ -335,6 +336,71 @@ def _redact_config(config: Config) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _render_toml_scalar(value: object) -> str | None:
+    """Render a Python scalar as a TOML literal, or None if it has no literal form."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return f'"{value}"'
+    if isinstance(value, (int, float)):
+        return str(value)
+    return None
+
+
+def _detector_params_block(det_name: str, description: str) -> list[str]:
+    """Render the detector's `params` line plus a commented `extra_params` catalogue."""
+    import textwrap  # noqa: PLC0415
+
+    from sorethumb.detectors import registry  # noqa: PLC0415
+
+    lines: list[str] = []
+    desc = description.strip()
+    if desc:
+        lines.append(textwrap.fill(desc, 76, initial_indent="# ", subsequent_indent="# "))
+    lines.append("params = {}")
+
+    getter = getattr(registry.get(det_name), "available_extra_params", None)
+    extras: dict[str, Any] = getter() if callable(getter) else {}
+    if not extras:
+        return lines
+
+    first_key = next(iter(extras))
+    lines += [
+        "#",
+        "# extra_params: forwarded verbatim to this detector's underlying scikit-learn",
+        f"# estimator. Nest inside params, e.g. params = {{ extra_params = {{ {first_key} = ... }} }}",
+        "# Every accepted key is listed below (commented) with its scikit-learn default:",
+    ]
+    for key, default in extras.items():
+        rendered = _render_toml_scalar(default)
+        lines.append(
+            f"#   {key} = {rendered}" if rendered is not None else f"#   {key} =   # default: {default!r}"
+        )
+    return lines
+
+
+def _starter_detectors_section(field_block: Callable[..., list[str]]) -> list[str]:
+    """Render the `[[detectors]]` blocks for the three default detectors."""
+    from sorethumb.config import DetectorConfig  # noqa: PLC0415
+
+    out = ["# Detectors run as an ensemble; add or remove [[detectors]] blocks freely."]
+    for det in (
+        DetectorConfig(name="isolation_forest", train_row_cap=250_000),
+        DetectorConfig(name="kmeans_distance", train_row_cap=200_000),
+        DetectorConfig(name="one_class_svm", train_row_cap=20_000),
+    ):
+        out += ["", "[[detectors]]"]
+        for i, (fname, fi) in enumerate(DetectorConfig.model_fields.items()):
+            if i:
+                out.append("")
+            if fname == "params":
+                out.extend(_detector_params_block(det.name, fi.description or ""))
+            else:
+                out.extend(field_block(fname, fi, override=getattr(det, fname)))
+    out.append("")
+    return out
+
+
 def _generate_starter_toml() -> str:
     """Build a complete sorethumb.toml from the live Pydantic models.
 
@@ -348,7 +414,6 @@ def _generate_starter_toml() -> str:
 
     from sorethumb.config import (  # noqa: PLC0415
         ColumnsConfig,
-        DetectorConfig,
         ExplainConfig,
         FeaturesConfig,
         HistoryConfig,
@@ -439,21 +504,7 @@ def _generate_starter_toml() -> str:
     ]:
         out.extend(_section(header, cls))
         out.append("")
-    out.append("# Detectors run as an ensemble; add or remove [[detectors]] blocks freely.")
-    for det in [
-        DetectorConfig(name="isolation_forest", train_row_cap=250_000),
-        DetectorConfig(name="kmeans_distance", train_row_cap=200_000),
-        DetectorConfig(name="one_class_svm", train_row_cap=20_000),
-    ]:
-        out.append("")
-        out.append("[[detectors]]")
-        first = True
-        for fname, fi in DetectorConfig.model_fields.items():
-            if not first:
-                out.append("")
-            first = False
-            out.extend(_field_block(fname, fi, override=getattr(det, fname)))
-    out.append("")
+    out.extend(_starter_detectors_section(_field_block))
     return "\n".join(out)
 
 

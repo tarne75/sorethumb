@@ -72,6 +72,7 @@ train_row_cap = 250_000   # optional: lower if memory is tight
 
 [detectors.params]
 n_estimators = 200        # more trees = more stable, slower
+# extra_params = { n_jobs = -1 }   # any other sklearn IsolationForest argument
 ```
 
 ---
@@ -111,6 +112,8 @@ and flags the ones that are far from any group's centre.
 [[detectors]]
 name = "kmeans_distance"
 train_row_cap = 200_000
+# [detectors.params]
+# extra_params = { max_iter = 500, tol = 1e-5 }   # any other sklearn KMeans argument
 ```
 
 ---
@@ -150,6 +153,7 @@ train_row_cap = 25_000   # raising this makes training much slower
 
 [detectors.params]
 nu = "auto"   # fraction of training data allowed to be anomalous; "auto" uses 0.1
+# extra_params = { tol = 1e-4, shrinking = false }   # any other sklearn OneClassSVM argument
 ```
 
 ---
@@ -238,6 +242,7 @@ train_row_cap = 50_000
 
 [detectors.params]
 n_neighbors = 20   # how many neighbours to consult; higher = smoother, slower
+# extra_params = { n_jobs = -1, leaf_size = 40 }   # any other sklearn LocalOutlierFactor argument
 ```
 
 ---
@@ -291,6 +296,13 @@ n_bins = "auto"   # "auto" uses Freedman-Diaconis bin selection per column
 | `ecod` | — | 500k | Marginal (single-column) outliers; many features | Combination anomalies | Heuristic |
 | `lof` | — | 50k | Local density anomalies; mixed-density clusters | Large datasets; high dimensionality | Heuristic |
 | `hbos` | — | 500k | Speed; sanity baseline | Combination anomalies; least sensitive | Heuristic |
+
+**Advanced tuning.** `isolation_forest`, `kmeans_distance`, `one_class_svm` and
+`lof` wrap a scikit-learn estimator; pass any of its other constructor arguments
+through a nested `extra_params` table (`params = { extra_params = { n_jobs = -1 } }`).
+The [configuration reference](configuration.md#detector-extra_params) lists every
+accepted key per detector. `sorethumb init` writes them all, commented out, into
+the starter config.
 
 ---
 

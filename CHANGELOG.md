@@ -18,7 +18,11 @@ Versioning: [Semantic Versioning](https://semver.org/).
   `novelty`, `n_clusters`) and keys already exposed as wrapper arguments are
   rejected with `ConfigError`. `get_params()` now includes an `extra_params`
   entry on every detector. `ecod`/`hbos` have no underlying estimator and reject
-  any non-empty `extra_params`.
+  any non-empty `extra_params`. `sorethumb init` writes every accepted key
+  (with its scikit-learn default) into the starter config, commented out, and
+  the [configuration reference](docs/configuration.md#detector-extra_params)
+  lists them per detector. Each wrapper class exposes
+  `available_extra_params()` for programmatic discovery.
 
 ### Security
 

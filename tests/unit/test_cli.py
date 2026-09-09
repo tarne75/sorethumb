@@ -151,6 +151,21 @@ def test_init_does_not_overwrite_existing(tmp_path: Path):
     assert (tmp_path / "sorethumb.toml").read_text(encoding="utf-8") == original
 
 
+def test_init_toml_lists_extra_params_commented(tmp_path: Path):
+    """The starter file lists every sklearn extra_params key, commented out."""
+    from sorethumb.detectors.isolation_forest import IsolationForestDetector
+
+    runner.invoke(app, ["init", str(tmp_path)])
+    text = (tmp_path / "sorethumb.toml").read_text(encoding="utf-8")
+
+    assert "# extra_params:" in text
+    for key in IsolationForestDetector.available_extra_params():
+        assert f"#   {key} " in text, f"{key} not documented in starter toml"
+    # Still valid TOML — the extra_params keys are comments, params stays empty.
+    raw = tomllib.loads(text)
+    assert all(d.get("params", {}) == {} for d in raw["detectors"])
+
+
 # ---------------------------------------------------------------------------
 # sorethumb config check / schema
 # ---------------------------------------------------------------------------

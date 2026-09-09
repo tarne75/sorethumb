@@ -142,3 +142,79 @@ so trivial changes do not invalidate cached artefacts.
 | `report.formats` | list[str] | ['html', 'csv'] | Report formats to generate. Supported: html, csv, json. |
 | `report.open_after` | bool | false | Open the HTML report in the default browser after generation. |
 | `report.rolling_windows` | list[int] | [1, 7, 14, 28] | Rolling window sizes (in periods) shown in trend charts. |
+
+## Detector `extra_params`
+
+A pass-through to the underlying scikit-learn estimator.
+
+`isolation_forest`, `lof`, `kmeans_distance` and `one_class_svm` each wrap a
+scikit-learn estimator. Any constructor argument the wrapper does not expose
+directly can be handed to it through a nested `extra_params` table:
+
+```toml
+[[detectors]]
+name = "isolation_forest"
+params = { n_estimators = 300, extra_params = { n_jobs = 4, max_features = 0.8 } }
+```
+
+Keys are validated when the detector is constructed, before any training runs:
+
+- Keys sorethumb manages itself — `random_state`, `contamination`, `novelty`,
+  `n_clusters` — are rejected. Use `run.seed`, `scoring.contamination`, or the
+  detector's own `k` instead.
+- Keys already exposed as a wrapper argument (`n_estimators`, `nu`, `n_neighbors`,
+  `n_init`, …) are rejected, so there is one unambiguous source.
+- Any other key the estimator does not accept is rejected up front, with the
+  estimator's full parameter list in the error message.
+
+`ecod` and `hbos` have no underlying estimator and reject any non-empty
+`extra_params`.
+
+### Accepted keys
+
+Generated from the installed scikit-learn; the exact set may shift between
+scikit-learn releases.
+
+#### `isolation_forest`
+
+| Key | scikit-learn default |
+| --- | --- |
+| `bootstrap` | `False` |
+| `max_features` | `1.0` |
+| `n_jobs` | `None` |
+| `verbose` | `0` |
+| `warm_start` | `False` |
+
+#### `lof`
+
+| Key | scikit-learn default |
+| --- | --- |
+| `algorithm` | `'auto'` |
+| `leaf_size` | `30` |
+| `metric` | `'minkowski'` |
+| `metric_params` | `None` |
+| `n_jobs` | `None` |
+| `p` | `2` |
+
+#### `kmeans_distance`
+
+| Key | scikit-learn default |
+| --- | --- |
+| `algorithm` | `'lloyd'` |
+| `copy_x` | `True` |
+| `init` | `'k-means++'` |
+| `max_iter` | `300` |
+| `tol` | `0.0001` |
+| `verbose` | `0` |
+
+#### `one_class_svm`
+
+| Key | scikit-learn default |
+| --- | --- |
+| `cache_size` | `200` |
+| `coef0` | `0.0` |
+| `degree` | `3` |
+| `max_iter` | `-1` |
+| `shrinking` | `True` |
+| `tol` | `0.001` |
+| `verbose` | `False` |

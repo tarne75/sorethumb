@@ -18,7 +18,7 @@ from typing import Any, ClassVar
 
 import numpy as np
 
-from sorethumb.detectors._hyperparams import validate_extra_params
+from sorethumb.detectors._hyperparams import estimator_extra_param_defaults, validate_extra_params
 
 _CURATED = frozenset({"n_estimators", "max_samples"})
 
@@ -48,6 +48,13 @@ class IsolationForestDetector:
         self._max_samples = max_samples
         self._extra = validate_extra_params(self.name, IsolationForest, extra_params, curated=_CURATED)
         self._model: Any = None
+
+    @classmethod
+    def available_extra_params(cls) -> dict[str, Any]:
+        """Return {name: sklearn-default} for keys accepted via ``extra_params``."""
+        from sklearn.ensemble import IsolationForest  # noqa: PLC0415
+
+        return estimator_extra_param_defaults(IsolationForest, _CURATED)
 
     def fit(self, X: np.ndarray, *, seed: int) -> None:
         """Fit the isolation forest on X."""
