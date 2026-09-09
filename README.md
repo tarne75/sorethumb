@@ -14,8 +14,19 @@
 </div>
 
 `sorethumb` takes a dataset it knows nothing about, works out how to treat every
-column, fits an ensemble of detectors, ranks the records that stand out, and explains
-*why* each one stands out in terms of the original columns.
+column, fits an ensemble of detectors, ranks the records that stand out, and
+explains *why* each one stands out in terms of the original columns — so the
+result is actionable without a background in machine learning.
+
+It is built to run on a single machine — a laptop, a CI runner, one VM — for
+datasets from roughly ten thousand to a few million rows. At that size a
+distributed engine adds cost, operational surface, and non-determinism without
+buying meaningful speed, so there is no Spark, Dask, or cloud-service dependency
+anywhere. The detectors whose training cost grows faster than linearly (LOF at
+roughly `O(n·log²n)`, one-class SVM at `O(n²)`) are each fitted on a bounded row
+sample rather than the whole dataset; every row is still scored. The
+[Scale guide](#scale-guide) and [Honest limitations](#honest-limitations) spell
+out where these choices bite.
 
 > **Status: pre-release (0.1.0).** The API and on-disk formats may still change
 > between minor versions, and the package is not yet published to PyPI — install
