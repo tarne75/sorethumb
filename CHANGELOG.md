@@ -29,6 +29,12 @@ Versioning: [Semantic Versioning](https://semver.org/).
   accuracy-regression signal — the scheduled `benchmark` CI job previously
   selected zero tests — and locks in the `kmeans_distance` CBLOF fix.
 
+### Docs
+
+- Regenerated the README benchmark table. `kmeans_distance` on the synthetic
+  datasets now reads ROC-AUC 1.00 (was 0.08 / 0.0002) — the table still carried
+  pre-CBLOF-fix numbers. Other detectors' accuracy metrics are unchanged.
+
 ### Security
 
 - CSV report cells and column names are now neutralised against spreadsheet
