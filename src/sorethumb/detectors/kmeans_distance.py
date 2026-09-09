@@ -33,10 +33,13 @@ from typing import Any, ClassVar
 
 import numpy as np
 
+from sorethumb.detectors._hyperparams import validate_extra_params
+
 logger = logging.getLogger(__name__)
 
 _SILHOUETTE_SAMPLE = 20_000
 _DEFAULT_LARGE_COVERAGE = 0.90
+_CURATED = frozenset({"k", "k_min", "k_max", "n_init", "large_cluster_coverage"})
 
 
 class KMeansDetector:
@@ -58,6 +61,7 @@ class KMeansDetector:
         k_max: int = 8,
         n_init: int = 10,
         large_cluster_coverage: float = _DEFAULT_LARGE_COVERAGE,
+        extra_params: dict[str, Any] | None = None,
     ) -> None:
         """Initialise with optional fixed k or auto-selection bounds.
 
@@ -81,13 +85,21 @@ class KMeansDetector:
             Default 0.90 means the largest clusters covering 90% of the data
             are used; small minority clusters (including anomaly sub-groups) are
             excluded from the reference set.
+        extra_params:
+            Additional kwargs forwarded verbatim to sklearn's KMeans constructor
+            (tol, max_iter, algorithm, init, …). Validated now; ``n_clusters``
+            and ``random_state`` are reserved and ``n_init`` must be set via the
+            wrapper argument.
 
         """
+        from sklearn.cluster import KMeans  # noqa: PLC0415
+
         self._k_fixed = k
         self._k_min = k_min
         self._k_max = k_max
         self._n_init = n_init
         self._large_coverage = large_cluster_coverage
+        self._extra = validate_extra_params(self.name, KMeans, extra_params, curated=_CURATED)
         self._model: Any = None
         self._chosen_k: int | None = None
         self._large_centroids: np.ndarray | None = None  # subset of centroids used for scoring
@@ -101,7 +113,7 @@ class KMeansDetector:
         k = self._k_fixed if self._k_fixed is not None else _select_k(X, self._k_min, self._k_max, seed)
         self._chosen_k = k
         logger.info("KMeans: fitting k=%d on %d rows x %d features.", k, X.shape[0], X.shape[1])
-        self._model = KMeans(n_clusters=k, n_init=self._n_init, random_state=seed)
+        self._model = KMeans(n_clusters=k, n_init=self._n_init, random_state=seed, **self._extra)
         self._model.fit(X)
 
         # Identify large clusters (CBLOF: clusters covering >= large_coverage of data)
@@ -172,6 +184,7 @@ class KMeansDetector:
             "n_init": self._n_init,
             "large_cluster_coverage": self._large_coverage,
             "n_large_clusters": n_large,
+            "extra_params": dict(self._extra),
         }
 
 

@@ -26,7 +26,11 @@ from typing import Any, ClassVar
 
 import numpy as np
 
+from sorethumb.detectors._hyperparams import validate_extra_params
+
 logger = logging.getLogger(__name__)
+
+_CURATED = frozenset({"n_neighbors"})
 
 
 class LOFDetector:
@@ -36,9 +40,18 @@ class LOFDetector:
     supports_tree_shap: ClassVar[bool] = False
     default_train_row_cap: ClassVar[int] = 50_000
 
-    def __init__(self, n_neighbors: int = 20) -> None:
-        """Initialise with the number of neighbours for local density estimation."""
+    def __init__(self, n_neighbors: int = 20, extra_params: dict[str, Any] | None = None) -> None:
+        """Initialise with the number of neighbours for local density estimation.
+
+        extra_params: additional kwargs forwarded verbatim to sklearn's
+        LocalOutlierFactor constructor (n_jobs, leaf_size, metric, p, …).
+        Validated now; ``novelty`` is reserved (LOF is always fitted in novelty
+        mode) and ``n_neighbors`` must be set via the wrapper argument.
+        """
+        from sklearn.neighbors import LocalOutlierFactor  # noqa: PLC0415
+
         self._n_neighbors = n_neighbors
+        self._extra = validate_extra_params(self.name, LocalOutlierFactor, extra_params, curated=_CURATED)
         self._model: Any = None
 
     def fit(self, X: np.ndarray, *, seed: int) -> None:  # noqa: ARG002
@@ -60,7 +73,7 @@ class LOFDetector:
             n_rows,
             X.shape[1],
         )
-        self._model = LocalOutlierFactor(n_neighbors=n_neighbors, novelty=True)
+        self._model = LocalOutlierFactor(n_neighbors=n_neighbors, novelty=True, **self._extra)
         self._model.fit(X)
 
     def score_samples(self, X: np.ndarray) -> np.ndarray:
@@ -73,4 +86,4 @@ class LOFDetector:
 
     def get_params(self) -> dict[str, Any]:
         """Return serialisable hyper-parameters."""
-        return {"n_neighbors": self._n_neighbors}
+        return {"n_neighbors": self._n_neighbors, "extra_params": dict(self._extra)}

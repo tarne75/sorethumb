@@ -6,6 +6,20 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Detector `extra_params`: an escape hatch to pass arbitrary constructor kwargs
+  straight to the underlying sklearn estimator (`n_jobs`, `max_features`, KMeans
+  `tol`/`max_iter`/`algorithm`, LOF `leaf_size`/`metric`/`p`, OCSVM `tol`/
+  `shrinking`, …). Set it in config as
+  `params = { extra_params = { n_jobs = 4 } }`. Keys are validated at detector
+  construction against the estimator's real parameter list (a typo fails there,
+  not deep in sklearn); reserved keys (`random_state`, `contamination`,
+  `novelty`, `n_clusters`) and keys already exposed as wrapper arguments are
+  rejected with `ConfigError`. `get_params()` now includes an `extra_params`
+  entry on every detector. `ecod`/`hbos` have no underlying estimator and reject
+  any non-empty `extra_params`.
+
 ### Security
 
 - CSV report cells and column names are now neutralised against spreadsheet

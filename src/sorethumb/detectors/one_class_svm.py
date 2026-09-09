@@ -31,12 +31,14 @@ from typing import Any, ClassVar
 
 import numpy as np
 
+from sorethumb.detectors._hyperparams import validate_extra_params
 from sorethumb.errors import SlowStageWarning
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_NU = 0.1
 _SLOW_THRESHOLD_SECONDS = 60.0
+_CURATED = frozenset({"nu", "kernel", "gamma"})
 
 
 class OneClassSVMDetector:
@@ -52,12 +54,22 @@ class OneClassSVMDetector:
         kernel: str = "rbf",
         gamma: str | float = "scale",
         slow_stage_seconds: float = _SLOW_THRESHOLD_SECONDS,
+        extra_params: dict[str, Any] | None = None,
     ) -> None:
-        """Initialise with OneClassSVM hyper-parameters. nu='auto' uses 0.1."""
+        """Initialise with OneClassSVM hyper-parameters. nu='auto' uses 0.1.
+
+        extra_params: additional kwargs forwarded verbatim to sklearn's
+        OneClassSVM constructor (tol, shrinking, cache_size, max_iter, coef0,
+        degree, …). Validated now; nu/kernel/gamma must be set via the wrapper
+        arguments.
+        """
+        from sklearn.svm import OneClassSVM  # noqa: PLC0415
+
         self._nu = nu
         self._kernel = kernel
         self._gamma = gamma
         self._slow_stage_seconds = slow_stage_seconds
+        self._extra = validate_extra_params(self.name, OneClassSVM, extra_params, curated=_CURATED)
         self._resolved_nu: float | None = None
         self._model: Any = None
 
@@ -74,7 +86,7 @@ class OneClassSVMDetector:
             X.shape[0],
             X.shape[1],
         )
-        self._model = OneClassSVM(nu=nu, kernel=self._kernel, gamma=self._gamma)
+        self._model = OneClassSVM(nu=nu, kernel=self._kernel, gamma=self._gamma, **self._extra)
         t0 = time.monotonic()
         self._model.fit(X)
         elapsed = time.monotonic() - t0
@@ -103,4 +115,5 @@ class OneClassSVMDetector:
             "resolved_nu": self._resolved_nu,
             "kernel": self._kernel,
             "gamma": self._gamma,
+            "extra_params": dict(self._extra),
         }

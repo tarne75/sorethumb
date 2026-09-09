@@ -26,6 +26,8 @@ from typing import Any, ClassVar
 
 import numpy as np
 
+from sorethumb.detectors._hyperparams import validate_extra_params
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,8 +52,13 @@ class HBOSDetector:
     supports_tree_shap: ClassVar[bool] = False
     default_train_row_cap: ClassVar[int] = 500_000
 
-    def __init__(self, n_bins: int | str = "auto") -> None:
-        """Initialise with a fixed bin count or 'auto' for Freedman-Diaconis selection."""
+    def __init__(self, n_bins: int | str = "auto", extra_params: dict[str, Any] | None = None) -> None:
+        """Initialise with a fixed bin count or 'auto' for Freedman-Diaconis selection.
+
+        extra_params is accepted for API uniformity but must be empty: HBOS has no
+        underlying estimator to forward kwargs to.
+        """
+        validate_extra_params(self.name, None, extra_params, curated=frozenset())
         self._n_bins = n_bins
         self._edges: list[np.ndarray] = []
         self._log_densities: list[np.ndarray] = []
@@ -105,4 +112,4 @@ class HBOSDetector:
 
     def get_params(self) -> dict[str, Any]:
         """Return serialisable hyper-parameters."""
-        return {"n_bins": self._n_bins}
+        return {"n_bins": self._n_bins, "extra_params": {}}

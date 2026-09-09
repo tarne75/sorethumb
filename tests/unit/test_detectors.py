@@ -13,7 +13,7 @@ from sorethumb.detectors.isolation_forest import IsolationForestDetector
 from sorethumb.detectors.kmeans_distance import KMeansDetector, _elbow_index
 from sorethumb.detectors.lof import LOFDetector
 from sorethumb.detectors.one_class_svm import OneClassSVMDetector
-from sorethumb.errors import DetectorError, SlowStageWarning
+from sorethumb.errors import ConfigError, DetectorError, SlowStageWarning
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -482,7 +482,7 @@ def test_ecod_natural_flag_flags_outliers():
 
 def test_ecod_get_params():
     det = ECODDetector()
-    assert det.get_params() == {}
+    assert det.get_params() == {"extra_params": {}}
 
 
 def test_ecod_class_vars():
@@ -558,7 +558,7 @@ def test_lof_natural_flag_flags_outliers():
 
 def test_lof_get_params():
     det = LOFDetector(n_neighbors=15)
-    assert det.get_params() == {"n_neighbors": 15}
+    assert det.get_params() == {"n_neighbors": 15, "extra_params": {}}
 
 
 def test_lof_class_vars():
@@ -631,12 +631,12 @@ def test_hbos_fixed_bins():
     det.fit(X, seed=0)
     scores = det.score_samples(X)
     assert scores.shape == (200,)
-    assert det.get_params() == {"n_bins": 20}
+    assert det.get_params() == {"n_bins": 20, "extra_params": {}}
 
 
 def test_hbos_get_params_auto():
     det = HBOSDetector()
-    assert det.get_params() == {"n_bins": "auto"}
+    assert det.get_params() == {"n_bins": "auto", "extra_params": {}}
 
 
 def test_hbos_class_vars():
@@ -688,3 +688,111 @@ def test_new_detectors_pass_protocol():
     check_protocol(ECODDetector)
     check_protocol(LOFDetector)
     check_protocol(HBOSDetector)
+
+
+# ---------------------------------------------------------------------------
+# extra_params passthrough
+# ---------------------------------------------------------------------------
+
+
+def test_extra_params_forwarded_to_isolation_forest():
+    det = IsolationForestDetector(n_estimators=10, extra_params={"n_jobs": 2, "max_features": 0.5})
+    det.fit(_normal_data(n=80), seed=0)
+    sk = det._model.get_params()
+    assert sk["n_jobs"] == 2
+    assert sk["max_features"] == 0.5
+
+
+def test_extra_params_forwarded_to_kmeans():
+    det = KMeansDetector(k=3, extra_params={"max_iter": 7, "tol": 1e-2})
+    det.fit(_normal_data(n=120), seed=0)
+    sk = det._model.get_params()
+    assert sk["max_iter"] == 7
+    assert sk["tol"] == 1e-2
+
+
+def test_extra_params_forwarded_to_ocsvm():
+    det = OneClassSVMDetector(extra_params={"tol": 1e-2, "shrinking": False})
+    det.fit(_normal_data(n=100), seed=0)
+    sk = det._model.get_params()
+    assert sk["tol"] == 1e-2
+    assert sk["shrinking"] is False
+
+
+def test_extra_params_forwarded_to_lof():
+    det = LOFDetector(n_neighbors=10, extra_params={"leaf_size": 17, "p": 1})
+    det.fit(_normal_data(n=80), seed=0)
+    sk = det._model.get_params()
+    assert sk["leaf_size"] == 17
+    assert sk["p"] == 1
+
+
+def test_extra_params_surfaced_in_get_params_and_sorted():
+    det = IsolationForestDetector(extra_params={"n_jobs": 2, "bootstrap": True})
+    ep = det.get_params()["extra_params"]
+    assert ep == {"bootstrap": True, "n_jobs": 2}
+    assert list(ep) == ["bootstrap", "n_jobs"]  # key-sorted for stable hashing
+
+
+def test_extra_params_none_and_empty_are_empty_dict():
+    assert IsolationForestDetector().get_params()["extra_params"] == {}
+    assert IsolationForestDetector(extra_params={}).get_params()["extra_params"] == {}
+
+
+def test_extra_params_reserved_random_state_rejected():
+    with pytest.raises(ConfigError, match="random_state"):
+        IsolationForestDetector(extra_params={"random_state": 5})
+
+
+def test_extra_params_reserved_contamination_rejected():
+    with pytest.raises(ConfigError, match="contamination"):
+        IsolationForestDetector(extra_params={"contamination": 0.1})
+
+
+def test_extra_params_reserved_novelty_rejected_for_lof():
+    with pytest.raises(ConfigError, match="novelty"):
+        LOFDetector(extra_params={"novelty": False})
+
+
+def test_extra_params_reserved_n_clusters_rejected_for_kmeans():
+    with pytest.raises(ConfigError, match="n_clusters"):
+        KMeansDetector(extra_params={"n_clusters": 3})
+
+
+def test_extra_params_curated_collision_rejected():
+    with pytest.raises(ConfigError, match="already wrapper arguments"):
+        IsolationForestDetector(extra_params={"n_estimators": 500})
+    with pytest.raises(ConfigError, match="already wrapper arguments"):
+        OneClassSVMDetector(extra_params={"nu": 0.02})
+
+
+def test_extra_params_unknown_key_rejected_early():
+    with pytest.raises(ConfigError, match="no hyper-parameter"):
+        IsolationForestDetector(extra_params={"n_jbos": 4})  # typo, caught at construction
+
+
+def test_extra_params_non_dict_rejected():
+    with pytest.raises(ConfigError, match="mapping"):
+        IsolationForestDetector(extra_params=[("n_jobs", 2)])  # type: ignore[arg-type]
+
+
+def test_extra_params_non_string_key_rejected():
+    with pytest.raises(ConfigError, match="key must be a string"):
+        IsolationForestDetector(extra_params={1: 2})  # type: ignore[dict-item]
+
+
+def test_ecod_rejects_non_empty_extra_params():
+    with pytest.raises(ConfigError, match="no underlying estimator"):
+        ECODDetector(extra_params={"anything": 1})
+    assert ECODDetector(extra_params={}).get_params()["extra_params"] == {}
+
+
+def test_hbos_rejects_non_empty_extra_params():
+    with pytest.raises(ConfigError, match="no underlying estimator"):
+        HBOSDetector(extra_params={"anything": 1})
+
+
+def test_extra_params_via_registry_kwargs():
+    det = registry["isolation_forest"](n_estimators=20, extra_params={"n_jobs": 1})
+    det.fit(_normal_data(n=60), seed=0)
+    assert det._model.get_params()["n_jobs"] == 1
