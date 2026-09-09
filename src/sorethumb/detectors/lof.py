@@ -26,7 +26,7 @@ from typing import Any, ClassVar
 
 import numpy as np
 
-from sorethumb.detectors._hyperparams import validate_extra_params
+from sorethumb.detectors._hyperparams import estimator_extra_param_defaults, validate_extra_params
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,13 @@ class LOFDetector:
         self._n_neighbors = n_neighbors
         self._extra = validate_extra_params(self.name, LocalOutlierFactor, extra_params, curated=_CURATED)
         self._model: Any = None
+
+    @classmethod
+    def available_extra_params(cls) -> dict[str, Any]:
+        """Return {name: sklearn-default} for keys accepted via ``extra_params``."""
+        from sklearn.neighbors import LocalOutlierFactor  # noqa: PLC0415
+
+        return estimator_extra_param_defaults(LocalOutlierFactor, _CURATED)
 
     def fit(self, X: np.ndarray, *, seed: int) -> None:  # noqa: ARG002
         """Fit LOF on X. seed is accepted for API uniformity but unused."""

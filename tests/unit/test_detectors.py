@@ -796,3 +796,41 @@ def test_extra_params_via_registry_kwargs():
     det = registry["isolation_forest"](n_estimators=20, extra_params={"n_jobs": 1})
     det.fit(_normal_data(n=60), seed=0)
     assert det._model.get_params()["n_jobs"] == 1
+
+
+# ---------------------------------------------------------------------------
+# available_extra_params() — enumeration for docs / `sorethumb init`
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("cls", "curated"),
+    [
+        (IsolationForestDetector, {"n_estimators", "max_samples"}),
+        (LOFDetector, {"n_neighbors"}),
+        (KMeansDetector, {"k", "k_min", "k_max", "n_init", "large_cluster_coverage"}),
+        (OneClassSVMDetector, {"nu", "kernel", "gamma"}),
+    ],
+)
+def test_available_extra_params_excludes_managed_and_curated(cls, curated):
+    keys = set(cls.available_extra_params())
+    assert keys, f"{cls.name} should expose at least one extra_params key"
+    # Nothing sorethumb manages, and nothing already a wrapper argument.
+    assert not (keys & {"random_state", "seed", "contamination", "novelty", "n_clusters"})
+    assert not (keys & curated)
+
+
+@pytest.mark.parametrize(
+    "cls",
+    [IsolationForestDetector, LOFDetector, KMeansDetector, OneClassSVMDetector],
+)
+def test_available_extra_params_all_accept_when_passed_back(cls):
+    """Every advertised key must actually be accepted as an extra_param."""
+    advertised = cls.available_extra_params()
+    # Passing the whole set (at its sklearn default) must not raise.
+    cls(extra_params=dict(advertised))
+
+
+def test_available_extra_params_is_sorted():
+    keys = list(IsolationForestDetector.available_extra_params())
+    assert keys == sorted(keys)

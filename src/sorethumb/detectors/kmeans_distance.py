@@ -33,7 +33,7 @@ from typing import Any, ClassVar
 
 import numpy as np
 
-from sorethumb.detectors._hyperparams import validate_extra_params
+from sorethumb.detectors._hyperparams import estimator_extra_param_defaults, validate_extra_params
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +105,13 @@ class KMeansDetector:
         self._large_centroids: np.ndarray | None = None  # subset of centroids used for scoring
         self.last_labels: np.ndarray | None = None
         self.last_contributions: np.ndarray | None = None
+
+    @classmethod
+    def available_extra_params(cls) -> dict[str, Any]:
+        """Return {name: sklearn-default} for keys accepted via ``extra_params``."""
+        from sklearn.cluster import KMeans  # noqa: PLC0415
+
+        return estimator_extra_param_defaults(KMeans, _CURATED)
 
     def fit(self, X: np.ndarray, *, seed: int) -> None:
         """Select k (if not fixed), fit KMeans, and identify large clusters."""

@@ -55,6 +55,30 @@ def _estimator_param_names(estimator_cls: type) -> list[str]:
     return list(inspect.signature(estimator_cls).parameters)
 
 
+def estimator_extra_param_defaults(
+    estimator_cls: type,
+    curated: frozenset[str],
+) -> dict[str, Any]:
+    """Return ``{name: sklearn-default}`` for every key a wrapper accepts via ``extra_params``.
+
+    That is the estimator's constructor parameters minus the globally-managed
+    keys (:data:`_MANAGED_GLOBALLY`) and the wrapper's own ``curated`` arguments.
+    Used to document the escape hatch in ``sorethumb init`` and the config
+    reference, so the list can never drift from the installed scikit-learn.
+    """
+    defaults: dict[str, Any]
+    try:
+        defaults = dict(estimator_cls().get_params(deep=False))
+    except Exception:  # noqa: BLE001 — not a get_params estimator; read signature defaults
+        params = inspect.signature(estimator_cls).parameters
+        defaults = {
+            name: (p.default if p.default is not inspect.Parameter.empty else None)
+            for name, p in params.items()
+        }
+    excluded = set(_MANAGED_GLOBALLY) | set(curated)
+    return {k: defaults[k] for k in sorted(defaults) if k not in excluded}
+
+
 def validate_extra_params(
     detector_name: str,
     estimator_cls: type | None,
