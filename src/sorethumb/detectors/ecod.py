@@ -25,6 +25,8 @@ from typing import Any, ClassVar
 
 import numpy as np
 
+from sorethumb.detectors._hyperparams import validate_extra_params
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,8 +37,13 @@ class ECODDetector:
     supports_tree_shap: ClassVar[bool] = False
     default_train_row_cap: ClassVar[int] = 500_000
 
-    def __init__(self) -> None:
-        """Initialise ECOD — no hyper-parameters required."""
+    def __init__(self, extra_params: dict[str, Any] | None = None) -> None:
+        """Initialise ECOD — no hyper-parameters required.
+
+        extra_params is accepted for API uniformity but must be empty: ECOD has
+        no underlying estimator to forward kwargs to.
+        """
+        validate_extra_params(self.name, None, extra_params, curated=frozenset())
         self._sorted_cols: list[np.ndarray] = []
         self._n_train: int = 0
         self._score_threshold: float = 0.0  # 95th-pct ECOD outlier score on training data
@@ -79,4 +86,4 @@ class ECODDetector:
 
     def get_params(self) -> dict[str, Any]:
         """Return serialisable hyper-parameters (none for ECOD)."""
-        return {}
+        return {"extra_params": {}}

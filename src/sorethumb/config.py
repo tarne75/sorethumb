@@ -262,7 +262,14 @@ class DetectorConfig(BaseModel):
     enabled: bool = Field(True, description="Skip this detector entirely when False.")
     params: dict[str, object] = Field(
         default_factory=dict,
-        description="Detector-specific hyperparameters, forwarded verbatim to the constructor.",
+        description=(
+            "Detector-specific hyperparameters, forwarded verbatim to the wrapper "
+            "constructor. Nest an 'extra_params' table to pass arbitrary kwargs "
+            "straight to the underlying sklearn estimator, e.g. "
+            "params = { n_estimators = 300, extra_params = { n_jobs = 4 } }. "
+            "Keys are validated at construction; reserved keys (random_state, "
+            "contamination) and keys already exposed as wrapper arguments are rejected."
+        ),
     )
     train_row_cap: int | None = Field(
         None,
