@@ -439,3 +439,40 @@ def test_period_overrides_produce_distinct_runs(tmp_path: Path) -> None:
     assert r15.run_id != r16.run_id
     assert r15.n_anomalies > 0
     assert r16.n_anomalies > 0
+
+
+def test_period_run_records_history_ledger(tmp_path: Path) -> None:
+    """run_detection writes the period row + per-group totals so backfill is idempotent."""
+    from sorethumb.history.ledger import iter_pending_periods
+    from sorethumb.store.workspace import Workspace
+
+    parquet = tmp_path / "two_periods.parquet"
+    per_day = 100
+    _two_period_parquet(parquet, per_day=per_day)
+    workdir = tmp_path / "ws"
+    cfg = _period_config(parquet, workdir)
+
+    result = run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+    dataset_fp = result.dataset_fp
+
+    with Workspace.open(workdir) as ws:
+        # period row carries the [from, to) window for the label
+        prow = ws.store._conn.execute(
+            "SELECT period_from, period_to FROM period WHERE dataset_fp=? AND period_label=?",
+            (dataset_fp, "2024-01-15"),
+        ).fetchone()
+        assert prow is not None
+        assert (prow["period_from"], prow["period_to"]) == ("2024-01-15", "2024-01-16")
+
+        # one totals row per processed group, population == rows that entered the pipeline
+        totals = ws.store.totals_for_periods(dataset_fp, ["2024-01-15"])
+        assert len(totals) == result.n_succeeded == 1
+        row = totals[0]
+        assert row["population"] == per_day
+        assert row["anomaly_count"] == result.groups[0].n_anomalies
+        assert row["run_id"] == result.run_id
+
+        # the label is now complete: backfill would not re-queue it
+        assert iter_pending_periods(ws.store, dataset_fp, ["2024-01-15", "2024-01-16"]) == [
+            "2024-01-16"
+        ]

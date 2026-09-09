@@ -41,6 +41,15 @@ Versioning: [Semantic Versioning](https://semver.org/).
   coerced to the time column's dtype (Date / Datetime / tz-aware Datetime /
   Utf8), which also fixes the auto path for real temporal columns — Polars will
   not compare a temporal column to a string. New `history.periods.period_bounds`.
+- History ledger: `run_detection` now writes the `period` row and one `totals`
+  row per processed group (population + anomaly count, built from the
+  `GroupSummary` objects, not the flagged-only results frame). Nothing was
+  writing these, so `sorethumb backfill` re-queued every period on each run and
+  `sorethumb history` had nothing to aggregate. `too_few_records` groups are
+  recorded with a zero count so they stop re-queueing; `skipped` / `failed`
+  groups are left untouched. `score_forward` deliberately does not write history.
+- `sorethumb backfill` now creates the workspace if it does not exist yet
+  (matching `sorethumb run`), instead of failing with a `StoreError`.
 
 ### Changed
 

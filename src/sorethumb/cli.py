@@ -850,7 +850,13 @@ def backfill(
     from sorethumb.history.ledger import iter_pending_periods, resolve_backfill_range  # noqa: PLC0415
 
     ws_path = Path(cfg.run.workdir)
-    with Workspace.open(ws_path) as ws:
+    # Match `run`: open an existing workspace, otherwise create it so `backfill`
+    # works as a first command on a fresh workdir.
+    if ws_path.exists() and (ws_path / "sorethumb.db").exists():
+        ws_cm = Workspace.open(ws_path)
+    else:
+        ws_cm = Workspace.init(ws_path)
+    with ws_cm as ws:
         from datetime import datetime  # noqa: PLC0415
 
         from sorethumb.history.periods import resolve_period  # noqa: PLC0415

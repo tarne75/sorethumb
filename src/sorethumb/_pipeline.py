@@ -175,15 +175,17 @@ def _resolve_and_filter_period(
     df_raw: pl.DataFrame,
     config: Config,
     period_label_override: str | None,
-) -> tuple[pl.DataFrame, str | None]:
+) -> tuple[pl.DataFrame, str | None, tuple[str, str] | None]:
     """Resolve the period label and filter *df_raw* to that period's window.
 
-    - No ``columns.time_column``: the override (or None) passes through and
-      nothing is filtered.
+    - No ``columns.time_column``: the override (or None) passes through, nothing
+      is filtered, and the window is ``None`` (no history is recorded).
     - No override: resolve the current period from the wall clock.
     - Override given (e.g. a ``sorethumb backfill`` label): treat it as an
       existing label and derive its ``[period_from, period_to)`` window.
 
+    Returns ``(filtered_df, period_label, period_window)`` where ``period_window``
+    is ``(period_from, period_to)`` (or ``None`` when there is no time column).
     Whenever a time column exists the frame is filtered to that window, so a
     historical label processes only its own rows — not the whole dataset.
     """
@@ -194,7 +196,7 @@ def _resolve_and_filter_period(
                 "period_label_override=%r ignored: no columns.time_column configured.",
                 period_label_override,
             )
-        return df_raw, period_label_override
+        return df_raw, period_label_override, None
 
     from sorethumb.history.periods import period_bounds, resolve_period  # noqa: PLC0415
 
@@ -220,7 +222,49 @@ def _resolve_and_filter_period(
         len(filtered),
         len(df_raw),
     )
-    return filtered, label
+    return filtered, label, (period_from, period_to)
+
+
+def _record_period_history(
+    ws: Workspace,
+    dataset_fp: str,
+    config_hash: str,
+    run_id: str,
+    period_label: str,
+    period_window: tuple[str, str],
+    group_results: list[GroupSummary],
+) -> None:
+    """Write the ``period`` row and one ``totals`` row per processed group.
+
+    Built straight from the :class:`GroupSummary` objects: each one already
+    carries ``n_records`` (the rows that entered the pipeline for this
+    group × period — i.e. the population) and ``n_anomalies`` (the count).
+
+    We deliberately do **not** feed the persisted results frame to
+    ``compute_totals``: that frame holds only the flagged rows, with a
+    ``flagged`` column and the group *digest* — not the boolean ``anomaly_flag``
+    and raw grouping columns ``compute_totals`` needs, and it has no population.
+    The summaries are the right source.
+
+    ``skipped`` groups (ledger already had them) and ``failed`` groups are left
+    out so their existing totals row is not overwritten / a gap stays a gap.
+    ``too_few_records`` groups are recorded with a zero count so the period is
+    not re-queued forever.
+    """
+    ws.store.upsert_period(dataset_fp, period_label, period_window[0], period_window[1])
+    for g in group_results:
+        if g.status not in ("success", "too_few_records"):
+            continue
+        ws.store.upsert_total(
+            dataset_fp=dataset_fp,
+            group_key=g.group_key,
+            period_label=period_label,
+            anomaly_count=g.n_anomalies,
+            population=g.n_records,
+            rate=g.anomaly_rate,
+            run_id=run_id,
+            config_hash=config_hash,
+        )
 
 
 def run_detection(
@@ -295,7 +339,9 @@ def run_detection(
         )
 
         # ── 2. Period resolution + window filter ────────────────────────
-        df_raw, period_label = _resolve_and_filter_period(df_raw, config, period_label_override)
+        df_raw, period_label, period_window = _resolve_and_filter_period(
+            df_raw, config, period_label_override
+        )
 
         # ── 3. Register run ──────────────────────────────────────────────
         # run_id is derived deterministically so that a repeat call with identical
@@ -401,6 +447,15 @@ def run_detection(
             ws.store.mark_run_failed(run_id, "one or more groups failed")
         else:
             ws.store.mark_run_complete(run_id)
+
+        # ── 7b. History ledger: period + per-group totals rows ──────────
+        # This is what makes `sorethumb backfill` idempotent (a processed
+        # period gets a totals row, so it is not re-queued) and gives
+        # `sorethumb history` something to aggregate.
+        if period_label is not None and period_window is not None:
+            _record_period_history(
+                ws, dataset_fp, config.config_hash(), run_id, period_label, period_window, group_results
+            )
 
         # ── 8. Render report ─────────────────────────────────────────────
         report_path: Path | None = None
@@ -516,7 +571,9 @@ def score_forward(
         )
 
         # ── Period resolution + window filter (same rules as run_detection) ──
-        df_raw, period_label = _resolve_and_filter_period(df_raw, config, period_label_override)
+        # score-forward does not write history: its dataset_fp is the *new*
+        # data's and its numbers come from a reused model, not a period compute.
+        df_raw, period_label, _ = _resolve_and_filter_period(df_raw, config, period_label_override)
 
         # ── Register the score-forward run ──────────────────────────────
         new_run_id = _make_score_run_id(dataset_fp, config.config_hash(), period_label, source_run_id)
