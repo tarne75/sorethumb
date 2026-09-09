@@ -105,6 +105,12 @@ class Workspace:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    def run_dir(self, run_id: str) -> Path:
+        """Return the run-level directory (parent of the per-group model dirs)."""
+        d = self._root / "models" / run_id
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
     def models_dir(self, run_id: str, group_key: str) -> Path:
         """Return the models directory for a (run_id, group_key), creating it if needed."""
         d = self._root / "models" / run_id / group_key

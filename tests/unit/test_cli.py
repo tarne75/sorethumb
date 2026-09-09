@@ -332,6 +332,37 @@ def test_run_with_groups(workspace_grouped):
 
 
 # ---------------------------------------------------------------------------
+# sorethumb score --from-run
+# ---------------------------------------------------------------------------
+
+
+def test_score_from_run(workspace):
+    _, toml_path, workdir = workspace
+    src_run_id = _run_and_get_run_id(toml_path, workdir)
+
+    result = runner.invoke(
+        app, ["score", "--from-run", src_run_id, "--config", str(toml_path), "--no-report", "--json"]
+    )
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+    data = json.loads(result.stdout)
+    assert data["run_id"].startswith("score_")
+    assert data["run_id"] != src_run_id
+
+    from sorethumb import Workspace
+
+    with Workspace.open(workdir) as ws:
+        assert ws.store.get_run(data["run_id"])["source_run_id"] == src_run_id
+
+
+def test_score_from_missing_run_fails(workspace):
+    _, toml_path, _ = workspace
+    result = runner.invoke(
+        app, ["score", "--from-run", "run_nope", "--config", str(toml_path), "--no-report"]
+    )
+    assert result.exit_code == 2
+
+
+# ---------------------------------------------------------------------------
 # sorethumb runs / show
 # ---------------------------------------------------------------------------
 

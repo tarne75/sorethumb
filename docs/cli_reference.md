@@ -163,9 +163,12 @@ Groups that are already marked complete in the ledger are skipped unless
 
 ## `sorethumb score`
 
-Score new data using a previous run's persisted models and calibrators.
-The feature plan from the source run is applied without re-fitting, so scores
-are comparable across time. Schema drift is detected per group.
+Score new data using a previous run's persisted FeaturePlan, per-detector
+models and calibrators — nothing is re-fitted. The source run's calibrators map
+the new scores onto its reference distribution, so results are comparable
+across runs. Schema drift and library-version drift are detected per group
+(`--strict` promotes both to errors). A new, distinct run is written
+(`score_…` id) that records the source run.
 
 ```bash
 sorethumb score --from-run abc12345
