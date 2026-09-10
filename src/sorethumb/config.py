@@ -341,7 +341,12 @@ class ScoringConfig(BaseModel):
     )
     weighting: Literal["equal", "manual", "agreement"] = Field(
         "equal",
-        description="How detector weights are determined when combination='composite'.",
+        description=(
+            "How detector weights are set for combination='composite' (ignored by "
+            "'intersection' / 'union'). 'equal': 1/n each. 'manual': from `weights`. "
+            "'agreement': by each detector's rank correlation (leave-one-out Spearman) "
+            "with the consensus ranking; anti-correlated or flat detectors get weight 0."
+        ),
     )
     weights: dict[str, float] = Field(
         default_factory=dict,

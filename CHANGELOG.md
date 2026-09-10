@@ -43,6 +43,16 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `scoring.weighting = "agreement"` was broken. It compared each detector's
+  `natural_flag` to the row-wise majority vote; at realistic contamination
+  almost no row is flagged, so the "majority" is all-normal, every detector
+  scores ~0.98, weights collapse to equal — and a detector that flags *nothing*
+  scores 1.0 and gets the *largest* weight. It now weights each detector by the
+  leave-one-out Spearman rank correlation between its calibrated scores and the
+  consensus ranking of the other detectors; anti-correlated or constant-score
+  detectors get weight 0, and it falls back to equal when nothing correlates.
+  `ScoreEnsemble` also now logs a warning when a non-`equal` weighting is set
+  with a non-`composite` combination (`intersection` / `union` ignore weights).
 - `kmeans_distance` (CBLOF) scoring OOM'd on wide/large inputs. `score_samples`
   and `centroid_attributions` built the `(n, n_large, d)` difference tensor
   (`X[:, None, :] - centres[None, :, :]`) — ~2 GB at 1M rows × 5 centroids × 50
