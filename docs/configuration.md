@@ -90,7 +90,7 @@ so trivial changes do not invalidate cached artefacts.
 | `detectors.name` | str | **required** | Detector identifier, e.g. 'isolation_forest'. |
 | `detectors.enabled` | bool | true | Skip this detector entirely when False. |
 | `detectors.params` | dict[str, object] | {} | Detector-specific hyperparameters, forwarded verbatim to the wrapper constructor. Nest an 'extra_params' table to pass arbitrary kwargs straight to the underlying sklearn estimator, e.g. params = { n_estimators = 300, extra_params = { n_jobs = 4 } }. Keys are validated at construction; reserved keys (random_state, contamination) and keys already exposed as wrapper arguments are rejected. |
-| `detectors.train_row_cap` | int \| null | null | Subsample training data to at most this many rows. None means use the full training set. Detectors with quadratic complexity (SVM) need a low cap. |
+| `detectors.train_row_cap` | int \| null | null | Subsample the training data to at most this many rows before fitting this detector. Unset uses the detector's built-in cap (isolation_forest 250000, kmeans_distance 200000, one_class_svm 25000, lof 50000, ecod/hbos 500000). Set a value larger than your dataset to train on every row. |
 
 ## `[scoring]` — How per-detector scores are combined.
 

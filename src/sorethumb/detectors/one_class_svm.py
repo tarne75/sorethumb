@@ -102,7 +102,7 @@ class OneClassSVMDetector:
             warnings.warn(
                 f"OneClassSVM fit took {elapsed:.1f} s "
                 f"(threshold={self._slow_stage_seconds:.0f} s). "
-                "Consider reducing default_train_row_cap or switching to IsolationForest.",
+                "Lower this detector's train_row_cap in config, or switch to IsolationForest.",
                 SlowStageWarning,
                 stacklevel=2,
             )
