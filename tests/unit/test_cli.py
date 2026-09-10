@@ -364,6 +364,48 @@ def test_score_from_missing_run_fails(workspace):
 
 
 # ---------------------------------------------------------------------------
+# sorethumb report
+# ---------------------------------------------------------------------------
+
+
+def test_report_rerenders_from_persisted_run(workspace):
+    _, toml_path, workdir = workspace
+    # A run *with* a report, then delete the rendered file.
+    assert runner.invoke(app, ["run", "--config", str(toml_path)]).exit_code == 0
+    from sorethumb import Workspace
+
+    with Workspace.open(workdir) as ws:
+        run_id = str(ws.store.list_runs(limit=1)[0]["run_id"])
+    index = workdir / "reports" / run_id / "index.html"
+    assert index.exists()
+    original = index.read_text(encoding="utf-8")
+    index.unlink()
+
+    result = runner.invoke(app, ["report", run_id, "--config", str(toml_path)])
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+    assert "Report written:" in result.stdout
+    assert index.exists()
+    assert index.read_text(encoding="utf-8") == original
+
+
+def test_report_defaults_to_latest_run(workspace):
+    _, toml_path, workdir = workspace
+    assert runner.invoke(app, ["run", "--config", str(toml_path)]).exit_code == 0
+
+    result = runner.invoke(app, ["report", "--config", str(toml_path)])
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+    assert "Report written:" in result.stdout
+
+
+def test_report_unknown_run_id_errors(workspace):
+    _, toml_path, workdir = workspace
+    runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
+    result = runner.invoke(app, ["report", "run_nope", "--config", str(toml_path)])
+    assert result.exit_code == 1
+    assert "Run not found" in result.stdout + (result.stderr or "")
+
+
+# ---------------------------------------------------------------------------
 # sorethumb backfill
 # ---------------------------------------------------------------------------
 

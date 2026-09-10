@@ -16,6 +16,12 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - `dataset_snapshot` table (migration 005): one row per observed content+schema
   version of a dataset, with `first_seen` / `last_seen`. `dataset.snapshot_fp`
   points at the most recent. `Store.dataset_snapshots(dataset_fp)` lists them.
+- `sorethumb report [run_id]` is implemented — it previously created an empty
+  directory and rendered nothing. It rebuilds `reports/<run_id>/index.html` and
+  the per-group CSV siblings purely from persisted state (run row, FeaturePlan,
+  per-group results Parquet); defaults to the latest run. New public API
+  `sorethumb.render_report_for_run(ws, run_id)`; `Store.get_run_group` and
+  `store.results.results_path` back it.
 
 - `sorethumb score --from-run RUN_ID` is now real (it previously ignored
   `--from-run` and did a full fitted run). It loads the source run's persisted
@@ -73,6 +79,14 @@ Versioning: [Semantic Versioning](https://semver.org/).
   (`(#{ref < s} + 0.5·#{ref == s}) / n` via `searchsorted`), so a tied value
   maps to the midpoint of its band. Monotonicity and the constant-reference →
   0.5 guard are unchanged.
+- Repeat runs no longer blank a report. A skipped group (already `complete` in
+  the ledger) returned a `GroupSummary` with `n_anomalies=0` and no results
+  path, so a second run of the same deterministic `run_id` re-rendered the
+  report — and the per-group CSVs — with every group empty, destroying the good
+  one. Skipped groups now carry their persisted count + results path, and the
+  report is rendered from the store (`render_report_for_run`) rather than from
+  in-memory run state. The provenance block also now shows the real
+  `dataset_fp` (was blank).
 
 ### Changed
 

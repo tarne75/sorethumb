@@ -37,6 +37,7 @@ from sorethumb import (
     build_feature_plan,
     list_detectors,
     load_dataset,
+    render_report_for_run,
     run_detection,
     score_forward,
 )
@@ -773,15 +774,16 @@ def score(
 
 @app.command()
 def report(
-    run_id: Annotated[str | None, typer.Argument(help="Run ID to re-render.")] = None,
+    run_id: Annotated[str | None, typer.Argument(help="Run ID to re-render (default: latest run).")] = None,
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
     log_level: _LOG_LEVEL_OPT = "INFO",
 ) -> None:
-    """Re-render reports from persisted results without recomputing anything.
+    """Re-render a run's HTML report from persisted results — no recompute.
 
-    Use this when you want to refresh the HTML report after changing report
-    configuration without rerunning inference.
+    Reads the run's stored config, FeaturePlan and per-group results Parquet and
+    rewrites ``{workdir}/reports/{run_id}/index.html``. Use it to refresh a
+    report after a `report.*` config change, or to rebuild one that was deleted.
     """
     _setup_logging(log_level)
     cfg = _load_config(config, workdir=workdir, log_level=log_level)
@@ -793,18 +795,19 @@ def report(
             if not runs:
                 err_console.print("[red]No runs found in workspace.[/red]")
                 raise typer.Exit(1)
-            run_id = runs[0]["run_id"]
+            run_id = str(runs[0]["run_id"])
 
-        run_row = ws.store.get_run(run_id)
-        if run_row is None:
+        if ws.store.get_run(run_id) is None:
             err_console.print(f"[red]Run not found:[/red] {run_id}")
             raise typer.Exit(1)
 
-        groups = ws.store.all_run_groups(run_id)
-        console.print(f"Re-rendering report for {run_id} ({len(groups)} groups)…")
-        report_dir = ws.root / "reports" / run_id
-        report_dir.mkdir(parents=True, exist_ok=True)
-        console.print(f"[green]Report dir:[/green] {report_dir}")
+        n_groups = len(ws.store.all_run_groups(run_id))
+        console.print(f"Re-rendering report for [cyan]{run_id}[/cyan] ({n_groups} groups)…")
+        path = render_report_for_run(ws, run_id)
+        if path is None:
+            err_console.print(f"[red]Could not render report for {run_id}.[/red] See the log for details.")
+            raise typer.Exit(1)
+        console.print(f"[green]Report written:[/green] {path}")
 
 
 # ---------------------------------------------------------------------------
