@@ -364,7 +364,10 @@ def run_detection(
     no_report:
         Skip HTML report rendering.
     dry_run:
-        Resolve everything, print the work plan, and exit without writing anything.
+        Open the workspace (applying migrations), load the source, register the
+        dataset (``dataset`` + ``dataset_snapshot`` rows) and the run (``run``
+        row, left in status ``running``), then return before fitting anything.
+        No feature plan, models, results, history rows or report are written.
     period_label_override:
         Force a specific period label instead of resolving from the reference date.
 
@@ -437,7 +440,8 @@ def run_detection(
 
         if dry_run:
             logger.info(
-                "DRY RUN — run_id=%s dataset_fp=%s period=%s rows=%d cols=%d",
+                "DRY RUN — registered dataset + run (run status stays 'running'); "
+                "no models/results/report. run_id=%s dataset_fp=%s period=%s rows=%d cols=%d",
                 run_id,
                 dataset_fp,
                 period_label,

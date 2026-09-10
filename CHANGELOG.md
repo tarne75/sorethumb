@@ -55,6 +55,16 @@ Versioning: [Semantic Versioning](https://semver.org/).
   all-`Float64` Polars schema (`ComputeError`) — it now uses `as_frame=True` +
   `pl.from_pandas`, decodes the bytes columns, and takes 20k rows so the run
   finishes in about a minute.
+- `sorethumb run --dry-run` claimed "nothing will be written". It in fact opens
+  the workspace (applying migrations), registers the dataset (`dataset` +
+  `dataset_snapshot` rows) and the run (`run` row, left in status `running`) —
+  it just fits no models and writes no results, history or report. The CLI
+  message, `--dry-run` help, `run_detection` docstring and `docs/cli_reference.md`
+  now say exactly that.
+- `docs/check_readme_snippets.py` verified README `--flag`s by parsing rendered
+  `--help` text, which `rich` truncates at narrow terminal widths — so the
+  `docs-snippets` job and `test_docs_checks` failed in CI (80-col) while passing
+  locally. It now introspects the click command tree directly.
 - Eleven documented config fields were inert — now wired, one behavioural test
   each (`tests/unit/test_config_wiring.py`):
   `run.max_rows` (deterministic head-truncation of the input + `SampleTruncatedWarning`),

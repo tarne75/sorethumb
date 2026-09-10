@@ -301,14 +301,30 @@ def test_run_idempotent_second_run_skips_groups(workspace):
     assert "skipped" in result2.stdout.lower()
 
 
-def test_run_dry_run_writes_nothing(workspace):
+def test_run_dry_run_registers_dataset_and_run_but_fits_nothing(workspace):
     _, toml_path, workdir = workspace
-    workdir_before = set(workdir.rglob("*")) if workdir.exists() else set()
     result = runner.invoke(app, ["run", "--config", str(toml_path), "--dry-run"])
     assert result.exit_code == 0
-    # DB and workspace may be created but no result parquets should appear
-    parquets = list(workdir.rglob("anomalies.parquet")) if workdir.exists() else []
-    assert len(parquets) == 0
+    assert "DRY RUN" in result.stdout
+
+    from sorethumb import Workspace
+
+    with Workspace.open(workdir) as ws:
+        conn = ws.store._conn
+        # It DOES write: the workspace DB (migrations applied), a dataset row,
+        # a dataset_snapshot row, and a run row left in status 'running'.
+        assert conn.execute("SELECT COUNT(*) FROM dataset").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM dataset_snapshot").fetchone()[0] == 1
+        runs = conn.execute("SELECT status FROM run").fetchall()
+        assert [r[0] for r in runs] == ["running"]
+        # It does NOT write: run_group rows, models, results, history, report.
+        assert conn.execute("SELECT COUNT(*) FROM run_group").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM totals").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM model").fetchone()[0] == 0
+
+    assert list(workdir.rglob("anomalies.parquet")) == []
+    assert list(workdir.rglob("index.html")) == []
+    assert list((workdir / "models").rglob("plan.json")) == []
 
 
 def test_run_invalid_group_filter_fails_immediately(workspace):
