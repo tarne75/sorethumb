@@ -39,7 +39,11 @@ class StoreError(SorethumbError):
 
 
 class MemoryBudgetError(SorethumbError):
-    """Raised when a pre-flight memory estimate exceeds run.max_memory_mb."""
+    """Raised when the projected feature-matrix size exceeds run.max_memory_mb.
+
+    A pre-flight check in features.build, before any model is fitted — not a live
+    RSS ceiling.
+    """
 
 
 class ModelSchemaDriftError(SorethumbError):

@@ -102,12 +102,16 @@ format = "csv"
 ```python
 import polars as pl
 from sklearn.datasets import fetch_kddcup99
+
 from sorethumb import Config, SourceConfig, run_detection
 
-# Fetch KDDCup99 and save a CSV for the demo
-bunch = fetch_kddcup99(subset=None, shuffle=True, random_state=0, percent10=True)
-df = pl.from_numpy(bunch.data, schema={f"f{i}": pl.Float64 for i in range(bunch.data.shape[1])})
-df.write_csv("/tmp/kdd.csv")
+# Fetch the KDDCup99 10% subset and write a small CSV for the demo.
+# as_frame=True keeps real column names and dtypes (protocol_type / service /
+# flag are categorical); decode those bytes columns to text and take 20k rows
+# so the run finishes in about a minute.
+bunch = fetch_kddcup99(percent10=True, shuffle=True, random_state=0, as_frame=True)
+df = pl.from_pandas(bunch.data).with_columns(pl.col(pl.Binary).cast(pl.String))
+df.head(20_000).write_csv("/tmp/kdd.csv")
 
 config = Config(
     source=SourceConfig(uri="/tmp/kdd.csv"),
@@ -349,7 +353,10 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
 
 ## Honest limitations
 
-- `run.max_memory_mb` is advisory, not enforced — Python cannot impose a hard RSS ceiling.
+- `run.max_memory_mb` caps the *projected* feature-matrix size (rows × encoded
+  columns × dtype bytes): a run whose estimate exceeds it aborts with
+  `MemoryBudgetError` before any model is fitted. It is not a live RSS ceiling —
+  Python cannot impose one — so actual peak memory can still exceed the budget.
 - The composite score is an interpretable ranking score, not a calibrated probability.
 - Only Isolation Forest yields exact (TreeSHAP) attributions; all others are heuristic
   (centroid distance or input gradient). See [docs/explanations.md](docs/explanations.md).

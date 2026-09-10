@@ -432,10 +432,11 @@ contamination = 0.02
 
 ### Conservative flagging with intersection
 
-Each detector independently flags its top `contamination` fraction of rows.
-A row is only marked anomalous if **all three detectors** agree — not just the
-combined score. This maximises precision at the cost of recall and also sets
-the OneClassSVM `nu` training parameter to match the contamination rate.
+`intersection` is the default combiner. Each detector independently flags its
+top `contamination` fraction of rows, and a row is only marked anomalous if
+**all three detectors** agree — not just the combined score. This maximises
+precision at the cost of recall and also sets the OneClassSVM `nu` training
+parameter to match the contamination rate.
 
 ```toml
 [source]
@@ -452,9 +453,9 @@ contamination = 0.05
 Use `combination = "union"` for the opposite: flag a row if *any* detector
 considers it anomalous (maximises recall).
 
-Use `combination = "composite"` (the default) to blend scores into a single
-ranked list and apply one global threshold — better when detectors disagree
-often and you want a smooth ranking rather than a hard vote.
+Use `combination = "composite"` to blend scores into a single ranked list and
+apply one global threshold — better when detectors disagree often and you want
+a smooth ranking rather than a hard vote.
 
 ### Manual detector weighting
 
