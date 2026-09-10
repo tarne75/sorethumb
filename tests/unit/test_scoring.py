@@ -347,14 +347,15 @@ def test_agreement_gives_a_detector_that_flags_nothing_no_weight():
 
 
 def test_agreement_falls_back_to_equal_when_nothing_correlates():
-    # b and c both rank opposite to a; each detector then anti-correlates with
-    # (or is orthogonal to) the mean rank of the other two -> every rho <= 0.
+    # Two anti-correlated detectors: each rho is negative -> clamped to 0 ->
+    # total 0 -> equal fallback. (Two members, so the bad-member guard, which
+    # needs >= 3, does not fire.)
     x = np.linspace(0.0, 1.0, 400)
-    scores = {"a": x.copy(), "b": 1.0 - x, "c": 1.0 - x}
+    scores = {"a": x.copy(), "b": 1.0 - x}
     flags = {k: v > 0.98 for k, v in scores.items()}
     ens = ScoreEnsemble(weighting="agreement", combination="composite", contamination=0.05)
     w = ens.combine(scores, flags)["weights"]
-    assert all(v == pytest.approx(1 / 3) for v in w.values())
+    assert w == {"a": pytest.approx(0.5), "b": pytest.approx(0.5)}
 
 
 def test_weighting_ignored_with_non_composite_combination_warns(caplog):
@@ -363,6 +364,63 @@ def test_weighting_ignored_with_non_composite_combination_warns(caplog):
     with caplog.at_level(logging.WARNING, logger="sorethumb.scoring.combine"):
         ScoreEnsemble(weighting="agreement", combination="intersection")
     assert any("no effect" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# ScoreEnsemble: bad-member guard
+# ---------------------------------------------------------------------------
+
+
+def _three_dets(n=300, *, third):
+    rng = np.random.default_rng(0)
+    base = np.linspace(0.0, 1.0, n)
+    rng.shuffle(base)
+    a = base
+    b = np.clip(base + rng.normal(0, 0.02, n), 0, 1)  # agrees with a
+    return {"a": a, "b": b, "c": third(base, rng)}
+
+
+@pytest.mark.parametrize("combination", ["composite", "intersection", "union"])
+def test_guard_drops_member_anticorrelated_with_the_median(combination, caplog):
+    import logging
+
+    scores = _three_dets(third=lambda base, _rng: 1.0 - base)  # c ranks opposite a & b
+    flags = {k: v > 0.9 for k, v in scores.items()}
+    ens = ScoreEnsemble(weighting="agreement", combination=combination, contamination=0.1)
+
+    with caplog.at_level(logging.WARNING, logger="sorethumb.scoring.combine"):
+        result = ens.combine(scores, flags)
+
+    assert result["dropped_members"] == ["c"]
+    assert result["weights"]["c"] == 0.0
+    assert set(result["weights"]) == {"a", "b", "c"}  # dropped member still listed
+    assert any("consensus median" in r.message for r in caplog.records)
+
+
+def test_guard_keeps_a_diverse_uncorrelated_member():
+    scores = _three_dets(third=lambda base, rng: rng.uniform(0.0, 1.0, len(base)))  # independent
+    flags = {k: v > 0.9 for k, v in scores.items()}
+    result = ScoreEnsemble(combination="composite", contamination=0.1).combine(scores, flags)
+    assert result["dropped_members"] == []  # uncorrelated != anti-correlated
+
+
+def test_guard_needs_three_members():
+    x = np.linspace(0.0, 1.0, 300)
+    scores = {"a": x.copy(), "b": 1.0 - x}  # anti-correlated but only two members
+    flags = {k: v > 0.9 for k, v in scores.items()}
+    result = ScoreEnsemble(combination="composite", contamination=0.1).combine(scores, flags)
+    assert result["dropped_members"] == []
+
+
+def test_guard_wont_gut_the_ensemble():
+    # a is anti to b&c; b is anti to a&c; c is anti to a&b -> would drop >= k-1.
+    # The guard keeps everything instead (the consensus is unreliable).
+    x = np.linspace(0.0, 1.0, 300)
+    scores = {"a": x.copy(), "b": 1.0 - x, "c": np.r_[1.0 - x[: len(x) // 2], x[len(x) // 2 :]]}
+    flags = {k: v > 0.9 for k, v in scores.items()}
+    result = ScoreEnsemble(combination="composite", contamination=0.1).combine(scores, flags)
+    assert result["dropped_members"] == []
+    assert set(result["weights"]) == {"a", "b", "c"}
 
 
 # ---------------------------------------------------------------------------
