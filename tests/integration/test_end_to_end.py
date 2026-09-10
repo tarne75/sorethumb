@@ -473,9 +473,7 @@ def test_period_run_records_history_ledger(tmp_path: Path) -> None:
         assert row["run_id"] == result.run_id
 
         # the label is now complete: backfill would not re-queue it
-        assert iter_pending_periods(ws.store, dataset_fp, ["2024-01-15", "2024-01-16"]) == [
-            "2024-01-16"
-        ]
+        assert iter_pending_periods(ws.store, dataset_fp, ["2024-01-15", "2024-01-16"]) == ["2024-01-16"]
 
 
 def _write_days_parquet(path: Path, *, days: list[str], per_day: int = 80, seed: int = 0) -> None:
@@ -530,10 +528,7 @@ def test_appending_a_snapshot_keeps_dataset_identity_and_history(tmp_path: Path)
     with Workspace.open(workdir) as ws:
         dfp = r2.dataset_fp
         # Both periods' totals live under the one logical dataset — nothing orphaned.
-        labels = {
-            r["period_label"]
-            for r in ws.store.totals_for_periods(dfp, ["2024-01-15", "2024-01-16"])
-        }
+        labels = {r["period_label"] for r in ws.store.totals_for_periods(dfp, ["2024-01-15", "2024-01-16"])}
         assert labels == {"2024-01-15", "2024-01-16"}
         assert iter_pending_periods(ws.store, dfp, ["2024-01-15", "2024-01-16"]) == []
 
