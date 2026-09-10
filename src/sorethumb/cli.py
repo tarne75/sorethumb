@@ -922,7 +922,7 @@ def history(
     cfg = _load_config(config, workdir=workdir, log_level=log_level)
 
     ws_path = Path(cfg.run.workdir)
-    _windows = windows or [1, 7, 14, 28]
+    _windows = windows or cfg.report.rolling_windows
 
     with Workspace.open(ws_path) as ws:
         from sorethumb.io.fingerprint import logical_dataset_id  # noqa: PLC0415

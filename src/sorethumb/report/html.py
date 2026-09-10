@@ -65,19 +65,33 @@ def render_report(
     run_meta: RunMeta,
     groups: list[GroupSection],
     out_dir: Path,
+    formats: list[str] | tuple[str, ...] = ("html", "csv"),
 ) -> Path:
-    """Write a self-contained ``index.html`` to *out_dir* and return its path.
+    """Write the report artefacts named in *formats* to *out_dir*.
 
-    Also writes one sibling CSV per group (``<group_key>.csv``).
-    Moving the HTML without its CSV siblings breaks the relative links.
+    ``report.formats`` selects any of ``html`` (``index.html``), ``csv`` (one
+    ``<group_key>.csv`` per group, which the HTML links to relatively) and
+    ``json`` (``index.json`` — provenance + per-group records). Returns
+    ``index.html`` when it was written, otherwise ``index.json``, otherwise
+    *out_dir*.
     """
     from sorethumb.report.csv import write_group_csv  # noqa: PLC0415
 
+    fmts = {f.lower() for f in formats}
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Write CSVs first (so links in HTML are valid as soon as the file appears)
-    for grp in groups:
-        write_group_csv(grp.records, out_dir, grp.group_key)
+    if "csv" in fmts:
+        for grp in groups:
+            write_group_csv(grp.records, out_dir, grp.group_key)
+
+    json_path: Path | None = None
+    if "json" in fmts:
+        json_path = _write_json_report(run_meta, groups, out_dir)
+
+    if "html" not in fmts:
+        logger.info("Report written (formats=%s): %s.", sorted(fmts), out_dir)
+        return json_path or out_dir
 
     body_parts: list[str] = [_provenance_block(run_meta)]
 
@@ -92,6 +106,33 @@ def render_report(
     out_path.write_text(html_content, encoding="utf-8")
     logger.info("HTML report written: %s.", out_path)
     return out_path
+
+
+def _write_json_report(run_meta: RunMeta, groups: list[GroupSection], out_dir: Path) -> Path:
+    """Write ``index.json``: the provenance block plus each group's flagged records."""
+    payload = {
+        "run_id": run_meta.run_id,
+        "dataset_uri": run_meta.dataset_uri,
+        "dataset_fp": run_meta.dataset_fp,
+        "config_hash": run_meta.config_hash,
+        "seed": run_meta.seed,
+        "library_version": run_meta.library_version,
+        "python_version": run_meta.python_version,
+        "started_at": run_meta.started_at,
+        "groups": [
+            {
+                "group_key": g.group_key,
+                "group_label": g.group_label,
+                "n_records": len(g.records),
+                "records": g.records.to_dicts(),
+            }
+            for g in groups
+        ],
+    }
+    path = out_dir / "index.json"
+    path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    logger.info("JSON report written: %s.", path)
+    return path
 
 
 # ---------------------------------------------------------------------------

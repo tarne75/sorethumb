@@ -66,9 +66,18 @@ def _resolve_http(config: SourceConfig, cache_dir: Path) -> Path:
     logger.debug("Downloading source: %s", url)
     _download_to(url, headers, tmp_path)
 
+    ext = _extension_from_url(url, config)
+
+    if not config.cache:
+        # source.cache = False: keep only a single transient copy, overwritten
+        # every call, and never a fingerprint-keyed cache dir.
+        uncached_file = cache_dir / f"uncached_data{ext}"
+        tmp_path.replace(uncached_file)
+        logger.info("Source not cached (source.cache=False): %s", uncached_file)
+        return uncached_file
+
     fp = content_fingerprint(tmp_path)
     cached_dir = cache_dir / fp
-    ext = _extension_from_url(url, config)
     cached_file = cached_dir / f"data{ext}"
 
     if cached_file.exists():

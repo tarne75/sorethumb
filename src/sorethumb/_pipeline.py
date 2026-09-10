@@ -17,7 +17,9 @@ import re
 import sys
 import time
 import warnings
-from collections.abc import Callable
+import webbrowser
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from functools import partial
@@ -29,7 +31,13 @@ import polars as pl
 
 from sorethumb.config import Config, SourceConfig
 from sorethumb.detectors import registry
-from sorethumb.errors import SchemaError, SorethumbWarning, StoreError
+from sorethumb.errors import (
+    SampleTruncatedWarning,
+    SchemaError,
+    SlowStageWarning,
+    SorethumbWarning,
+    StoreError,
+)
 from sorethumb.explain.blend import blend
 from sorethumb.explain.project import aggregate_to_original, top_n_reasons
 from sorethumb.features.build import apply_feature_plan, fit_features
@@ -47,11 +55,66 @@ from sorethumb.profiling.plan import FeaturePlan, build_feature_plan
 from sorethumb.report.html import GroupSection, RunMeta, render_report
 from sorethumb.scoring.calibrate import Calibrator
 from sorethumb.scoring.combine import ScoreEnsemble
-from sorethumb.store.models import load_plan, save_model, save_plan, score_with_existing
+from sorethumb.store.models import load_model, load_plan, save_model, save_plan, score_with_existing
 from sorethumb.store.results import read_results, results_path, write_results
 from sorethumb.store.workspace import Workspace, make_group_key
 
 logger = logging.getLogger(__name__)
+
+# Indirection point so tests can simulate a slow pipeline stage without sleeping.
+_clock = time.monotonic
+
+
+@contextmanager
+def _timed_stage(name: str, threshold_seconds: float | None) -> Iterator[None]:
+    """Warn ``SlowStageWarning`` if the wrapped stage runs longer than the threshold.
+
+    ``run.slow_stage_seconds`` is purely diagnostic; ``threshold_seconds=None``
+    disables the check.
+    """
+    t0 = _clock()
+    try:
+        yield
+    finally:
+        if threshold_seconds is not None:
+            elapsed = _clock() - t0
+            if elapsed > threshold_seconds:
+                warnings.warn(
+                    f"Stage {name!r} took {elapsed:.1f}s (> run.slow_stage_seconds={threshold_seconds:g}).",
+                    SlowStageWarning,
+                    stacklevel=3,
+                )
+
+
+@contextmanager
+def _strict_warnings(strict: bool) -> Iterator[None]:
+    """Promote every :class:`SorethumbWarning` to an error while ``run.strict`` is set."""
+    if not strict:
+        yield
+        return
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", category=SorethumbWarning)
+        yield
+
+
+def _apply_row_cap(df: pl.DataFrame, max_rows: int | None) -> pl.DataFrame:
+    """Truncate *df* to ``run.max_rows`` (deterministic head), warning if it bites."""
+    if max_rows is not None and len(df) > max_rows:
+        warnings.warn(
+            f"Input truncated from {len(df)} to {max_rows} rows (run.max_rows).",
+            SampleTruncatedWarning,
+            stacklevel=2,
+        )
+        return df.head(max_rows)
+    return df
+
+
+def _open_in_browser(path: Path) -> None:
+    """Best-effort open of the rendered report (``report.open_after``)."""
+    try:
+        webbrowser.open(path.resolve().as_uri())
+    except Exception:
+        logger.debug("report.open_after: could not open %s in a browser.", path, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -323,15 +386,18 @@ def run_detection(
     def _capture_warning(message: warnings.WarningMessage) -> None:
         issued_warnings.append(str(message.message))
 
-    with ws:
+    slow_after = config.run.slow_stage_seconds
+
+    with ws, _strict_warnings(config.run.strict):
         cache_dir = ws.root / "cache" / "datasets"
 
         # ── 1. Load dataset ──────────────────────────────────────────────
-        local_path = resolve_source(config.source, cache_dir)
-        lf = read_frame(local_path, config.source)
-        df_raw = lf.collect()
-        if config.source.max_nesting_depth > 0:
-            df_raw = unnest_all(df_raw, config.source.max_nesting_depth)
+        with _timed_stage("load-dataset", slow_after):
+            local_path = resolve_source(config.source, cache_dir)
+            lf = read_frame(local_path, config.source)
+            df_raw = lf.collect()
+            if config.source.max_nesting_depth > 0:
+                df_raw = unnest_all(df_raw, config.source.max_nesting_depth)
 
         content_fp = content_fingerprint(local_path)
         schema_fp = schema_fingerprint(df_raw)
@@ -354,6 +420,7 @@ def run_detection(
         df_raw, period_label, period_window = _resolve_and_filter_period(
             df_raw, config, period_label_override
         )
+        df_raw = _apply_row_cap(df_raw, config.run.max_rows)
 
         # ── 3. Register run ──────────────────────────────────────────────
         # run_id is derived deterministically so that a repeat call with identical
@@ -392,11 +459,12 @@ def run_detection(
             )
 
         # ── 4. Build feature plan on full dataset ────────────────────────
-        plan = build_feature_plan(df_raw, config)
+        with _timed_stage("feature-fit", slow_after):
+            plan = build_feature_plan(df_raw, config)
 
-        # Fit scaler / correlation / PCA on the full frame so parameters are
-        # stable across groups — each group's matrix is a subset of this space.
-        full_space = fit_features(df_raw, plan, config)
+            # Fit scaler / correlation / PCA on the full frame so parameters are
+            # stable across groups — each group's matrix is a subset of this space.
+            full_space = fit_features(df_raw, plan, config)
 
         # Persist the fitted plan so a later `sorethumb score --from-run` can
         # reload and apply it without re-fitting.
@@ -434,6 +502,8 @@ def run_detection(
                 group_values,
                 n_records,
                 force=force,
+                strict=config.run.strict,
+                slow_stage_seconds=slow_after,
                 body=partial(
                     _run_group,
                     ws=ws,
@@ -474,6 +544,8 @@ def run_detection(
         report_path: Path | None = None
         if not no_report and group_results:
             report_path = render_report_for_run(ws, run_id)
+            if report_path is not None and config.report.open_after:
+                _open_in_browser(report_path)
 
         finished_at = datetime.now(UTC).isoformat()
         return RunResult(
@@ -562,7 +634,9 @@ def score_forward(
 
     issued_warnings: list[str] = []
 
-    with Workspace.open(ws_path) as ws:
+    slow_after = config.run.slow_stage_seconds
+
+    with Workspace.open(ws_path) as ws, _strict_warnings(config.run.strict):
         if ws.store.get_run(source_run_id) is None:
             msg = f"Source run {source_run_id!r} not found in workspace {ws_path}."
             raise StoreError(msg)
@@ -574,10 +648,11 @@ def score_forward(
 
         # ── Load the new dataset ─────────────────────────────────────────
         cache_dir = ws.root / "cache" / "datasets"
-        local_path = resolve_source(config.source, cache_dir)
-        df_raw = read_frame(local_path, config.source).collect()
-        if config.source.max_nesting_depth > 0:
-            df_raw = unnest_all(df_raw, config.source.max_nesting_depth)
+        with _timed_stage("load-dataset", slow_after):
+            local_path = resolve_source(config.source, cache_dir)
+            df_raw = read_frame(local_path, config.source).collect()
+            if config.source.max_nesting_depth > 0:
+                df_raw = unnest_all(df_raw, config.source.max_nesting_depth)
 
         content_fp = content_fingerprint(local_path)
         schema_fp = schema_fingerprint(df_raw)
@@ -597,6 +672,7 @@ def score_forward(
         # score-forward does not write history: its numbers come from a reused
         # model, not a period compute.
         df_raw, period_label, _ = _resolve_and_filter_period(df_raw, config, period_label_override)
+        df_raw = _apply_row_cap(df_raw, config.run.max_rows)
 
         # ── Register the score-forward run ──────────────────────────────
         new_run_id = _make_score_run_id(
@@ -633,6 +709,8 @@ def score_forward(
                 group_values,
                 n_records,
                 force=force,
+                strict=strict or config.run.strict,
+                slow_stage_seconds=slow_after,
                 body=partial(
                     _score_forward_group,
                     ws=ws,
@@ -647,7 +725,7 @@ def score_forward(
                     group_label=group_label,
                     n_records=n_records,
                     period_label=period_label,
-                    strict=strict,
+                    strict=strict or config.run.strict,
                 ),
             )
             issued_warnings.extend(gsummary.warnings_issued)
@@ -661,6 +739,8 @@ def score_forward(
         report_path: Path | None = None
         if not no_report and group_results:
             report_path = render_report_for_run(ws, new_run_id)
+            if report_path is not None and config.report.open_after:
+                _open_in_browser(report_path)
 
         return RunResult(
             run_id=new_run_id,
@@ -790,6 +870,8 @@ def _execute_group(
     n_records: int,
     *,
     force: bool,
+    strict: bool = False,
+    slow_stage_seconds: float | None = None,
     body: Callable[[], GroupSummary],
 ) -> GroupSummary:
     """Run one group's *body* inside the shared ledger/status bookkeeping.
@@ -798,6 +880,11 @@ def _execute_group(
     complete, mark running, capture warnings + timing, mark complete or failed.
     ``body`` returns a GroupSummary; its ``elapsed_seconds`` and
     ``warnings_issued`` are filled in here.
+
+    ``strict`` (``run.strict``) turns any :class:`SorethumbWarning` raised in the
+    body into an error, so the group is marked failed with that message.
+    ``slow_stage_seconds`` (``run.slow_stage_seconds``) emits a
+    :class:`SlowStageWarning` when the group runs longer than the threshold.
     """
     gv_json = json.dumps(group_values)
 
@@ -813,14 +900,22 @@ def _execute_group(
         record_count=n_records,
     )
 
-    t0 = time.time()
+    t0 = _clock()
     warns: list[str] = []
     try:
         with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always", SorethumbWarning)
+            warnings.simplefilter("error" if strict else "always", SorethumbWarning)
             gsummary = body()
+            elapsed = _clock() - t0
+            if slow_stage_seconds is not None and elapsed > slow_stage_seconds:
+                warnings.warn(
+                    f"Group {group_label!r} took {elapsed:.1f}s "
+                    f"(> run.slow_stage_seconds={slow_stage_seconds:g}).",
+                    SlowStageWarning,
+                    stacklevel=2,
+                )
             warns = [str(w.message) for w in caught]
-        gsummary.elapsed_seconds = time.time() - t0
+        gsummary.elapsed_seconds = elapsed
         gsummary.warnings_issued = warns
         ws.store.upsert_run_group(
             run_id=run_id,
@@ -835,7 +930,7 @@ def _execute_group(
         )
         return gsummary
     except Exception as exc:
-        elapsed = time.time() - t0
+        elapsed = _clock() - t0
         err_msg = f"{type(exc).__name__}: {exc!s}"
         logger.exception("Group %s failed: %s", group_key, err_msg)
         ws.store.upsert_run_group(
@@ -899,6 +994,29 @@ def _run_group(
         if det_name not in registry:
             logger.warning("Detector %r not in registry; skipping.", det_name)
             continue
+
+        # run.reuse_models: if this run already has a persisted model for the
+        # group + detector (e.g. an earlier attempt of the same deterministic
+        # run_id, or a --force re-run), score with it instead of re-fitting.
+        if config.run.reuse_models:
+            try:
+                cached_det, cached_cal, _ = load_model(
+                    ws, run_id, group_key, det_name, strict=config.run.strict
+                )
+            except StoreError:
+                cached_det = None
+            if cached_det is not None:
+                raw = cached_det.score_samples(X)
+                det_instances[det_name] = cached_det
+                raw_scores_map[det_name] = raw
+                natural_flags_map[det_name] = cached_det.natural_flag(raw)
+                calibrators[det_name] = cached_cal
+                logger.info(
+                    "reuse_models: scored group %s with persisted %s (no refit).",
+                    group_key,
+                    det_name,
+                )
+                continue
 
         det_cfg = next((d for d in config.detectors if d.name == det_name), None)
         params = dict(det_cfg.params) if det_cfg else {}
@@ -1174,12 +1292,21 @@ def _compute_attributions(
     plan: FeaturePlan,
     group_space: FeatureSpace,
 ) -> tuple[dict[str, np.ndarray], str] | None:
-    """Compute blended attributions for flagged rows. Returns None on failure."""
+    """Compute blended attributions for flagged rows. Returns None on failure.
+
+    ``explain.enabled=False`` skips the stage entirely. For detectors without a
+    native attributor (anything but IsolationForest / KMeans) ``explain.kernel_shap``
+    routes to KernelSHAP instead of the input-gradient method. ``explain
+    .permutation_importance`` runs an extra per-detector cross-check.
+    """
     from sorethumb.detectors.isolation_forest import IsolationForestDetector  # noqa: PLC0415
     from sorethumb.detectors.kmeans_distance import KMeansDetector  # noqa: PLC0415
     from sorethumb.explain.centroid import centroid_attributions  # noqa: PLC0415
-    from sorethumb.explain.gradient import gradient_attributions  # noqa: PLC0415
+    from sorethumb.explain.gradient import gradient_attributions, kernel_shap_attributions  # noqa: PLC0415
     from sorethumb.explain.shap_tree import tree_shap_attributions  # noqa: PLC0415
+
+    if not config.explain.enabled:
+        return None
 
     if len(flagged_idx) == 0:
         return None
@@ -1201,9 +1328,14 @@ def _compute_attributions(
                 full_attr, tag = centroid_attributions(det, X)
                 attr = full_attr[flagged_idx]
             else:
-                # Gradient: operate only on flagged rows for cost control
-                max_rows = config.explain.max_rows if hasattr(config.explain, "max_rows") else 5000
-                attr, tag = gradient_attributions(det, X_flagged, max_rows=max_rows)
+                # No native attributor: input-gradient by default, KernelSHAP
+                # when explain.kernel_shap is set. Both operate on flagged rows
+                # only for cost control.
+                max_rows = config.explain.max_rows
+                if config.explain.kernel_shap:
+                    attr, tag = kernel_shap_attributions(det, X_flagged, max_rows=max_rows)
+                else:
+                    attr, tag = gradient_attributions(det, X_flagged, max_rows=max_rows)
         except Exception:
             logger.debug("Attribution skipped for detector %r.", det_name, exc_info=True)
             continue
@@ -1217,6 +1349,9 @@ def _compute_attributions(
 
     if not sources:
         return None
+
+    if config.explain.permutation_importance:
+        _run_permutation_importance_crosscheck(config, det_instances, X, plan, group_space)
 
     blended, blend_tag = blend(sources, source_weights)
 
@@ -1247,6 +1382,37 @@ def _compute_attributions(
         expanded[orig_col] = full_arr
 
     return expanded, blend_tag
+
+
+def _run_permutation_importance_crosscheck(
+    config: Config,
+    det_instances: dict[str, Any],
+    X: np.ndarray,
+    plan: FeaturePlan,
+    group_space: FeatureSpace,
+) -> None:
+    """``explain.permutation_importance``: an extra per-detector importance pass.
+
+    A diagnostic cross-check on the attribution ranking; the top column per
+    detector is logged. Failures are swallowed — this never breaks a run.
+    """
+    from sorethumb.explain.project import permutation_importance  # noqa: PLC0415
+
+    for det_name, det in det_instances.items():
+        try:
+            pi = permutation_importance(
+                det,
+                X,
+                group_space.feature_names,
+                plan.derived_to_original,
+                max_rows=config.explain.max_rows,
+                seed=config.run.seed,
+            )
+        except Exception:
+            logger.debug("permutation_importance failed for %r.", det_name, exc_info=True)
+            continue
+        top = max(pi, key=lambda k: pi[k]) if pi else None
+        logger.info("permutation_importance[%s]: top column = %s", det_name, top)
 
 
 # ---------------------------------------------------------------------------
@@ -1311,7 +1477,9 @@ def render_report_for_run(ws: Workspace, run_id: str) -> Path | None:
                 )
             )
 
-        return render_report(meta, group_sections, ws.root / "reports" / run_id)
+        return render_report(
+            meta, group_sections, ws.root / "reports" / run_id, formats=config.report.formats
+        )
 
     except Exception:
         logger.warning("Report rendering failed for run %s; skipping.", run_id, exc_info=True)
