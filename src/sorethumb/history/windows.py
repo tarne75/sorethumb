@@ -3,8 +3,12 @@
 Rates are volume-weighted: sum(anomalies) / sum(population). An unweighted
 mean of per-group rates is mathematically wrong when groups differ in size.
 Unknown-population rows (sentinel -1) are excluded from both sides of the ratio.
-A window that spans a calibration-mode change is flagged rather than averaged,
-because comparing self-calibrated and reference-calibrated scores is invalid.
+
+Every period is self-calibrated independently (there is no reference-calibration
+mode), so a rolling window compares periods that are each on their own [0, 1]
+scale: the trend is a *relative* signal, not an absolute anomaly level. The
+``calibration_break`` flag stays as a guard for a future run-level calibration
+marker; with today's single regime it never trips.
 """
 
 from __future__ import annotations

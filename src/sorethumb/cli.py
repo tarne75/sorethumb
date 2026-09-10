@@ -832,10 +832,11 @@ def backfill(
     Skipped when there is no time_column in the config — history is by run
     rather than by calendar period in that case.
 
-    Backfill uses the most recent run's models by default (--reuse-models
-    semantics) so the resulting trend is comparable across periods. If no
-    suitable source run exists, a warning is emitted and each period is
-    self-calibrated — mark the resulting trend as non-comparable.
+    Each pending period is fitted and scored independently (a full ``sorethumb
+    run`` over that period's window) and self-calibrated. The ``sorethumb
+    history`` trend that results shows relative period-to-period movement, not an
+    absolute anomaly level on a shared scale — for that, score every period
+    against one fixed run with ``sorethumb score --from-run``.
     """
     _setup_logging(log_level)
     cfg = _load_config(config, workdir=workdir, seed=seed, strict=strict, log_level=log_level)

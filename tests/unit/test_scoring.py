@@ -25,7 +25,7 @@ def _flag(scores: np.ndarray, threshold: float = 0.5) -> np.ndarray:
 
 
 def test_calibrator_transform_shape():
-    c = Calibrator(mode="self")
+    c = Calibrator()
     scores = _uniform_scores()
     calibrated = c.fit_transform(scores)
     assert calibrated.shape == scores.shape
@@ -61,8 +61,8 @@ def test_calibrator_monotone_transform():
     assert (diffs <= 1e-9).all(), "calibrated score must be monotone decreasing in raw score"
 
 
-def test_calibrator_self_mode():
-    c = Calibrator(mode="self")
+def test_calibrator_median_calibrates_near_half():
+    c = Calibrator()
     scores = _uniform_scores()
     c.fit(scores)
     # After fitting on uniform, the median score should calibrate near 0.5
@@ -71,24 +71,30 @@ def test_calibrator_self_mode():
     assert 0.3 < result[0] < 0.7
 
 
-def test_calibrator_reference_mode():
-    c = Calibrator(mode="reference")
-    train_scores = _uniform_scores(seed=0)
-    ref_scores = np.linspace(0.0, 1.0, 1000)
-    c.fit(train_scores, reference_scores=ref_scores)
-    # Transform a train score
-    result = c.transform(np.array([0.5]))
-    assert 0.0 <= result[0] <= 1.0
+def test_calibrator_tie_aware_midrank():
+    # Reference: half its mass sits at exactly 0.0, the rest spread over (0, 1].
+    ref = np.concatenate([np.zeros(500), np.linspace(0.01, 1.0, 500)])
+    c = Calibrator()
+    c.fit(ref)
+
+    # A query exactly at the tied value lands at the MIDPOINT of the band it
+    # occupies: ~0 of the reference below it, ~half equal to it -> F ~ 0.25 ->
+    # calibrated ~ 0.75. Not pinned to 0.0 or 1.0 (either end of the flat band).
+    at_tie = c.transform(np.array([0.0]))[0]
+    assert abs(at_tie - 0.75) < 0.03
+
+    # Extremes still saturate.
+    assert c.transform(np.array([-1.0]))[0] == pytest.approx(1.0)
+    assert c.transform(np.array([2.0]))[0] == pytest.approx(0.0)
 
 
-def test_calibrator_reference_mode_fallback_when_no_reference(caplog):
-    c = Calibrator(mode="reference")
-    scores = _uniform_scores()
-    import logging
-
-    with caplog.at_level(logging.WARNING):
-        c.fit(scores, reference_scores=None)
-    assert "fallback" in caplog.text.lower() or "reference_scores" in caplog.text
+def test_calibrator_from_dict_ignores_legacy_mode_key():
+    c = Calibrator()
+    c.fit(np.arange(100, dtype=float))
+    d = c.to_dict()
+    d["mode"] = "reference"  # written by an older sorethumb version
+    c2 = Calibrator.from_dict(d)
+    np.testing.assert_allclose(c.transform(np.arange(100, dtype=float)), c2.transform(np.arange(100, dtype=float)))
 
 
 def test_calibrator_constant_scores_returns_half():
@@ -118,18 +124,13 @@ def test_calibrator_fit_empty_raises():
         c.fit(np.array([]))
 
 
-def test_calibrator_invalid_mode():
-    with pytest.raises(ValueError, match="mode"):
-        Calibrator(mode="bad")
-
-
 # ---------------------------------------------------------------------------
 # Calibrator: to_dict / from_dict roundtrip
 # ---------------------------------------------------------------------------
 
 
 def test_calibrator_to_dict_from_dict_roundtrip():
-    c = Calibrator(mode="self")
+    c = Calibrator()
     scores = _uniform_scores()
     c.fit(scores)
     d = c.to_dict()
@@ -140,7 +141,7 @@ def test_calibrator_to_dict_from_dict_roundtrip():
 
 
 def test_calibrator_from_dict_unfitted():
-    c = Calibrator(mode="reference")
+    c = Calibrator()
     d = c.to_dict()
     c2 = Calibrator.from_dict(d)
     assert c2._quantile_values is None

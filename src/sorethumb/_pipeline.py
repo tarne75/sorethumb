@@ -892,7 +892,7 @@ def _run_group(
         raw = det.score_samples(X)  # higher = more normal
         flags = det.natural_flag(raw)
 
-        cal = Calibrator(mode="self")
+        cal = Calibrator()
         cal.fit(raw)
 
         det_instances[det_name] = det

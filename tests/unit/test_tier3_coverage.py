@@ -542,13 +542,6 @@ def test_calibrate_reexecuted_under_coverage() -> None:
     importlib.reload(m)
 
 
-def test_calibrator_invalid_mode_raises() -> None:
-    from sorethumb.scoring.calibrate import Calibrator
-
-    with pytest.raises(ValueError, match="mode"):
-        Calibrator(mode="bad_mode")
-
-
 def test_calibrator_transform_before_fit_raises() -> None:
     from sorethumb.scoring.calibrate import Calibrator
 
@@ -576,39 +569,26 @@ def test_calibrator_constant_distribution_returns_half() -> None:
     assert np.allclose(result, 0.5)
 
 
-def test_calibrator_reference_mode_with_reference_scores() -> None:
+def test_calibrator_midrank_handles_reference_ties() -> None:
+    """Repeated reference values map to the middle of their band, not an endpoint."""
     from sorethumb.scoring.calibrate import Calibrator
 
-    c = Calibrator(mode="reference")
-    train = np.linspace(0.0, 1.0, 100)
-    ref = np.linspace(0.2, 0.8, 100)
-    c.fit(train, reference_scores=ref)
-    result = c.transform(train)
-    assert result.shape == train.shape
-    assert 0.0 <= result.min() <= result.max() <= 1.0
-
-
-def test_calibrator_reference_mode_no_reference_falls_back(caplog) -> None:
-    """mode='reference' with reference_scores=None falls back to train with a warning."""
-    import logging
-
-    from sorethumb.scoring.calibrate import Calibrator
-
-    c = Calibrator(mode="reference")
-    train = np.linspace(0.0, 1.0, 100)
-    with caplog.at_level(logging.WARNING, logger="sorethumb.scoring.calibrate"):
-        c.fit(train, reference_scores=None)
-    assert any("falling back" in r.message for r in caplog.records)
+    c = Calibrator()
+    # 60% of the reference is exactly 1.0.
+    c.fit(np.concatenate([np.linspace(0.0, 0.99, 400), np.full(600, 1.0)]))
+    at_tie = float(c.transform(np.array([1.0]))[0])
+    # ~0.4 below, ~0.6 equal -> F ~ 0.7 -> calibrated ~ 0.3.
+    assert abs(at_tie - 0.3) < 0.05
+    assert 0.0 < at_tie < 1.0
 
 
 def test_calibrator_to_dict_from_dict_round_trip() -> None:
     from sorethumb.scoring.calibrate import Calibrator
 
-    c = Calibrator(mode="self")
+    c = Calibrator()
     c.fit(np.linspace(0.0, 1.0, 100))
     d = c.to_dict()
     c2 = Calibrator.from_dict(d)
-    assert c2.mode == "self"
     result = c2.transform(np.array([0.5]))
     assert 0.0 <= float(result[0]) <= 1.0
 
