@@ -94,17 +94,39 @@ def _check_toml(body: str) -> str | None:
     return None
 
 
-def _cli_help(parts: list[str]) -> tuple[int, str]:
-    from typer.testing import CliRunner  # noqa: PLC0415
+def _command_options() -> dict[tuple[str, ...], set[str]]:
+    """{(subcommand[, subsubcommand]): {long option strings}} from the live Typer app.
+
+    Introspects the click command tree directly — parsing rendered ``--help`` is
+    unreliable because rich truncates option names at narrow terminal widths.
+    """
+    import typer  # noqa: PLC0415
 
     from sorethumb.cli import app  # noqa: PLC0415
 
-    res = CliRunner().invoke(app, [*parts, "--help"])
-    return res.exit_code, res.stdout
+    def _opts(cmd: object) -> set[str]:
+        out: set[str] = set()
+        for p in getattr(cmd, "params", []):
+            out.update(o for o in (*p.opts, *p.secondary_opts) if o.startswith("--"))
+        return out
+
+    root = typer.main.get_command(app)
+    table: dict[tuple[str, ...], set[str]] = {}
+    for name, cmd in getattr(root, "commands", {}).items():
+        sub = getattr(cmd, "commands", None)
+        if sub:  # a group like `config` / `workspace`
+            for subname, subcmd in sub.items():
+                table[name, subname] = _opts(subcmd) | _opts(cmd)
+        else:
+            table[(name,)] = _opts(cmd)
+    return table
 
 
 def _check_bash(body: str) -> list[str]:
     problems: list[str] = []
+    commands = _command_options()
+    groups = {path[0] for path in commands if len(path) == 2}
+
     for raw in body.splitlines():
         line = raw.strip()
         if line.startswith(("#", "cd ", "git ", "jq ")) or not line:
@@ -127,15 +149,13 @@ def _check_bash(body: str) -> list[str]:
         if sub in {"", "--version"}:
             continue
         # `config schema`, `workspace vacuum`, … are two-token subcommands.
-        parts = args[:2] if sub in {"config", "workspace"} and len(args) > 1 else args[:1]
-        code, help_text = _cli_help(parts)
-        if code != 0:
-            problems.append(f"`sorethumb {' '.join(parts)}` is not a valid command")
+        path = tuple(args[:2]) if sub in groups and len(args) > 1 else (sub,)
+        if path not in commands:
+            problems.append(f"`sorethumb {' '.join(path)}` is not a valid command")
             continue
-        flags = set(re.findall(r"--[a-z][a-z0-9-]+", help_text))
         for flag in re.findall(r"(?<!\S)(--[a-z][a-z0-9-]+)", cmd):
-            if flag not in flags:
-                problems.append(f"`sorethumb {' '.join(parts)}` has no {flag} option")
+            if flag not in commands[path]:
+                problems.append(f"`sorethumb {' '.join(path)}` has no {flag} option")
     return problems
 
 

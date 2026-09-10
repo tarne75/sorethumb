@@ -618,7 +618,19 @@ def run(
     log_level: _LOG_LEVEL_OPT = "INFO",
     seed: _SEED_OPT = None,
     strict: _STRICT_OPT = False,
-    dry_run: _DRY_RUN_OPT = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help=(
+                "Resolve the plan and register the run, but fit no models. "
+                "Still writes: the workspace + schema migrations, the dataset and "
+                "dataset_snapshot rows, and the run row (left in status 'running'). "
+                "Skips: the feature plan, detector models, per-group results, "
+                "history rows, and the report."
+            ),
+        ),
+    ] = False,
     force: Annotated[bool, typer.Option("--force", help="Re-run already-complete groups.")] = False,
     no_report: Annotated[bool, typer.Option("--no-report", help="Skip HTML report.")] = False,
     only_group: Annotated[
@@ -696,7 +708,14 @@ def run(
     if not json_output:
         console.print(f"[bold]sorethumb run[/bold]  workspace={cfg.run.workdir}")
         if dry_run:
-            console.print("[yellow]DRY RUN — nothing will be written.[/yellow]")
+            console.print(
+                "[yellow]DRY RUN[/yellow] — resolving the plan and registering the run; "
+                "no models are fitted.\n"
+                "  writes: workspace + schema migrations, the [cyan]dataset[/cyan] / "
+                "[cyan]dataset_snapshot[/cyan] rows, and the [cyan]run[/cyan] row "
+                "(status stays 'running').\n"
+                "  skips:  feature plan, detector models, per-group results, history rows, report."
+            )
 
     result: RunResult = run_detection(
         cfg,

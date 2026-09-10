@@ -230,6 +230,7 @@ _PROSE_DOCS = [
     "README.md",
     "docs/adapting-to-your-data.md",
     "docs/configuration-examples.md",
+    "docs/cli_reference.md",
     "docs/example-runs.md",
     "docs/models.md",
     "docs/index.md",

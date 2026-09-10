@@ -34,7 +34,7 @@ These options appear on most commands and behave identically everywhere:
 | `--seed INT` | | from config | Random seed; overrides `run.seed`. |
 | `--strict / --no-strict` | | off | Promote all library warnings to errors. |
 | `--json` | | off | Emit machine-readable JSON to stdout instead of a rich table. |
-| `--dry-run` | | off | Plan work and print what would happen without writing anything. |
+| `--dry-run` | | off | Print the planned work. For `backfill` / `workspace` this writes nothing; for `run` see its own row below. |
 
 ---
 
@@ -157,7 +157,7 @@ Groups that are already marked complete in the ledger are skipped unless
 | `--limit-groups INT` | — | Cap the number of groups processed (reserved for future use). |
 | `--detectors STR`, `-d` | — | Comma-separated detector aliases, replacing the config list. Aliases: `if`=isolation_forest · `km`=kmeans_distance · `oc`=one_class_svm · `ecod` · `lof` · `hbos`. Full names also accepted. Automatically updates `sorethumb.toml`. |
 | `--json` | off | Machine-readable JSON summary on stdout. |
-| `--dry-run` | off | Print planned work without writing anything. |
+| `--dry-run` | off | Resolve the plan and register the run, but fit no models. Still writes the workspace + schema migrations, the `dataset` / `dataset_snapshot` rows, and the `run` row (left in status `running`). Skips the feature plan, detector models, per-group results, history rows and the report. |
 
 ---
 
