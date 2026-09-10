@@ -298,18 +298,22 @@ class DetectorConfig(BaseModel):
         None,
         ge=1,
         description=(
-            "Subsample training data to at most this many rows. "
-            "None means use the full training set. "
-            "Detectors with quadratic complexity (SVM) need a low cap."
+            "Subsample the training data to at most this many rows before fitting "
+            "this detector. Unset uses the detector's built-in cap (isolation_forest "
+            "250000, kmeans_distance 200000, one_class_svm 25000, lof 50000, "
+            "ecod/hbos 500000). Set a value larger than your dataset to train on "
+            "every row."
         ),
     )
 
 
 def _default_detectors() -> list[DetectorConfig]:
+    # No explicit train_row_cap: each detector class owns its default
+    # (`default_train_row_cap`), so there is one source of truth.
     return [
-        DetectorConfig(name="isolation_forest", train_row_cap=250_000),
-        DetectorConfig(name="kmeans_distance", train_row_cap=200_000),
-        DetectorConfig(name="one_class_svm", train_row_cap=20_000),
+        DetectorConfig(name="isolation_forest"),
+        DetectorConfig(name="kmeans_distance"),
+        DetectorConfig(name="one_class_svm"),
     ]
 
 

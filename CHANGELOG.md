@@ -43,6 +43,15 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `detectors[*].train_row_cap` did nothing — the per-group fit loop always used
+  the detector class's `default_train_row_cap` and never read the config field,
+  so the Scale guide's "set `train_row_cap`" advice had no effect. The loop now
+  uses the configured cap when set, falling back to the class default. The three
+  contradictory OneClassSVM caps (config `_default_detectors()` said 20000, the
+  class and every doc said 25000) are reconciled onto the class value as the
+  single source of truth: `_default_detectors()` and the `sorethumb init` starter
+  no longer hard-code the numbers, and `train_row_cap` is now purely an override.
+  Its docstring drops the wrong "None means the full training set" (it never did).
 - Documentation reconciled against the code before a fresh clone reads it:
   `docs/configuration-examples.md` called `composite` the default combiner (it is
   `intersection`); `docs/adapting-to-your-data.md` gave `profiling.null_ratio_flag`

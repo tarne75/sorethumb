@@ -2,7 +2,7 @@
 
 Fields covered: run.max_rows, run.reuse_models, run.strict, run.slow_stage_seconds,
 explain.enabled, explain.kernel_shap, explain.permutation_importance, report.formats,
-report.open_after, report.rolling_windows, source.cache.
+report.open_after, report.rolling_windows, source.cache, detectors[*].train_row_cap.
 """
 
 from __future__ import annotations
@@ -101,6 +101,47 @@ def test_run_max_rows_emits_sample_truncated_warning(tmp_path: Path) -> None:
     csv = _write_csv(tmp_path / "d.csv", n_rows=120)
     with pytest.warns(SampleTruncatedWarning, match="run.max_rows"):
         run_detection(_cfg(csv, tmp_path / "ws", run_kwargs={"max_rows": 40}), no_report=True)
+
+
+# ---------------------------------------------------------------------------
+# detectors[*].train_row_cap
+# ---------------------------------------------------------------------------
+
+
+def _capture_fit_rowcount(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Record the row count each IsolationForest.fit sees."""
+    from sorethumb.detectors.isolation_forest import IsolationForestDetector
+
+    seen: list[int] = []
+    real = IsolationForestDetector.fit
+
+    def _spy(self, x, *, seed):
+        seen.append(len(x))
+        return real(self, x, seed=seed)
+
+    monkeypatch.setattr(IsolationForestDetector, "fit", _spy)
+    return seen
+
+
+def test_detector_train_row_cap_subsamples_training(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rows_fit = _capture_fit_rowcount(monkeypatch)
+    csv = _write_csv(tmp_path / "d.csv", n_rows=200)
+    dets = [DetectorConfig(name="isolation_forest", train_row_cap=50)]
+
+    result = run_detection(_cfg(csv, tmp_path / "ws", detectors=dets), no_report=True)
+    assert result.n_succeeded == 1
+    assert rows_fit == [50]  # honoured the configured cap, not all 200 rows
+
+
+def test_detector_train_row_cap_unset_uses_all_rows_below_the_builtin_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rows_fit = _capture_fit_rowcount(monkeypatch)
+    csv = _write_csv(tmp_path / "d.csv", n_rows=200)
+    dets = [DetectorConfig(name="isolation_forest")]  # no cap -> class default 250_000
+
+    run_detection(_cfg(csv, tmp_path / "ws", detectors=dets), no_report=True)
+    assert rows_fit == [200]
 
 
 # ---------------------------------------------------------------------------

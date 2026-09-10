@@ -342,7 +342,7 @@ sorethumb picks it up automatically at startup; use it in config by its `name`.
 | Dataset size | Recommended setup |
 | --- | --- |
 | < 100 k rows | All three detectors, default config |
-| 100 k – 1 M rows | Disable `one_class_svm` or set `train_row_cap = 20000` |
+| 100 k – 1 M rows | Disable `one_class_svm`, or set its `train_row_cap = 10000` (default 25 000) |
 | > 1 M rows | Set `run.max_rows` to subsample; enable `features.pca` |
 | > 2000 features | Enable `features.pca`; raises `FeatureWidthWarning` by default |
 

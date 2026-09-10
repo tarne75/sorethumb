@@ -383,14 +383,19 @@ def _detector_params_block(det_name: str, description: str) -> list[str]:
 
 
 def _starter_detectors_section(field_block: Callable[..., list[str]]) -> list[str]:
-    """Render the `[[detectors]]` blocks for the three default detectors."""
+    """Render the `[[detectors]]` blocks for the three default detectors.
+
+    ``train_row_cap`` is shown at each detector's built-in default (from the
+    registry) so the starter file reflects the effective cap without a second
+    hard-coded copy of the numbers.
+    """
     from sorethumb.config import DetectorConfig  # noqa: PLC0415
+    from sorethumb.detectors import registry  # noqa: PLC0415
 
     out = ["# Detectors run as an ensemble; add or remove [[detectors]] blocks freely."]
     for det in (
-        DetectorConfig(name="isolation_forest", train_row_cap=250_000),
-        DetectorConfig(name="kmeans_distance", train_row_cap=200_000),
-        DetectorConfig(name="one_class_svm", train_row_cap=20_000),
+        DetectorConfig(name=name, train_row_cap=registry[name].default_train_row_cap)
+        for name in ("isolation_forest", "kmeans_distance", "one_class_svm")
     ):
         out += ["", "[[detectors]]"]
         for i, (fname, fi) in enumerate(DetectorConfig.model_fields.items()):

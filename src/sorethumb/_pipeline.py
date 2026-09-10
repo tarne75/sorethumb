@@ -1030,10 +1030,17 @@ def _run_group(
             if isinstance(config.scoring.contamination, float):
                 params["nu"] = config.scoring.contamination
         det = registry[det_name](**params)
+        # Effective training cap: the per-detector `train_row_cap` from config
+        # when set, otherwise the detector class's built-in default.
+        cap = (
+            det_cfg.train_row_cap
+            if det_cfg is not None and det_cfg.train_row_cap is not None
+            else det.default_train_row_cap
+        )
         train_X = X
-        if det.default_train_row_cap and n_rows > det.default_train_row_cap:
+        if cap and n_rows > cap:
             rng = np.random.default_rng(config.run.seed)
-            idx = rng.choice(n_rows, det.default_train_row_cap, replace=False)
+            idx = rng.choice(n_rows, cap, replace=False)
             train_X = X[idx]
 
         det.fit(train_X, seed=config.run.seed)
