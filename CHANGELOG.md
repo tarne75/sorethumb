@@ -8,6 +8,16 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Ensemble bad-member guard. Before weighting or combining, `ScoreEnsemble`
+  drops any detector whose score *ranking* is anti-correlated with the ensemble
+  median (Spearman's rho < −0.15) — a member fighting the consensus rather than
+  adding a diverse-but-consistent view. Previously nothing measured any detector
+  against the others, so such a member voted (and, in `intersection`, could veto
+  every anomaly) with full weight. Runs for every weighting / combination, needs
+  ≥ 3 members, and won't drop more than `k − 2` (a run where most members look
+  bad means the consensus itself is unreliable). Dropped detectors are listed in
+  the `combine()` result's new `dropped_members` and appear in `weights` with
+  0.0; their per-detector score columns are still recorded.
 - `source.dataset_id`: a stable logical identity for a dataset, held constant
   across snapshots. All history (periods, per-group totals, runs) is now keyed on
   it. When unset it is derived from `source.uri` (`<file stem>-<12 hex of the

@@ -4,6 +4,16 @@ ScoreEnsemble takes multiple per-detector calibrated scores (each in [0, 1],
 higher = more anomalous) and combines them into a single final score plus a
 binary anomaly flag.
 
+Bad-member guard
+----------------
+Before weighting or combining, any detector whose score *ranking* is
+anti-correlated with the ensemble median (Spearman's rho < ``_ANTICORR_DROP``)
+is dropped from the combination — it is fighting the consensus rather than
+adding a diverse-but-consistent view. This runs for every weighting /
+combination strategy and needs at least three members. Dropped detectors are
+listed in the result's ``dropped_members`` and appear in ``weights`` with 0.0;
+their per-detector score columns are still recorded for inspection.
+
 Weighting strategies
 --------------------
 equal:
@@ -66,6 +76,26 @@ from typing import Any
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# Bad-member guard: a detector whose score ranking has Spearman's rho below this
+# against the per-row *median* rank of the other detectors is fighting the
+# consensus (not merely diverse) and is dropped from the combination. Applies
+# for every weighting / combination. Needs >= 3 members.
+_ANTICORR_DROP = -0.15
+
+
+def _spearman_ranks(score_matrix: np.ndarray) -> np.ndarray:
+    """Tie-safe average ranks of each column of *score_matrix*, shape (n, k)."""
+    from scipy.stats import rankdata  # noqa: PLC0415
+
+    return rankdata(score_matrix, axis=0)
+
+
+def _rho(a: np.ndarray, b: np.ndarray) -> float:
+    """Pearson correlation of *a* and *b*; 0.0 if either is constant."""
+    if a.std() == 0.0 or b.std() == 0.0:
+        return 0.0
+    return float(np.corrcoef(a, b)[0, 1])
 
 
 class ScoreEnsemble:
@@ -138,8 +168,9 @@ class ScoreEnsemble:
             "anomaly_flag": np.ndarray[bool], shape (n,)
             "threshold": float
             "contamination_used": float (the resolved contamination rate)
-            "weights": dict[str, float]
+            "weights": dict[str, float] (dropped members appear with weight 0.0)
             "is_auto_contamination": bool
+            "dropped_members": list[str] (detectors excluded by the bad-member guard)
 
         """
         names = list(scores.keys())
@@ -149,6 +180,23 @@ class ScoreEnsemble:
 
         n = len(next(iter(scores.values())))
         score_matrix = np.column_stack([scores[d] for d in names])  # shape (n, k)
+
+        # ── Bad-member guard ──────────────────────────────────────────────
+        # Drop any detector whose ranking is anti-correlated with the ensemble
+        # median before it can vote / be weighted. Runs regardless of the
+        # weighting or combination strategy.
+        keep_idx, dropped = self._screen_members(names, score_matrix)
+        if dropped:
+            logger.warning(
+                "ensemble guard: %s rank against the consensus median (Spearman rho < %.2f); "
+                "excluded from the combination.",
+                dropped,
+                _ANTICORR_DROP,
+            )
+            names = [names[i] for i in keep_idx]
+            score_matrix = score_matrix[:, keep_idx]
+            natural_flags = {d: natural_flags[d] for d in names}
+
         flag_matrix = np.column_stack([natural_flags[d].astype(float) for d in names])  # (n, k)
 
         weights = self._resolve_weights(names, score_matrix)
@@ -197,13 +245,18 @@ class ScoreEnsemble:
                 100.0 * anomaly_flag.mean(),
             )
 
+        weights_out = dict(zip(names, weights, strict=True))
+        for d in dropped:
+            weights_out[d] = 0.0
+
         return {
             "combined_score": combined,
             "anomaly_flag": anomaly_flag,
             "threshold": threshold,
             "contamination_used": contamination_used,
-            "weights": dict(zip(names, weights, strict=True)),
+            "weights": weights_out,
             "is_auto_contamination": is_auto,
+            "dropped_members": dropped,
         }
 
     # ------------------------------------------------------------------
@@ -226,6 +279,31 @@ class ScoreEnsemble:
 
         return self._agreement_weights(score_matrix)
 
+    @staticmethod
+    def _screen_members(names: list[str], score_matrix: np.ndarray) -> tuple[list[int], list[str]]:
+        """Return ``(kept_indices, dropped_names)`` for the bad-member guard.
+
+        A member is dropped when Spearman's rho between its ranking and the
+        per-row *median* rank of the other members is below ``_ANTICORR_DROP``.
+        Needs >= 3 members (with 2 you cannot say which one is the outlier) and
+        >= 3 rows; never drops more than ``k - 2`` (a run where most members
+        look bad means the "consensus" itself is unreliable — keep everything
+        and let the warning stand).
+        """
+        n, k = score_matrix.shape
+        if k < 3 or n < 3:
+            return list(range(k)), []
+
+        ranks = _spearman_ranks(score_matrix)
+        bad = [
+            i
+            for i in range(k)
+            if _rho(ranks[:, i], np.median(np.delete(ranks, i, axis=1), axis=1)) < _ANTICORR_DROP
+        ]
+        if len(bad) > k - 2:
+            return list(range(k)), []
+        return [i for i in range(k) if i not in bad], [names[i] for i in bad]
+
     def _agreement_weights(self, score_matrix: np.ndarray) -> np.ndarray:
         """Weight each detector by how well its ranking agrees with the consensus.
 
@@ -239,23 +317,16 @@ class ScoreEnsemble:
         all-"normal" majority and a detector that flagged *nothing* scored
         highest and got the largest weight.
         """
-        from scipy.stats import rankdata  # noqa: PLC0415
-
         n, k = score_matrix.shape
         if k == 1:
             return np.ones(1)
         if n < 2:
             return np.ones(k) / k
 
-        ranks = rankdata(score_matrix, axis=0)  # (n, k), tie-safe average ranks
-        w = np.zeros(k)
-        for i in range(k):
-            own = ranks[:, i]
-            others = np.delete(ranks, i, axis=1).mean(axis=1)  # consensus rank of the rest
-            # A constant-score detector carries no ranking signal → rho 0.
-            flat = own.std() == 0.0 or others.std() == 0.0
-            rho = 0.0 if flat else float(np.corrcoef(own, others)[0, 1])  # Pearson on ranks = Spearman
-            w[i] = max(rho, 0.0)
+        ranks = _spearman_ranks(score_matrix)  # (n, k), tie-safe average ranks
+        w = np.array(
+            [max(_rho(ranks[:, i], np.delete(ranks, i, axis=1).mean(axis=1)), 0.0) for i in range(k)]
+        )
 
         total = w.sum()
         if total == 0.0:
