@@ -22,6 +22,13 @@ Versioning: [Semantic Versioning](https://semver.org/).
   per-group results Parquet); defaults to the latest run. New public API
   `sorethumb.render_report_for_run(ws, run_id)`; `Store.get_run_group` and
   `store.results.results_path` back it.
+- CI doc-consistency gates. `docs/generate_config_docs.py --check` now also fails
+  on prose docs that reference an unknown `section.field`, state a config default
+  that no longer matches the schema, or contain a broken relative Markdown link.
+  New `docs/check_readme_snippets.py` (run by a `docs-snippets` CI job) executes
+  every fenced README block: `python` blocks run in a subprocess, `toml` config
+  fragments are validated against `Config`, and each `sorethumb <cmd>` / `--flag`
+  is checked against the live CLI.
 
 - `sorethumb score --from-run RUN_ID` is now real (it previously ignored
   `--from-run` and did a full fitted run). It loads the source run's persisted
@@ -36,6 +43,18 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Documentation reconciled against the code before a fresh clone reads it:
+  `docs/configuration-examples.md` called `composite` the default combiner (it is
+  `intersection`); `docs/adapting-to-your-data.md` gave `profiling.null_ratio_flag`
+  a default of `0.30` (it is `0.0`) and called `MemoryBudgetError` a "memory
+  warning"; the README described `run.max_memory_mb` as purely advisory when a
+  run whose *projected* feature-matrix size exceeds it aborts with
+  `MemoryBudgetError` before any fit; `docs/index.md` linked a non-existent
+  `architecture.md` and omitted `configuration-examples.md`; and the README
+  60-second quickstart forced KDDCup99's categorical byte columns into an
+  all-`Float64` Polars schema (`ComputeError`) — it now uses `as_frame=True` +
+  `pl.from_pandas`, decodes the bytes columns, and takes 20k rows so the run
+  finishes in about a minute.
 - Eleven documented config fields were inert — now wired, one behavioural test
   each (`tests/unit/test_config_wiring.py`):
   `run.max_rows` (deterministic head-truncation of the input + `SampleTruncatedWarning`),

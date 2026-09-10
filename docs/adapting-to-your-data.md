@@ -79,7 +79,7 @@ The defaults work well for most datasets. Common reasons to change them:
 | Situation | Setting to adjust |
 | --- | --- |
 | Many columns dropped for high nulls when you want to keep them | Raise `profiling.null_ratio_drop` (default 0.70) |
-| Missing-indicator columns appearing for columns that are only rarely null | Raise `profiling.null_ratio_flag` (default 0.30) |
+| Missing-indicator columns appearing for columns that are only rarely null | Raise `profiling.null_ratio_flag` (default 0.0 — any null emits an indicator) |
 | Low-cardinality IDs being used as features | Set `profiling.identifier_detection = "conservative"` (default) or `"off"` |
 | Free-text columns kept when they should be dropped | Lower `profiling.free_text_mean_length` (default 20.0) |
 
@@ -149,7 +149,7 @@ Common tuning loops:
 | No interesting patterns in the explanation table | Check if the relevant columns are being kept — run `sorethumb inspect` |
 | Explanations mention one-hot columns (`cat__A`) instead of the original | This is normal; the output aggregates them into `cat` |
 | Run is very slow | Set `detectors[2].enabled = false` for the SVM, or lower `train_row_cap` values |
-| Memory warning | Lower `run.max_rows` to subsample, or raise `run.max_memory_mb` |
+| `MemoryBudgetError` (projected feature matrix too large) | Lower `run.max_rows` to subsample, lower `features.one_hot_max_cardinality`, enable `features.pca`, or raise `run.max_memory_mb` |
 
 ---
 

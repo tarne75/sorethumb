@@ -119,7 +119,7 @@ so trivial changes do not invalidate cached artefacts.
 | `run.workdir` | str | **required** | Workspace root directory where all run artefacts are stored. |
 | `run.seed` | int | 42 | Global random seed for reproducible results. |
 | `run.strict` | bool | false | Promote all SorethumbWarnings to errors. Always active in the test suite. |
-| `run.max_memory_mb` | int | 8192 | Approximate RSS budget. Triggers MemoryBudgetError if exceeded mid-run. Set generously; the check is coarse. |
+| `run.max_memory_mb` | int | 8192 | Pre-flight cap on the projected feature-matrix size (rows x encoded columns x dtype bytes). A run whose estimate exceeds this aborts with MemoryBudgetError before any model is fitted. It is not a live RSS ceiling -- actual peak memory can still exceed the budget. |
 | `run.max_rows` | int \| null | null | Truncate the input to at most this many rows (after filtering). Triggers SampleTruncatedWarning. None uses all rows. |
 | `run.reuse_models` | bool | false | If a matching model artefact exists in workdir, skip retraining. Useful for score-forward runs. |
 | `run.retention_days` | int | 90 | Prune run artefacts older than this many days from workdir. |

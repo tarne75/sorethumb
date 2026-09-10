@@ -411,8 +411,10 @@ class RunConfig(BaseModel):
         8192,
         ge=256,
         description=(
-            "Approximate RSS budget. Triggers MemoryBudgetError if exceeded mid-run. "
-            "Set generously; the check is coarse."
+            "Pre-flight cap on the projected feature-matrix size "
+            "(rows x encoded columns x dtype bytes). A run whose estimate exceeds this "
+            "aborts with MemoryBudgetError before any model is fitted. It is not a live "
+            "RSS ceiling -- actual peak memory can still exceed the budget."
         ),
     )
     max_rows: int | None = Field(
