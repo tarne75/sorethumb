@@ -264,3 +264,15 @@ def test_config_and_source_config_constructable() -> None:
     sc = sorethumb.SourceConfig(uri="/tmp/test.csv")
     assert sc.uri == "/tmp/test.csv"
     assert sc.format == "auto"
+    assert sc.dataset_id is None
+
+
+def test_source_config_dataset_id_validation() -> None:
+    import pytest
+
+    import sorethumb
+
+    assert sorethumb.SourceConfig(uri="/tmp/x.csv", dataset_id="sales.eu-2024").dataset_id == "sales.eu-2024"
+    for bad in ("has space", "slash/id", "café", "x" * 129, ""):
+        with pytest.raises(ValueError, match="dataset_id"):
+            sorethumb.SourceConfig(uri="/tmp/x.csv", dataset_id=bad)

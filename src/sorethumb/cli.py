@@ -860,23 +860,12 @@ def backfill(
         from datetime import datetime  # noqa: PLC0415
 
         from sorethumb.history.periods import resolve_period  # noqa: PLC0415
-        from sorethumb.io.fingerprint import content_fingerprint, schema_fingerprint  # noqa: PLC0415
-        from sorethumb.io.source import resolve_source  # noqa: PLC0415
+        from sorethumb.io.fingerprint import logical_dataset_id  # noqa: PLC0415
 
-        cache_dir = ws.root / "cache" / "datasets"
-        local_path = resolve_source(cfg.source, cache_dir)
-        content_fp = content_fingerprint(local_path)
-
-        from sorethumb.io.nested import unnest_all  # noqa: PLC0415
-        from sorethumb.io.readers import read_frame  # noqa: PLC0415
-
-        lf = read_frame(local_path, cfg.source)
-        df_raw = lf.collect()
-        if cfg.source.max_nesting_depth > 0:
-            df_raw = unnest_all(df_raw, cfg.source.max_nesting_depth)
-
-        schema_fp = schema_fingerprint(df_raw)
-        dataset_fp = f"{content_fp[:32]}_{schema_fp[:16]}"
+        # History is keyed on the stable logical dataset id -- the same value
+        # run_detection will register -- so backfill's pending-period math does
+        # not depend on the current snapshot's content.
+        dataset_fp = logical_dataset_id(cfg.source.dataset_id, cfg.source.uri)
 
         ref = datetime.now(UTC)
         _, _, ref_label = resolve_period(ref, cfg.history.period_granularity, cfg.history.roll_non_business)
@@ -932,23 +921,11 @@ def history(
     _windows = windows or [1, 7, 14, 28]
 
     with Workspace.open(ws_path) as ws:
-        from sorethumb.io.fingerprint import content_fingerprint, schema_fingerprint  # noqa: PLC0415
-        from sorethumb.io.source import resolve_source  # noqa: PLC0415
+        from sorethumb.io.fingerprint import logical_dataset_id  # noqa: PLC0415
 
-        cache_dir = ws.root / "cache" / "datasets"
-        local_path = resolve_source(cfg.source, cache_dir)
-        content_fp = content_fingerprint(local_path)
-
-        from sorethumb.io.nested import unnest_all  # noqa: PLC0415
-        from sorethumb.io.readers import read_frame  # noqa: PLC0415
-
-        lf = read_frame(local_path, cfg.source)
-        df_raw = lf.collect()
-        if cfg.source.max_nesting_depth > 0:
-            df_raw = unnest_all(df_raw, cfg.source.max_nesting_depth)
-
-        schema_fp = schema_fingerprint(df_raw)
-        dataset_fp = f"{content_fp[:32]}_{schema_fp[:16]}"
+        # Trends are read straight from the ledger, keyed on the stable logical
+        # dataset id -- no need to touch the source file.
+        dataset_fp = logical_dataset_id(cfg.source.dataset_id, cfg.source.uri)
 
         from datetime import datetime  # noqa: PLC0415
 
@@ -1645,6 +1622,7 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
         "run_id": result.run_id,
         "dataset_uri": result.dataset_uri,
         "dataset_fp": result.dataset_fp,
+        "snapshot_fp": result.snapshot_fp,
         "period_label": result.period_label,
         "n_succeeded": result.n_succeeded,
         "n_skipped": result.n_skipped,

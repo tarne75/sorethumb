@@ -129,26 +129,57 @@ class Store:
         content_fingerprint: str,
         n_rows: int,
         n_cols: int,
+        snapshot_fp: str | None = None,
     ) -> None:
-        """Insert or update a dataset row, preserving first_seen."""
+        """Insert or update a dataset row and record the observed snapshot.
+
+        *dataset_fp* is the stable logical id. *snapshot_fp* identifies the
+        content+schema version seen on this call; the dataset row's
+        schema/content/n_rows/n_cols columns track the latest snapshot, while
+        ``dataset_snapshot`` keeps one row per version (``first_seen`` preserved).
+        Defaults to ``content[:32]_schema[:16]`` when not supplied.
+        """
         now = _now_utc()
+        snap = snapshot_fp or f"{content_fingerprint[:32]}_{schema_fingerprint[:16]}"
         self._conn.execute(
             """
             INSERT INTO dataset
                 (dataset_fp, source_uri, schema_fingerprint, content_fingerprint,
-                 n_rows, n_cols, first_seen, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 n_rows, n_cols, snapshot_fp, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(dataset_fp) DO UPDATE SET
                 source_uri = excluded.source_uri,
                 schema_fingerprint = excluded.schema_fingerprint,
                 content_fingerprint = excluded.content_fingerprint,
                 n_rows = excluded.n_rows,
                 n_cols = excluded.n_cols,
+                snapshot_fp = excluded.snapshot_fp,
                 last_seen = excluded.last_seen
             """,
-            (dataset_fp, source_uri, schema_fingerprint, content_fingerprint, n_rows, n_cols, now, now),
+            (dataset_fp, source_uri, schema_fingerprint, content_fingerprint, n_rows, n_cols, snap, now, now),
+        )
+        self._conn.execute(
+            """
+            INSERT INTO dataset_snapshot
+                (dataset_fp, snapshot_fp, schema_fingerprint, content_fingerprint,
+                 n_rows, n_cols, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(dataset_fp, snapshot_fp) DO UPDATE SET
+                n_rows = excluded.n_rows,
+                n_cols = excluded.n_cols,
+                last_seen = excluded.last_seen
+            """,
+            (dataset_fp, snap, schema_fingerprint, content_fingerprint, n_rows, n_cols, now, now),
         )
         self._conn.commit()
+
+    def dataset_snapshots(self, dataset_fp: str) -> list[dict[str, Any]]:
+        """All recorded snapshots for a logical dataset, oldest first."""
+        rows = self._conn.execute(
+            "SELECT * FROM dataset_snapshot WHERE dataset_fp=? ORDER BY first_seen, snapshot_fp",
+            (dataset_fp,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
     # run

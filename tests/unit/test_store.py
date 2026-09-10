@@ -193,13 +193,21 @@ def test_all_bundled_migrations_apply_cleanly(tmp_path):
     """Every shipped migration file applies without error and is recorded."""
     with Store(tmp_path / "m.db") as store:
         versions = {r[0] for r in store._conn.execute("SELECT version FROM schema_migration")}
-    assert versions == {1, 2, 3, 4}
+    assert versions == {1, 2, 3, 4, 5}
 
 
 def test_migration_003_adds_artifact_run_id_column(tmp_path):
     with Store(tmp_path / "m.db") as store:
         cols = {r[1] for r in store._conn.execute("PRAGMA table_info(artifact)")}
     assert "run_id" in cols
+
+
+def test_migration_005_adds_snapshot_table_and_column(tmp_path):
+    with Store(tmp_path / "m.db") as store:
+        cols = {r[1] for r in store._conn.execute("PRAGMA table_info(dataset)")}
+        tables = {r[0] for r in store._conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "snapshot_fp" in cols
+    assert "dataset_snapshot" in tables
 
 
 def test_store_second_open_no_duplicate_migration(tmp_path):
@@ -218,6 +226,22 @@ def test_store_dataset_upsert(tmp_path):
         s.upsert_dataset("fp1", "http://example.com", "sfp2", "cfp2", 2000, 12)
         row = s._conn.execute("SELECT * FROM dataset WHERE dataset_fp='fp1'").fetchone()
         assert row["n_rows"] == 2000  # updated
+
+
+def test_store_dataset_upsert_records_each_snapshot(tmp_path):
+    """A stable dataset_fp accumulates one dataset_snapshot row per content/schema version."""
+    with _open_ws(tmp_path) as ws:
+        s = ws.store
+        s.upsert_dataset("sales", "file:///d.parquet", "schemaA", "contentA", 1000, 10, snapshot_fp="snapA")
+        s.upsert_dataset("sales", "file:///d.parquet", "schemaA", "contentB", 1400, 10, snapshot_fp="snapB")
+        s.upsert_dataset("sales", "file:///d.parquet", "schemaA", "contentB", 1450, 10, snapshot_fp="snapB")
+
+        # one logical dataset row, pointing at the most recent snapshot
+        datasets = s._conn.execute("SELECT dataset_fp, snapshot_fp, n_rows FROM dataset").fetchall()
+        assert [tuple(r) for r in datasets] == [("sales", "snapB", 1450)]
+
+        snaps = s.dataset_snapshots("sales")
+        assert [(x["snapshot_fp"], x["n_rows"]) for x in snaps] == [("snapA", 1000), ("snapB", 1450)]
 
 
 def test_store_run_insert_and_status(tmp_path):

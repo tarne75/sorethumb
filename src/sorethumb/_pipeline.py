@@ -34,7 +34,12 @@ from sorethumb.explain.blend import blend
 from sorethumb.explain.project import aggregate_to_original, top_n_reasons
 from sorethumb.features.build import apply_feature_plan, fit_features
 from sorethumb.features.space import FeatureSpace
-from sorethumb.io.fingerprint import content_fingerprint, schema_fingerprint
+from sorethumb.io.fingerprint import (
+    content_fingerprint,
+    logical_dataset_id,
+    schema_fingerprint,
+    snapshot_fingerprint,
+)
 from sorethumb.io.nested import unnest_all
 from sorethumb.io.readers import read_frame
 from sorethumb.io.source import resolve_source
@@ -87,6 +92,9 @@ class RunResult:
     started_at: str
     finished_at: str
     warnings_issued: list[str] = field(default_factory=list)
+    # Content+schema fingerprint of the snapshot this run saw. dataset_fp is the
+    # stable logical id; snapshot_fp versions it.
+    snapshot_fp: str = ""
 
     # Convenience helpers
 
@@ -327,7 +335,10 @@ def run_detection(
 
         content_fp = content_fingerprint(local_path)
         schema_fp = schema_fingerprint(df_raw)
-        dataset_fp = f"{content_fp[:32]}_{schema_fp[:16]}"
+        # Logical identity is stable across snapshots so history is not orphaned
+        # when rows are appended; snapshot_fp versions the bytes actually seen.
+        dataset_fp = logical_dataset_id(config.source.dataset_id, config.source.uri)
+        snapshot_fp = snapshot_fingerprint(content_fp, schema_fp)
 
         ws.store.upsert_dataset(
             dataset_fp=dataset_fp,
@@ -336,6 +347,7 @@ def run_detection(
             content_fingerprint=content_fp,
             n_rows=len(df_raw),
             n_cols=len(df_raw.columns),
+            snapshot_fp=snapshot_fp,
         )
 
         # ── 2. Period resolution + window filter ────────────────────────
@@ -347,7 +359,7 @@ def run_detection(
         # run_id is derived deterministically so that a repeat call with identical
         # dataset + config + period finds the same ledger entries and can skip
         # already-complete groups (resume behaviour).
-        run_id = _make_run_id(dataset_fp, config.config_hash(), period_label)
+        run_id = _make_run_id(dataset_fp, config.config_hash(), period_label, snapshot_fp)
         config_json = config.model_dump_json()
         ws.store.insert_run(
             run_id=run_id,
@@ -369,6 +381,7 @@ def run_detection(
                 run_id=run_id,
                 dataset_uri=config.source.uri,
                 dataset_fp=dataset_fp,
+                snapshot_fp=snapshot_fp,
                 config_hash=config.config_hash(),
                 period_label=period_label,
                 workspace_path=ws_path,
@@ -467,6 +480,7 @@ def run_detection(
             run_id=run_id,
             dataset_uri=config.source.uri,
             dataset_fp=dataset_fp,
+            snapshot_fp=snapshot_fp,
             config_hash=config.config_hash(),
             period_label=period_label,
             workspace_path=ws_path,
@@ -484,15 +498,22 @@ def run_detection(
 
 
 def _make_score_run_id(
-    dataset_fp: str, config_hash: str, period_label: str | None, source_run_id: str
+    dataset_fp: str,
+    snapshot_fp: str | None,
+    config_hash: str,
+    period_label: str | None,
+    source_run_id: str,
 ) -> str:
     """Deterministic id for a score-forward run.
 
     Distinct from a fitted run's id (``score_`` vs ``run_`` prefix) and keyed on
-    the source run, so re-scoring the same new data against the same source is
-    idempotent.
+    the source run and the new data's snapshot, so re-scoring the same new data
+    against the same source is idempotent while a changed snapshot re-scores.
     """
-    key = f"{dataset_fp}:{config_hash}:{period_label or '__no_period__'}:{source_run_id}"
+    key = (
+        f"{dataset_fp}:{snapshot_fp or '__no_snapshot__'}:{config_hash}:"
+        f"{period_label or '__no_period__'}:{source_run_id}"
+    )
     return "score_" + hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
@@ -560,7 +581,8 @@ def score_forward(
 
         content_fp = content_fingerprint(local_path)
         schema_fp = schema_fingerprint(df_raw)
-        dataset_fp = f"{content_fp[:32]}_{schema_fp[:16]}"
+        dataset_fp = logical_dataset_id(config.source.dataset_id, config.source.uri)
+        snapshot_fp = snapshot_fingerprint(content_fp, schema_fp)
         ws.store.upsert_dataset(
             dataset_fp=dataset_fp,
             source_uri=config.source.uri,
@@ -568,15 +590,18 @@ def score_forward(
             content_fingerprint=content_fp,
             n_rows=len(df_raw),
             n_cols=len(df_raw.columns),
+            snapshot_fp=snapshot_fp,
         )
 
         # ── Period resolution + window filter (same rules as run_detection) ──
-        # score-forward does not write history: its dataset_fp is the *new*
-        # data's and its numbers come from a reused model, not a period compute.
+        # score-forward does not write history: its numbers come from a reused
+        # model, not a period compute.
         df_raw, period_label, _ = _resolve_and_filter_period(df_raw, config, period_label_override)
 
         # ── Register the score-forward run ──────────────────────────────
-        new_run_id = _make_score_run_id(dataset_fp, config.config_hash(), period_label, source_run_id)
+        new_run_id = _make_score_run_id(
+            dataset_fp, snapshot_fp, config.config_hash(), period_label, source_run_id
+        )
         ws.store.insert_run(
             run_id=new_run_id,
             dataset_fp=dataset_fp,
@@ -641,6 +666,7 @@ def score_forward(
             run_id=new_run_id,
             dataset_uri=config.source.uri,
             dataset_fp=dataset_fp,
+            snapshot_fp=snapshot_fp,
             config_hash=config.config_hash(),
             period_label=period_label,
             workspace_path=ws_path,
@@ -657,13 +683,18 @@ def score_forward(
 # ---------------------------------------------------------------------------
 
 
-def _make_run_id(dataset_fp: str, config_hash: str, period_label: str | None) -> str:
-    """Stable run identifier derived from dataset content, config, and period.
+def _make_run_id(
+    dataset_fp: str, config_hash: str, period_label: str | None, snapshot_fp: str | None = None
+) -> str:
+    """Stable run identifier derived from dataset identity, snapshot, config, and period.
 
     Same inputs always produce the same ID, so a repeat invocation can find
     prior ledger entries and skip already-complete groups (resume behaviour).
+    ``snapshot_fp`` is part of the key so a changed source snapshot yields a
+    fresh run rather than resuming against stale results -- while period /
+    totals history stays keyed on the stable ``dataset_fp`` alone.
     """
-    key = f"{dataset_fp}:{config_hash}:{period_label or '__no_period__'}"
+    key = f"{dataset_fp}:{snapshot_fp or '__no_snapshot__'}:{config_hash}:{period_label or '__no_period__'}"
     return "run_" + hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
