@@ -12,10 +12,12 @@ manual:
     User supplies a dict mapping detector name → weight. Weights are
     normalised to sum to 1.0 before use.
 agreement:
-    Weight each detector by the fraction of all detectors that agree with its
-    natural_flag on each row, averaged over the dataset. Agreement weights
-    reward detectors whose flags are consistent with the ensemble, penalising
-    outlier detectors that fire on rows the others consider normal.
+    Weight each detector by how well its *ranking* agrees with the consensus:
+    Spearman's rho between the detector's calibrated scores and the mean rank
+    of every other detector (leave-one-out). Negative correlations and
+    constant-score detectors get weight 0; if nothing correlates, weights fall
+    back to equal. Only meaningful with ``combination="composite"`` — the
+    set operations ignore weights.
 
 Combination strategies
 ----------------------
@@ -102,6 +104,13 @@ class ScoreEnsemble:
         if isinstance(contamination, float) and not (0.0 < contamination < 1.0):
             msg = f"contamination float must be in (0, 1); got {contamination}"
             raise ValueError(msg)
+        if weighting != "equal" and combination != "composite":
+            logger.warning(
+                "weighting=%r has no effect with combination=%r — weights only "
+                "apply to 'composite'; the set operation ignores them.",
+                weighting,
+                combination,
+            )
 
         self._weighting = weighting
         self._combination = combination
@@ -142,7 +151,7 @@ class ScoreEnsemble:
         score_matrix = np.column_stack([scores[d] for d in names])  # shape (n, k)
         flag_matrix = np.column_stack([natural_flags[d].astype(float) for d in names])  # (n, k)
 
-        weights = self._resolve_weights(names, flag_matrix)
+        weights = self._resolve_weights(names, score_matrix)
         combined = self._combine(score_matrix, weights)
 
         if self._combination in ("intersection", "union"):
@@ -201,7 +210,7 @@ class ScoreEnsemble:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _resolve_weights(self, names: list[str], flag_matrix: np.ndarray) -> np.ndarray:
+    def _resolve_weights(self, names: list[str], score_matrix: np.ndarray) -> np.ndarray:
         k = len(names)
         if self._weighting == "equal":
             return np.ones(k) / k
@@ -215,18 +224,47 @@ class ScoreEnsemble:
                 return np.ones(k) / k
             return w / total
 
-        # agreement: weight by average agreement fraction
-        # For each detector d, agreement(d) = fraction of rows where flag_matrix[:,d]
-        # matches the majority vote across all other detectors.
+        return self._agreement_weights(score_matrix)
+
+    def _agreement_weights(self, score_matrix: np.ndarray) -> np.ndarray:
+        """Weight each detector by how well its ranking agrees with the consensus.
+
+        For detector *i*, take Spearman's rho between its calibrated-score ranking
+        and the mean rank of every *other* detector (leave-one-out). Negative
+        correlations and constant-score detectors get weight 0; if nothing
+        correlates, weights fall back to equal.
+
+        This replaces the old raw-flag-agreement rule: at realistic contamination
+        almost no row is flagged, so every detector was compared against an
+        all-"normal" majority and a detector that flagged *nothing* scored
+        highest and got the largest weight.
+        """
+        from scipy.stats import rankdata  # noqa: PLC0415
+
+        n, k = score_matrix.shape
         if k == 1:
             return np.ones(1)
-
-        majority = (flag_matrix.mean(axis=1) >= 0.5).astype(float)  # (n,)
-        agreement_rates = np.array([float(np.mean(flag_matrix[:, i] == majority)) for i in range(k)])
-        total = agreement_rates.sum()
-        if total == 0:
+        if n < 2:
             return np.ones(k) / k
-        return agreement_rates / total
+
+        ranks = rankdata(score_matrix, axis=0)  # (n, k), tie-safe average ranks
+        w = np.zeros(k)
+        for i in range(k):
+            own = ranks[:, i]
+            others = np.delete(ranks, i, axis=1).mean(axis=1)  # consensus rank of the rest
+            # A constant-score detector carries no ranking signal → rho 0.
+            flat = own.std() == 0.0 or others.std() == 0.0
+            rho = 0.0 if flat else float(np.corrcoef(own, others)[0, 1])  # Pearson on ranks = Spearman
+            w[i] = max(rho, 0.0)
+
+        total = w.sum()
+        if total == 0.0:
+            logger.warning(
+                "agreement weighting: no detector's ranking correlates with the "
+                "consensus; falling back to equal weights."
+            )
+            return np.ones(k) / k
+        return w / total
 
     def _combine(self, score_matrix: np.ndarray, weights: np.ndarray) -> np.ndarray:
         if self._combination == "composite":

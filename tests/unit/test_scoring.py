@@ -305,9 +305,64 @@ def test_manual_weights_all_zero_fallback():
 
 def test_agreement_weights_normalised():
     scores, flags = _make_scores_flags()
-    ens = ScoreEnsemble(weighting="agreement", contamination=0.1)
+    ens = ScoreEnsemble(weighting="agreement", combination="composite", contamination=0.1)
     result = ens.combine(scores, flags)
     assert abs(sum(result["weights"].values()) - 1.0) < 1e-9
+
+
+def test_agreement_downweights_the_ranking_outlier():
+    """Two detectors that rank alike keep most of the weight; a noise detector gets little."""
+    rng = np.random.default_rng(0)
+    base = rng.uniform(0.0, 1.0, 300)
+    scores = {
+        "det_a": base,
+        "det_b": np.clip(base + rng.normal(0, 0.03, 300), 0, 1),  # agrees with det_a
+        "det_noise": rng.uniform(0.0, 1.0, 300),  # independent ranking
+    }
+    flags = {k: v > 0.9 for k, v in scores.items()}
+    ens = ScoreEnsemble(weighting="agreement", combination="composite", contamination=0.05)
+    w = ens.combine(scores, flags)["weights"]
+
+    assert w["det_noise"] < w["det_a"]
+    assert w["det_noise"] < w["det_b"]
+    assert w["det_a"] + w["det_b"] > 0.8
+
+
+def test_agreement_gives_a_detector_that_flags_nothing_no_weight():
+    """A flat/constant-score detector carries no ranking signal -> weight ~0 (was: highest)."""
+    rng = np.random.default_rng(1)
+    a = rng.uniform(0.0, 1.0, 200)
+    scores = {
+        "det_a": a,
+        "det_b": np.clip(a + rng.normal(0, 0.02, 200), 0, 1),
+        "det_flat": np.full(200, 0.5),  # flags nothing, constant score
+    }
+    flags = {"det_a": a > 0.9, "det_b": a > 0.9, "det_flat": np.zeros(200, dtype=bool)}
+    ens = ScoreEnsemble(weighting="agreement", combination="composite", contamination=0.05)
+    w = ens.combine(scores, flags)["weights"]
+
+    assert w["det_flat"] == pytest.approx(0.0, abs=1e-9)
+    assert w["det_a"] > 0.3
+    assert w["det_b"] > 0.3
+
+
+def test_agreement_falls_back_to_equal_when_nothing_correlates():
+    # b and c both rank opposite to a; each detector then anti-correlates with
+    # (or is orthogonal to) the mean rank of the other two -> every rho <= 0.
+    x = np.linspace(0.0, 1.0, 400)
+    scores = {"a": x.copy(), "b": 1.0 - x, "c": 1.0 - x}
+    flags = {k: v > 0.98 for k, v in scores.items()}
+    ens = ScoreEnsemble(weighting="agreement", combination="composite", contamination=0.05)
+    w = ens.combine(scores, flags)["weights"]
+    assert all(v == pytest.approx(1 / 3) for v in w.values())
+
+
+def test_weighting_ignored_with_non_composite_combination_warns(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="sorethumb.scoring.combine"):
+        ScoreEnsemble(weighting="agreement", combination="intersection")
+    assert any("no effect" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
