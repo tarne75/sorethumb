@@ -10,7 +10,11 @@ from sorethumb.detectors._protocol import check_protocol
 from sorethumb.detectors.ecod import ECODDetector
 from sorethumb.detectors.hbos import HBOSDetector, _auto_bins
 from sorethumb.detectors.isolation_forest import IsolationForestDetector
-from sorethumb.detectors.kmeans_distance import KMeansDetector, _elbow_index
+from sorethumb.detectors.kmeans_distance import (
+    KMeansDetector,
+    _elbow_index,
+    _nearest_large_centroid,
+)
 from sorethumb.detectors.lof import LOFDetector
 from sorethumb.detectors.one_class_svm import OneClassSVMDetector
 from sorethumb.errors import ConfigError, DetectorError, SlowStageWarning
@@ -315,6 +319,40 @@ def test_kmeans_cblof_scores_anomaly_cluster_lower():
         "Anomaly cluster scored at least as high as the median inlier — "
         "CBLOF fix may not be working correctly."
     )
+
+
+def test_nearest_large_centroid_matches_naive_broadcast():
+    """The chunk-free distance path must equal the (n, k, d) broadcast it replaced."""
+    rng = np.random.default_rng(7)
+    X = rng.normal(size=(500, 12))
+    centres = rng.normal(size=(5, 12))
+
+    dist = np.linalg.norm(X[:, None, :] - centres[None, :, :], axis=2)
+    exp_idx = np.argmin(dist, axis=1)
+    exp_min = dist[np.arange(len(X)), exp_idx]
+
+    idx, dmin = _nearest_large_centroid(X, centres)
+    np.testing.assert_array_equal(idx, exp_idx)
+    np.testing.assert_allclose(dmin, exp_min, rtol=1e-9, atol=1e-9)
+
+
+def test_nearest_large_centroid_never_allocates_the_n_k_d_tensor():
+    """Peak numpy allocation must scale with n*k, not n*k*d (the OOM cause)."""
+    import tracemalloc
+
+    rng = np.random.default_rng(0)
+    n, k, d = 20_000, 6, 200  # naive tensor would be n*k*d*8 = 192 MiB
+    X = rng.normal(size=(n, d))
+    centres = rng.normal(size=(k, d))
+
+    tracemalloc.start()
+    tracemalloc.reset_peak()
+    _nearest_large_centroid(X, centres)
+    peak_mib = tracemalloc.get_traced_memory()[1] / 2**20
+    tracemalloc.stop()
+
+    naive_tensor_mib = n * k * d * 8 / 2**20
+    assert peak_mib < naive_tensor_mib / 4, f"peak {peak_mib:.0f} MiB ~ the (n,k,d) tensor"
 
 
 def test_kmeans_large_centroids_populated_after_fit():

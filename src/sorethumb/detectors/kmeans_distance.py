@@ -42,6 +42,23 @@ _DEFAULT_LARGE_COVERAGE = 0.90
 _CURATED = frozenset({"k", "k_min", "k_max", "n_init", "large_cluster_coverage"})
 
 
+def _nearest_large_centroid(X: np.ndarray, centres: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(nearest_idx, distance_to_nearest)`` for every row of *X*.
+
+    Uses ``sklearn.metrics.pairwise.euclidean_distances``, which forms the
+    ``(n, n_large)`` distance matrix directly via ``||a||^2 + ||b||^2 - 2 a.b``.
+    The previous broadcast ``X[:, None, :] - centres[None, :, :]`` materialised
+    the ``(n, n_large, d)`` difference tensor first — about ``d`` times larger
+    (~2 GB at 1M rows x 5 centroids x 50 features) and the source of an OOM on
+    wide, large inputs.
+    """
+    from sklearn.metrics.pairwise import euclidean_distances  # noqa: PLC0415
+
+    dist = euclidean_distances(X, centres)  # (n, n_large)
+    nearest = np.argmin(dist, axis=1)
+    return nearest, dist[np.arange(len(X)), nearest]
+
+
 class KMeansDetector:
     """sklearn KMeans wrapped to satisfy the Detector protocol.
 
@@ -153,13 +170,10 @@ class KMeansDetector:
         assert self._large_centroids is not None, "fit() must be called before score_samples()"
         centres = self._large_centroids
 
-        # Distance from each point to each large centroid: shape (n, n_large)
-        # Using broadcasting: X[:, None, :] - centres[None, :, :]
-        diffs_all = X[:, np.newaxis, :] - centres[np.newaxis, :, :]  # (n, n_large, d)
-        dist_all = np.linalg.norm(diffs_all, axis=2)  # (n, n_large)
-
-        nearest_idx = np.argmin(dist_all, axis=1)  # (n,)
-        distances = dist_all[np.arange(len(X)), nearest_idx]  # (n,)
+        # Distance from each point to each large centroid, then the nearest.
+        # euclidean_distances builds only the (n, n_large) matrix — never the
+        # (n, n_large, d) difference tensor. See _nearest_large_centroid.
+        nearest_idx, distances = _nearest_large_centroid(X, centres)
 
         # Store for explanation layer: contributions against the nearest large centroid
         self.last_labels = nearest_idx

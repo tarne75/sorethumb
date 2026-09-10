@@ -43,6 +43,14 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `kmeans_distance` (CBLOF) scoring OOM'd on wide/large inputs. `score_samples`
+  and `centroid_attributions` built the `(n, n_large, d)` difference tensor
+  (`X[:, None, :] - centres[None, :, :]`) — ~2 GB at 1M rows × 5 centroids × 50
+  features, before taking the norm. Both now call a shared
+  `_nearest_large_centroid` helper backed by
+  `sklearn.metrics.pairwise.euclidean_distances`, which forms only the
+  `(n, n_large)` distance matrix. Numerically identical (argmin unchanged,
+  distances match to float round-off); benchmark accuracy floors are unmoved.
 - `detectors[*].train_row_cap` did nothing — the per-group fit loop always used
   the detector class's `default_train_row_cap` and never read the config field,
   so the Scale guide's "set `train_row_cap`" advice had no effect. The loop now
