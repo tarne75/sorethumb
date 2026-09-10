@@ -161,7 +161,10 @@ If you have historical data and a time column, backfill the ledger:
 sorethumb backfill --config sorethumb.toml --max-periods 90
 ```
 
-This fills missing periods up to the configured maximum, using the most recent
-run's models for calibration consistency.
+This fills missing periods up to the configured maximum. Each period is fitted
+and self-calibrated independently, so the trend chart shows relative movement
+period to period rather than an absolute anomaly level on one scale. For a
+single-scale trend, score each period against one fixed run with
+`sorethumb score --from-run RUN_ID`.
 
 After backfill, the trend chart in the HTML report will show the full history.

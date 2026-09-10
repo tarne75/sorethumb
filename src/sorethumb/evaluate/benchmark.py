@@ -306,7 +306,7 @@ def run_benchmark(cfg: BenchmarkConfig | None = None) -> list[BenchmarkRow]:
                 score_secs = time.perf_counter() - t1
 
                 # Calibrate: higher = more anomalous
-                cal = Calibrator(mode="self")
+                cal = Calibrator()
                 cal.fit(raw_scores)
                 calibrated = cal.transform(raw_scores)
 

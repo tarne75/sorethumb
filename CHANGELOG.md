@@ -66,6 +66,13 @@ Versioning: [Semantic Versioning](https://semver.org/).
   the stable logical `dataset_id`; the content+schema fingerprint is recorded
   per snapshot instead (see Added). `sorethumb backfill` / `sorethumb history` no
   longer read the source file at all — they resolve identity from config.
+- `Calibrator.transform` tie handling: it interpolated (`np.interp`) over the
+  10 000-point quantile grid, which is undefined on the flat segments a
+  repeated reference value produces — a tied score could land anywhere in its
+  band. It now uses an explicit mid-rank empirical CDF
+  (`(#{ref < s} + 0.5·#{ref == s}) / n` via `searchsorted`), so a tied value
+  maps to the midpoint of its band. Monotonicity and the constant-reference →
+  0.5 guard are unchanged.
 
 ### Changed
 
@@ -77,6 +84,17 @@ Versioning: [Semantic Versioning](https://semver.org/).
   snapshot produces a fresh run (no resume against stale results) while period /
   totals history keys on the stable `dataset_id` alone. `config_hash` excludes
   `source.dataset_id` (an organisational label, not a result-affecting param).
+- `Calibrator` is self-calibration only. The `mode="reference"` path
+  (`__init__(mode=...)`, `fit(reference_scores=...)`) was unreachable —
+  `run_detection` hardcoded `mode="self"` and `ScoringConfig` had no field to
+  select otherwise — so it is removed. `to_dict` no longer emits `"mode"`;
+  `from_dict` ignores it in payloads written by older versions.
+- README differentiators #2 / #4 and the `sorethumb backfill` help + docs
+  corrected: `backfill` fits and self-calibrates each period independently, so a
+  `sorethumb history` trend reflects *relative* period-to-period movement, not an
+  absolute anomaly level on one scale. `sorethumb score --from-run RUN_ID` stays
+  the single-scale cross-run path. (No prior release claimed otherwise in a
+  shipped changelog; `[0.1.0]` is not yet tagged.)
 
 ### Compatibility
 

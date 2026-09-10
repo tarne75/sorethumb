@@ -42,10 +42,15 @@ There are already good anomaly-detection libraries (PyOD ships far more detector
 machinery those libraries leave to the user:
 
 1. **Zero-configuration column handling** — profile, classify, encode, impute, derive.
-2. **Ensemble scoring with calibrated, comparable scores** across runs.
+2. **Ensemble scoring with percentile-calibrated scores.** Each run maps its raw
+   detector scores onto [0, 1] against its own training distribution. Scores are
+   comparable *across* runs only when a fitted calibrator is reused —
+   `sorethumb score --from-run RUN_ID` — since a plain run self-calibrates.
 3. **Per-record explanations** in original feature terms, labelled exact or heuristic.
-4. **Run history that is actually valid** — persisted models and score calibration so
-   trend lines don't conflate model change with data change.
+4. **Run history you can reason about** — models and calibrators are persisted, so a
+   `score --from-run` trend line moves with the data, not with a refitted model. A
+   plain `backfill` refits each period; its trend shows relative movement, not an
+   absolute drift level (see limitations).
 5. **Idempotent, resumable execution** with a completion ledger.
 
 It runs on a single machine, uses Polars throughout, and has no dependency on Spark,
@@ -348,8 +353,12 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
 - The composite score is an interpretable ranking score, not a calibrated probability.
 - Only Isolation Forest yields exact (TreeSHAP) attributions; all others are heuristic
   (centroid distance or input gradient). See [docs/explanations.md](docs/explanations.md).
-- Self-calibrated runs are not strictly comparable to each other — use
-  `sorethumb score --from-run RUN_ID` for cross-run trends.
+- Self-calibration maps every run's scores to roughly uniform on [0, 1] by
+  construction, so two independently-fitted runs — including the per-period runs
+  `sorethumb backfill` produces — are not on a common scale. A `sorethumb history`
+  trend surfaces *relative* change (which groups/records move, period to period),
+  not an absolute level of "how anomalous is this period". For a trend on one
+  fixed scale, reuse a fitted run: `sorethumb score --from-run RUN_ID`.
 - Unsupervised anomaly ≠ the thing you care about. The library ranks statistical oddity;
   whether an odd record is *interesting* is a domain judgement it cannot make.
 

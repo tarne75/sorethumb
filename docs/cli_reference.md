@@ -328,7 +328,7 @@ sorethumb history --group store_42
 
 ## `sorethumb backfill`
 
-Fill missing historical periods using the most recent run's persisted models.
+Fill missing historical periods by running detection once per pending period.
 Skipped automatically when no `time_column` is configured.
 
 ```bash
@@ -338,9 +338,11 @@ sorethumb backfill --force-period 2026-08-01    # recompute a specific period
 sorethumb backfill --max-periods 14             # cap depth
 ```
 
-By default, reuses the most recent run's models (equivalent to `--reuse-models`)
-so trend scores are comparable across backfilled periods. Emits a warning and
-falls back to self-calibration when no source run exists.
+Each pending period is fitted and scored independently (a full `sorethumb run`
+for that period's window) and self-calibrated. The resulting `sorethumb history`
+trend therefore shows *relative* period-to-period movement, not an absolute
+anomaly level on a shared scale — for that, score every period against one fixed
+run with `sorethumb score --from-run RUN_ID`.
 
 **Options:**
 
