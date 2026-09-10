@@ -56,10 +56,11 @@ def centroid_attributions(
         msg = "centroid_attributions requires fit() to have been called first."
         raise ValueError(msg)
 
+    from sorethumb.detectors.kmeans_distance import _nearest_large_centroid  # noqa: PLC0415
+
     centres = detector.large_centroids  # (n_large, d)
-    # Distance from each point to each large centroid: (n, n_large)
-    diffs = X[:, np.newaxis, :] - centres[np.newaxis, :, :]
-    dist = np.linalg.norm(diffs, axis=2)
-    nearest = np.argmin(dist, axis=1)  # (n,)
+    # nearest large centroid per row, without the (n, n_large, d) difference
+    # tensor the old broadcast built (~d x larger; OOM on wide/large inputs).
+    nearest, _ = _nearest_large_centroid(X, centres)
     contributions = X - centres[nearest]  # signed (x - c_nearest), (n, d)
     return np.abs(contributions).astype(np.float64), "heuristic"
