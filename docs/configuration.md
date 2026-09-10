@@ -33,6 +33,7 @@ so trivial changes do not invalidate cached artefacts.
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `source.uri` | str | **required** | Local path or http(s) URL to the source file. |
+| `source.dataset_id` | str \| null | null | Stable logical identity for this dataset, kept constant across snapshots (appended rows, corrections, the file moving to a new path). All history -- periods, per-group totals, runs -- is keyed on it. When unset it is derived from 'uri'; set it explicitly so a change of path does not orphan prior history. Allowed characters: letters, digits, '.', '_', '-' (max 128). |
 | `source.format` | "auto" \| "csv" \| "tsv" \| "parquet" \| "json" \| "jsonl" \| "tsf" | "auto" | File format. 'auto' infers from the file extension. Set explicitly when the extension is misleading. |
 | `source.auth` | "none" \| "bearer" \| "basic" | "none" | HTTP authentication scheme. Token/credentials come from auth_env_var. |
 | `source.auth_env_var` | str \| null | null | Name of the environment variable that holds the auth credential. The value is read at runtime and never stored in the config or logs. |
