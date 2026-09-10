@@ -74,13 +74,18 @@ def write_results(
     return out_path
 
 
+def results_path(workspace: Workspace, run_id: str, group_key: str) -> Path:
+    """Return the result Parquet path for a (run_id, group_key), existing or not."""
+    return workspace.results_dir(run_id, group_key) / _RESULT_FILENAME
+
+
 def read_results(
     workspace: Workspace,
     run_id: str,
     group_key: str,
 ) -> pl.DataFrame | None:
     """Load the result Parquet for a (run_id, group_key), or None if absent."""
-    path = workspace.results_dir(run_id, group_key) / _RESULT_FILENAME
+    path = results_path(workspace, run_id, group_key)
     if not path.exists():
         return None
     return pl.read_parquet(str(path))

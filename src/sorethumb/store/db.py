@@ -303,6 +303,14 @@ class Store:
         ).fetchone()
         return str(row["status"]) if row else None
 
+    def get_run_group(self, run_id: str, group_key: str) -> dict[str, Any] | None:
+        """Return one run_group row, or None if not recorded."""
+        row = self._conn.execute(
+            "SELECT * FROM run_group WHERE run_id=? AND group_key=?",
+            (run_id, group_key),
+        ).fetchone()
+        return dict(row) if row else None
+
     def completed_groups(self, run_id: str) -> list[str]:
         """Return group_key values that reached status='complete' for this run."""
         rows = self._conn.execute(

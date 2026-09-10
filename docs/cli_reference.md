@@ -265,8 +265,11 @@ sorethumb show abc12345 --json
 
 ## `sorethumb report [run_id]`
 
-Re-render HTML/CSV/JSON reports from already-persisted results without
-recomputing inference. Useful after changing `[report]` configuration.
+Rebuild a run's `reports/<run_id>/index.html` (and its per-group CSV siblings)
+from the persisted config, FeaturePlan and per-group results Parquet — no
+inference is re-run. Use it after changing `[report]` configuration, or to
+restore a report that was deleted. Re-rendering the same run reproduces the
+same file.
 
 ```bash
 sorethumb report              # re-render the latest run

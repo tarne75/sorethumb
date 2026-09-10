@@ -309,6 +309,65 @@ def test_resume_skips_completed_group(tmp_path: Path) -> None:
     )
 
 
+def test_repeat_run_does_not_blank_the_report(tmp_path: Path) -> None:
+    """A resumed run (every group skipped) must re-render the same report, not an empty one."""
+    csv = tmp_path / "data.csv"
+    _make_planted_csv(csv, n_normal=200, n_anomaly=5, seed=0)
+    workdir = tmp_path / "ws"
+    cfg = _minimal_config(csv, workdir, contamination=0.03)
+
+    r1 = run_detection(cfg, no_report=False)
+    assert r1.n_anomalies > 0
+    assert r1.report_path is not None
+    assert r1.report_path.exists()
+    html1 = r1.report_path.read_text(encoding="utf-8")
+    csvs1 = sorted(r1.report_path.parent.glob("*.csv"))
+    assert any(p.stat().st_size > 0 for p in csvs1), "first run wrote a non-empty group CSV"
+    assert "No anomalies flagged." not in html1, "first report has a real records table"
+
+    r2 = run_detection(cfg, no_report=False)
+    assert r2.run_id == r1.run_id
+    assert r2.n_succeeded == 0
+    assert r2.n_skipped >= 1
+    # Skipped-group summaries carry the persisted counts + results path forward.
+    assert r2.n_anomalies == r1.n_anomalies
+    assert r2.groups[0].results_path is not None
+    assert r2.groups[0].results_path.exists()
+
+    assert r2.report_path is not None
+    html2 = r2.report_path.read_text(encoding="utf-8")
+    assert "No anomalies flagged." not in html2, "re-rendered report still has the records table"
+    assert html2 == html1, "resumed run reproduced the report byte-for-byte instead of blanking it"
+
+
+def test_render_report_for_run_rebuilds_a_deleted_report(tmp_path: Path) -> None:
+    """render_report_for_run recreates index.html + group CSVs purely from persisted state."""
+    from sorethumb import Workspace, render_report_for_run
+
+    csv = tmp_path / "data.csv"
+    _make_planted_csv(csv, n_normal=200, n_anomaly=5, seed=1)
+    workdir = tmp_path / "ws"
+    cfg = _minimal_config(csv, workdir, contamination=0.03)
+
+    r1 = run_detection(cfg, no_report=False)
+    assert r1.report_path is not None
+    report_dir = r1.report_path.parent
+    original = r1.report_path.read_text(encoding="utf-8")
+
+    # Nuke the rendered artefacts; the DB + results Parquet are untouched.
+    for p in report_dir.iterdir():
+        p.unlink()
+
+    with Workspace.open(workdir) as ws:
+        out = render_report_for_run(ws, r1.run_id)
+        assert render_report_for_run(ws, "run_does_not_exist") is None
+
+    assert out is not None
+    assert out.exists()
+    assert out.read_text(encoding="utf-8") == original
+    assert list(report_dir.glob("*.csv"))  # group CSV siblings rebuilt too
+
+
 # ---------------------------------------------------------------------------
 # Phase 4 → fit/apply schema stability
 # ---------------------------------------------------------------------------

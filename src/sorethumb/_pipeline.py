@@ -48,7 +48,7 @@ from sorethumb.report.html import GroupSection, RunMeta, render_report
 from sorethumb.scoring.calibrate import Calibrator
 from sorethumb.scoring.combine import ScoreEnsemble
 from sorethumb.store.models import load_plan, save_model, save_plan, score_with_existing
-from sorethumb.store.results import write_results
+from sorethumb.store.results import read_results, results_path, write_results
 from sorethumb.store.workspace import Workspace, make_group_key
 
 logger = logging.getLogger(__name__)
@@ -473,7 +473,7 @@ def run_detection(
         # ── 8. Render report ─────────────────────────────────────────────
         report_path: Path | None = None
         if not no_report and group_results:
-            report_path = _render_run_report(ws, run_id, config, plan, group_results)
+            report_path = render_report_for_run(ws, run_id)
 
         finished_at = datetime.now(UTC).isoformat()
         return RunResult(
@@ -660,7 +660,7 @@ def score_forward(
 
         report_path: Path | None = None
         if not no_report and group_results:
-            report_path = _render_run_report(ws, new_run_id, config, plan, group_results)
+            report_path = render_report_for_run(ws, new_run_id)
 
         return RunResult(
             run_id=new_run_id,
@@ -755,6 +755,32 @@ def _group_summary(
     )
 
 
+def _completed_group_summary(
+    ws: Workspace, run_id: str, group_key: str, group_label: str, n_records: int
+) -> GroupSummary:
+    """Rebuild the summary for a group already marked ``complete`` in the ledger.
+
+    A resumed run does not re-execute a completed group, but its anomaly count
+    and persisted results path still have to reach the report and the
+    ``RunResult`` -- otherwise a repeat of the same deterministic ``run_id``
+    re-renders the report with every group empty and overwrites a good one.
+    """
+    row = ws.store.get_run_group(run_id, group_key)
+    n_anom = int(row["anomaly_count"]) if row and row["anomaly_count"] is not None else 0
+    rate = row["rate"] if row and row["rate"] is not None else None
+    rec = int(row["record_count"]) if row and row["record_count"] is not None else n_records
+    rpath = results_path(ws, run_id, group_key)
+    return _group_summary(
+        group_key,
+        group_label,
+        rec,
+        status="skipped",
+        n_anomalies=n_anom,
+        anomaly_rate=rate,
+        results_path=rpath if rpath.exists() else None,
+    )
+
+
 def _execute_group(
     ws: Workspace,
     run_id: str,
@@ -776,7 +802,7 @@ def _execute_group(
     gv_json = json.dumps(group_values)
 
     if not force and ws.store.group_status(run_id, group_key) == "complete":
-        return _group_summary(group_key, group_label, n_records, status="skipped")
+        return _completed_group_summary(ws, run_id, group_key, group_label, n_records)
 
     ws.store.upsert_run_group(
         run_id=run_id,
@@ -1228,58 +1254,67 @@ def _compute_attributions(
 # ---------------------------------------------------------------------------
 
 
-def _render_run_report(
-    ws: Workspace,
-    run_id: str,
-    config: Config,
-    plan: FeaturePlan,
-    group_results: list[GroupSummary],
-) -> Path | None:
+def render_report_for_run(ws: Workspace, run_id: str) -> Path | None:
+    """Render (or re-render) the HTML report for *run_id* from persisted state.
+
+    Everything is read from the store and the per-group results Parquet files --
+    never from in-memory run state -- so this is safe to call after a resumed
+    run (where every group is skipped) and is what backs ``sorethumb report``.
+    A repeat of the same deterministic ``run_id`` therefore reproduces the same
+    report instead of blanking it.
+
+    Returns the ``index.html`` path, or ``None`` if the run is unknown or
+    rendering fails (logged, never raised).
+    """
+    run_row = ws.store.get_run(run_id)
+    if run_row is None:
+        logger.warning("render_report_for_run: unknown run_id %r.", run_id)
+        return None
+
     try:
         import sorethumb as _st  # noqa: PLC0415
 
+        config = Config.model_validate_json(run_row["config_json"])
         meta = RunMeta(
             run_id=run_id,
             dataset_uri=config.source.uri,
-            dataset_fp="",
-            config_hash=config.config_hash(),
-            seed=config.run.seed,
-            library_version=_st.__version__,
-            python_version=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-            config_json=config.model_dump_json(),
-            started_at=datetime.now(UTC).isoformat(),
+            dataset_fp=run_row.get("dataset_fp") or "",
+            config_hash=run_row.get("config_hash") or config.config_hash(),
+            seed=int(run_row.get("seed") or config.run.seed),
+            library_version=run_row.get("library_version") or _st.__version__,
+            python_version=run_row.get("python_version")
+            or f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            config_json=run_row["config_json"],
+            started_at=run_row.get("started_at") or "",
         )
 
-        group_sections: list[GroupSection] = []
-        for gsummary in group_results:
-            if gsummary.results_path and gsummary.results_path.exists():
-                from sorethumb.store.results import read_results  # noqa: PLC0415
-
-                _rdf = read_results(ws, run_id, gsummary.group_key)
-                records_df = _rdf if _rdf is not None else pl.DataFrame()
-            else:
-                records_df = pl.DataFrame()
-
+        try:
+            plan = load_plan(ws, run_id)
             dropped = [
                 {"column": d.column, "reason": d.reason, "class": d.col_class.value}
                 for d in (plan.decisions or [])
                 if d.treatment.value == "drop"
             ]
+        except StoreError:
+            dropped = []  # score-forward runs (and pre-persistence runs) keep no plan
 
+        group_sections: list[GroupSection] = []
+        for grow in sorted(ws.store.all_run_groups(run_id), key=lambda r: str(r["group_label"])):
+            gk = str(grow["group_key"])
+            rdf = read_results(ws, run_id, gk)
             group_sections.append(
                 GroupSection(
-                    group_key=gsummary.group_key,
-                    group_label=gsummary.group_label,
-                    records=records_df,
+                    group_key=gk,
+                    group_label=str(grow["group_label"]),
+                    records=rdf if rdf is not None else pl.DataFrame(),
                     plan_dropped=dropped,
                 )
             )
 
-        report_dir = ws.root / "reports" / run_id
-        return render_report(meta, group_sections, report_dir)
+        return render_report(meta, group_sections, ws.root / "reports" / run_id)
 
     except Exception:
-        logger.warning("Report rendering failed; skipping.", exc_info=True)
+        logger.warning("Report rendering failed for run %s; skipping.", run_id, exc_info=True)
         return None
 
 
