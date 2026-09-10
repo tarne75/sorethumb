@@ -196,8 +196,9 @@ def generate() -> str:
         "## Config hash",
         "",
         "`Config.config_hash()` is a 32-character hex digest that covers all",
-        "result-affecting fields. Cosmetic fields (`run.log_level`,",
-        "`run.slow_stage_seconds`, and the entire `[report]` section) are excluded",
+        "result-affecting fields. Cosmetic or execution-only fields (`run.workdir`,",
+        "`run.log_level`, `run.slow_stage_seconds`, `run.reuse_models`,",
+        "`source.dataset_id`, and the entire `[report]` section) are excluded",
         "so trivial changes do not invalidate cached artefacts.",
         "",
     ]

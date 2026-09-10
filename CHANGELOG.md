@@ -36,6 +36,23 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Eleven documented config fields were inert — now wired, one behavioural test
+  each (`tests/unit/test_config_wiring.py`):
+  `run.max_rows` (deterministic head-truncation of the input + `SampleTruncatedWarning`),
+  `run.reuse_models` (score with a persisted model for the group+detector instead
+  of refitting; also dropped from `config_hash` as an execution-only knob),
+  `run.strict` (promotes every `SorethumbWarning` — including in-group ones — to a
+  failure via `warnings.filterwarnings("error", …)`),
+  `run.slow_stage_seconds` (`SlowStageWarning` around the load and feature-fit
+  stages and per group, not just the OCSVM fit),
+  `explain.enabled` (skips attribution entirely),
+  `explain.kernel_shap` (routes non-tree detectors to KernelSHAP),
+  `explain.permutation_importance` (runs an extra per-detector cross-check),
+  `report.formats` (selects `html` / `csv` / `json`; new `index.json` writer),
+  `report.open_after` (opens the report via `webbrowser`),
+  `report.rolling_windows` (default windows for `sorethumb history`),
+  `source.cache` (`false` returns a single overwritten `uncached_data.*` and
+  never writes a fingerprint-keyed cache dir).
 - Model persistence: a group's `calibrator.json` and `manifest.json` were not
   namespaced by detector, so in a multi-detector group the second `save_model`
   overwrote the first's calibrator and manifest. `load_model` /

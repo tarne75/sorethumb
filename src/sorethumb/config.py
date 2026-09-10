@@ -533,12 +533,15 @@ class Config(BaseModel):
     def config_hash(self) -> str:
         """32-char (128-bit) hex hash covering only result-affecting fields.
 
-        Excludes run.workdir, run.log_level, run.slow_stage_seconds, source.dataset_id,
-        and the entire report section so purely cosmetic changes don't bust artefact caches.
+        Excludes run.workdir, run.log_level, run.slow_stage_seconds, run.reuse_models,
+        source.dataset_id, and the entire report section so purely cosmetic or
+        execution-only changes don't bust artefact caches.
         """
         d = self.model_dump()
         run = d["run"]
-        for key in ("workdir", "log_level", "slow_stage_seconds"):
+        # reuse_models is an execution knob (reuse a fitted model vs refit it with
+        # the same seed → equivalent result), not a result-affecting parameter.
+        for key in ("workdir", "log_level", "slow_stage_seconds", "reuse_models"):
             run.pop(key, None)
         # dataset_id is an organisational label (which logical dataset history
         # files under), not a result-affecting parameter -- exclude it so adding
