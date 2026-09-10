@@ -108,9 +108,7 @@ class Calibrator:
     def to_dict(self) -> dict[str, object]:
         """Serialise to a plain dict (JSON-compatible)."""
         return {
-            "quantile_values": self._quantile_values.tolist()
-            if self._quantile_values is not None
-            else None,
+            "quantile_values": self._quantile_values.tolist() if self._quantile_values is not None else None,
         }
 
     @classmethod

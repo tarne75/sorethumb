@@ -94,7 +94,9 @@ def test_calibrator_from_dict_ignores_legacy_mode_key():
     d = c.to_dict()
     d["mode"] = "reference"  # written by an older sorethumb version
     c2 = Calibrator.from_dict(d)
-    np.testing.assert_allclose(c.transform(np.arange(100, dtype=float)), c2.transform(np.arange(100, dtype=float)))
+    np.testing.assert_allclose(
+        c.transform(np.arange(100, dtype=float)), c2.transform(np.arange(100, dtype=float))
+    )
 
 
 def test_calibrator_constant_scores_returns_half():
