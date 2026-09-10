@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -24,6 +25,16 @@ class SourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     uri: str = Field(description="Local path or http(s) URL to the source file.")
+    dataset_id: str | None = Field(
+        None,
+        description=(
+            "Stable logical identity for this dataset, kept constant across snapshots "
+            "(appended rows, corrections, the file moving to a new path). All history "
+            "-- periods, per-group totals, runs -- is keyed on it. When unset it is "
+            "derived from 'uri'; set it explicitly so a change of path does not orphan "
+            "prior history. Allowed characters: letters, digits, '.', '_', '-' (max 128)."
+        ),
+    )
     format: Literal["auto", "csv", "tsv", "parquet", "json", "jsonl", "tsf"] = Field(
         "auto",
         description=(
@@ -58,6 +69,18 @@ class SourceConfig(BaseModel):
         ge=0,
         description="Maximum recursion depth for struct unnesting. 0 disables unnesting.",
     )
+
+    @field_validator("dataset_id")
+    @classmethod
+    def _validate_dataset_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", v):
+            raise ValueError(
+                "dataset_id must be 1-128 chars of letters, digits, '.', '_' or '-' "
+                "(no spaces or path separators)"
+            )
+        return v
 
 
 class ColumnsConfig(BaseModel):
@@ -510,13 +533,17 @@ class Config(BaseModel):
     def config_hash(self) -> str:
         """32-char (128-bit) hex hash covering only result-affecting fields.
 
-        Excludes run.workdir, run.log_level, run.slow_stage_seconds, and the
-        entire report section so purely cosmetic changes don't bust artefact caches.
+        Excludes run.workdir, run.log_level, run.slow_stage_seconds, source.dataset_id,
+        and the entire report section so purely cosmetic changes don't bust artefact caches.
         """
         d = self.model_dump()
         run = d["run"]
         for key in ("workdir", "log_level", "slow_stage_seconds"):
             run.pop(key, None)
+        # dataset_id is an organisational label (which logical dataset history
+        # files under), not a result-affecting parameter -- exclude it so adding
+        # or changing it does not bust the per-detector model cache.
+        d.get("source", {}).pop("dataset_id", None)
         d.pop("report", None)
         serialised = json.dumps(d, sort_keys=True, default=str)
         return hashlib.sha256(serialised.encode()).hexdigest()[:32]

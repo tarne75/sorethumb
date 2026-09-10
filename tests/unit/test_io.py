@@ -9,7 +9,12 @@ import polars as pl
 import pytest
 
 from sorethumb.errors import ColumnDroppedWarning, SchemaError, SourceError
-from sorethumb.io.fingerprint import content_fingerprint, schema_fingerprint
+from sorethumb.io.fingerprint import (
+    content_fingerprint,
+    logical_dataset_id,
+    schema_fingerprint,
+    snapshot_fingerprint,
+)
 from sorethumb.io.nested import derive_array_features, unnest_all
 from sorethumb.io.readers import read_frame
 from sorethumb.io.source import resolve_source
@@ -57,6 +62,43 @@ def test_content_fingerprint_different_content(tmp_path: Path) -> None:
     p1.write_bytes(b"aaa")
     p2.write_bytes(b"bbb")
     assert content_fingerprint(p1) != content_fingerprint(p2)
+
+
+# ---------------------------------------------------------------------------
+# Logical dataset identity vs. snapshot identity
+# ---------------------------------------------------------------------------
+
+
+def test_logical_dataset_id_prefers_configured_value() -> None:
+    assert logical_dataset_id("sales-eu", "/data/whatever.parquet") == "sales-eu"
+
+
+def test_logical_dataset_id_derived_is_stable_and_readable() -> None:
+    a = logical_dataset_id(None, "/srv/data/sales.parquet")
+    b = logical_dataset_id(None, "/srv/data/sales.parquet")
+    assert a == b
+    assert a.startswith("sales-")
+
+
+def test_logical_dataset_id_derived_distinguishes_same_basename() -> None:
+    eu = logical_dataset_id(None, "/srv/eu/sales.parquet")
+    us = logical_dataset_id(None, "/srv/us/sales.parquet")
+    assert eu != us
+    assert eu.startswith("sales-")
+    assert us.startswith("sales-")
+
+
+def test_logical_dataset_id_ignores_query_string() -> None:
+    plain = logical_dataset_id(None, "https://host/data/sales.parquet")
+    signed = logical_dataset_id(None, "https://host/data/sales.parquet?sig=abc123&exp=999")
+    assert plain == signed
+
+
+def test_snapshot_fingerprint_tracks_content_and_schema() -> None:
+    base = snapshot_fingerprint("c" * 64, "s" * 64)
+    assert base == snapshot_fingerprint("c" * 64, "s" * 64)
+    assert base != snapshot_fingerprint("d" * 64, "s" * 64)  # content changed
+    assert base != snapshot_fingerprint("c" * 64, "t" * 64)  # schema changed
 
 
 # ---------------------------------------------------------------------------

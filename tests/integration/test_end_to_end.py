@@ -476,3 +476,67 @@ def test_period_run_records_history_ledger(tmp_path: Path) -> None:
         assert iter_pending_periods(ws.store, dataset_fp, ["2024-01-15", "2024-01-16"]) == [
             "2024-01-16"
         ]
+
+
+def _write_days_parquet(path: Path, *, days: list[str], per_day: int = 80, seed: int = 0) -> None:
+    """Write ``per_day`` rows for each ISO day in *days*; row 3 of each day is a +999 anomaly."""
+    rng = np.random.default_rng(seed)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ids: list[int] = []
+    ts: list[datetime] = []
+    num_a: list[float] = []
+    for d, day in enumerate(days):
+        base = datetime.fromisoformat(day).replace(tzinfo=UTC) + timedelta(hours=8)
+        col = rng.normal(0.0, 1.0, per_day).tolist()
+        col[3] = 999.0
+        for r in range(per_day):
+            ids.append(d * per_day + r)
+            ts.append(base + timedelta(minutes=r))
+            num_a.append(col[r])
+    pl.DataFrame(
+        {
+            "id": ids,
+            "ts": pl.Series(ts).dt.cast_time_unit("us"),
+            "num_a": num_a,
+            "num_b": rng.normal(5.0, 2.0, len(ids)).tolist(),
+        }
+    ).write_parquet(str(path))
+
+
+def test_appending_a_snapshot_keeps_dataset_identity_and_history(tmp_path: Path) -> None:
+    """Appending a day of rows must not orphan the previous period's history."""
+    from sorethumb.history.ledger import iter_pending_periods
+    from sorethumb.store.workspace import Workspace
+
+    parquet = tmp_path / "growing.parquet"
+    workdir = tmp_path / "ws"
+    cfg = _period_config(parquet, workdir)
+
+    # Snapshot 1: only 2024-01-15 exists. Process that period.
+    _write_days_parquet(parquet, days=["2024-01-15"])
+    r1 = run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+
+    # Snapshot 2: 2024-01-16 appended. Process the new period.
+    _write_days_parquet(parquet, days=["2024-01-15", "2024-01-16"])
+    r2 = run_detection(cfg, period_label_override="2024-01-16", no_report=True)
+
+    # Logical identity is unchanged; the snapshot fingerprint moved.
+    assert r1.dataset_fp == r2.dataset_fp
+    assert r1.snapshot_fp
+    assert r2.snapshot_fp
+    assert r1.snapshot_fp != r2.snapshot_fp
+    assert r1.run_id != r2.run_id  # snapshot_fp is part of the run id
+
+    with Workspace.open(workdir) as ws:
+        dfp = r2.dataset_fp
+        # Both periods' totals live under the one logical dataset — nothing orphaned.
+        labels = {
+            r["period_label"]
+            for r in ws.store.totals_for_periods(dfp, ["2024-01-15", "2024-01-16"])
+        }
+        assert labels == {"2024-01-15", "2024-01-16"}
+        assert iter_pending_periods(ws.store, dfp, ["2024-01-15", "2024-01-16"]) == []
+
+        # Both snapshots are recorded against the same dataset_fp.
+        snaps = {s["snapshot_fp"] for s in ws.store.dataset_snapshots(dfp)}
+        assert snaps == {r1.snapshot_fp, r2.snapshot_fp}

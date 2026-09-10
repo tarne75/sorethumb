@@ -8,6 +8,15 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `source.dataset_id`: a stable logical identity for a dataset, held constant
+  across snapshots. All history (periods, per-group totals, runs) is now keyed on
+  it. When unset it is derived from `source.uri` (`<file stem>-<12 hex of the
+  path>`, query strings ignored). New `io.fingerprint.logical_dataset_id` /
+  `snapshot_fingerprint`; `RunResult` / `sorethumb run --json` gain `snapshot_fp`.
+- `dataset_snapshot` table (migration 005): one row per observed content+schema
+  version of a dataset, with `first_seen` / `last_seen`. `dataset.snapshot_fp`
+  points at the most recent. `Store.dataset_snapshots(dataset_fp)` lists them.
+
 - `sorethumb score --from-run RUN_ID` is now real (it previously ignored
   `--from-run` and did a full fitted run). It loads the source run's persisted
   FeaturePlan and, per group, its per-detector models and calibrators; applies
@@ -50,6 +59,13 @@ Versioning: [Semantic Versioning](https://semver.org/).
   groups are left untouched. `score_forward` deliberately does not write history.
 - `sorethumb backfill` now creates the workspace if it does not exist yet
   (matching `sorethumb run`), instead of failing with a `StoreError`.
+- Dataset identity was the full-content+schema fingerprint
+  (`content[:32]_schema[:16]`), so appending a day of rows to the source started
+  a brand-new dataset and orphaned every prior `period` / `totals` / `run` row —
+  backfill re-bootstrapped from scratch each time the file grew. Identity is now
+  the stable logical `dataset_id`; the content+schema fingerprint is recorded
+  per snapshot instead (see Added). `sorethumb backfill` / `sorethumb history` no
+  longer read the source file at all — they resolve identity from config.
 
 ### Changed
 
@@ -57,6 +73,20 @@ Versioning: [Semantic Versioning](https://semver.org/).
   ensemble→threshold→explain→write tail are factored into shared helpers
   (`_execute_group`, `_finalize_group`) used by both `run_detection` and
   `score_forward`, so the two paths cannot diverge.
+- `run_id` derivation now folds in the snapshot fingerprint, so a changed source
+  snapshot produces a fresh run (no resume against stale results) while period /
+  totals history keys on the stable `dataset_id` alone. `config_hash` excludes
+  `source.dataset_id` (an organisational label, not a result-affecting param).
+
+### Compatibility
+
+- One-time re-baseline for existing workspaces: the first run after upgrading
+  computes the new logical `dataset_id`, which will not match the old
+  content+schema `dataset_fp`, so history recorded before the upgrade stays under
+  the old key and is not visible to `sorethumb history` / backfill for the new
+  id. Migration 005 seeds `dataset_snapshot` from existing `dataset` rows so
+  their snapshot history is preserved. Set `source.dataset_id` explicitly to pin
+  identity going forward.
 
 ## [0.1.0] - 2026-09-09
 
