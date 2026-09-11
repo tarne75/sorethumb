@@ -25,12 +25,13 @@ import numpy as np
 import polars as pl
 
 from sorethumb.config import Config
-from sorethumb.errors import MemoryBudgetError, NonFiniteWarning
+from sorethumb.errors import MemoryBudgetError, NonFiniteWarning, PlanError
 from sorethumb.features.correlate import drop_correlated
 from sorethumb.features.encode import build_encoding_exprs, compute_demotions
 from sorethumb.features.reduce import apply_pca, fit_pca
 from sorethumb.features.scale import apply_scaler, fit_scaler
 from sorethumb.features.space import FeatureSpace
+from sorethumb.io.fingerprint import schema_fingerprint
 from sorethumb.profiling.plan import FeaturePlan
 
 logger = logging.getLogger(__name__)
@@ -141,17 +142,38 @@ def apply_feature_plan(df: pl.DataFrame, plan: FeaturePlan) -> FeatureSpace:
     Use for score-forward runs: load the plan, call this, compare feature_schema_hash
     to the training run's hash — a mismatch means the feature space changed and the
     persisted model cannot be safely reused.
+
+    Raises PlanError immediately if *df*'s raw column names/dtypes do not match
+    the schema the plan was fitted on (``plan.schema_fingerprint``). Every
+    encoding/scaling artefact below is keyed by column name, not validated by
+    dtype at apply time — a drifted column does not necessarily error; it can
+    silently mis-encode, or (see ``apply_scaler``) land unscaled in the feature
+    matrix. Same schema (names + dtypes) is required; different *values* for
+    those columns — the normal score-forward case — is exactly what this
+    fingerprint does not object to.
     """
+    fp = schema_fingerprint(df)
+    if fp != plan.schema_fingerprint:
+        msg = (
+            f"apply_feature_plan: input schema fingerprint {fp!r} does not match "
+            f"the fitted plan's {plan.schema_fingerprint!r}. The source schema has "
+            "drifted (a column was added, removed, renamed, or changed dtype) "
+            "since the plan was fitted -- re-fit rather than reuse this plan."
+        )
+        raise PlanError(msg)
+
     if plan.chosen_time_column and plan.chosen_time_column in df.columns:
         df = df.sort(plan.chosen_time_column)
 
     row_ids = np.arange(len(df), dtype=np.int64)
 
     enc_df = _encode(df, plan, plan.demoted_columns, None)
-    scaled_df = apply_scaler(enc_df, plan.scaler_params, enc_df.columns)
     if plan.correlation_drop_list:
-        keep = [c for c in scaled_df.columns if c not in plan.correlation_drop_list]
-        scaled_df = scaled_df.select(keep)
+        # Drop before scaling, mirroring fit_features: when correlation reduction
+        # ran, plan.scaler_params was refit on exactly the surviving columns, so
+        # a dropped column never has (and doesn't need) a fitted scale param.
+        enc_df = enc_df.select([c for c in enc_df.columns if c not in plan.correlation_drop_list])
+    scaled_df = apply_scaler(enc_df, plan.scaler_params, enc_df.columns)
 
     feature_names = scaled_df.columns
     matrix = _to_matrix(scaled_df, plan.output_dtype)

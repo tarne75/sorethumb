@@ -472,6 +472,91 @@ def test_apply_feature_plan_with_pca():
     np.testing.assert_array_almost_equal(fit_space.matrix, apply_space.matrix, decimal=5)
 
 
+def test_apply_feature_plan_with_correlated_columns_dropped():
+    """Regression: a column plan.correlation_drop_list removes must not need a
+    scaler param (it never reaches the matrix) — apply must not raise for it."""
+    df = _make_cat_df()
+    config = _make_config(correlation_reduction=True, correlation_threshold=0.5)
+    plan = build_feature_plan(df, config)
+    fit_features(df, plan, config)
+    assert plan.correlation_drop_list, "fixture must actually exercise correlation dropping"
+    apply_space = apply_feature_plan(df, plan)  # must not raise
+    assert not (set(plan.correlation_drop_list) & set(apply_space.feature_names))
+
+
+# ---------------------------------------------------------------------------
+# apply_feature_plan: schema-drift guard
+# ---------------------------------------------------------------------------
+
+
+def test_apply_feature_plan_raises_on_dtype_drift():
+    """A column that changed dtype since the plan was fitted must be rejected,
+    not silently mis-encoded or scored unscaled."""
+    df = _make_cat_df()
+    config = _make_config()
+    plan = build_feature_plan(df, config)
+    fit_features(df, plan, config)
+
+    drifted = df.with_columns(pl.col("num").cast(pl.Int32))
+    with pytest.raises(PlanError, match="schema fingerprint"):
+        apply_feature_plan(drifted, plan)
+
+
+def test_apply_feature_plan_raises_on_column_added():
+    df = _make_cat_df()
+    config = _make_config()
+    plan = build_feature_plan(df, config)
+    fit_features(df, plan, config)
+
+    drifted = df.with_columns(pl.lit(1.0).alias("new_col"))
+    with pytest.raises(PlanError, match="schema fingerprint"):
+        apply_feature_plan(drifted, plan)
+
+
+def test_apply_feature_plan_raises_on_column_removed():
+    df = _make_cat_df()
+    config = _make_config()
+    plan = build_feature_plan(df, config)
+    fit_features(df, plan, config)
+
+    drifted = df.drop("num")
+    with pytest.raises(PlanError, match="schema fingerprint"):
+        apply_feature_plan(drifted, plan)
+
+
+def test_apply_feature_plan_same_schema_different_values_is_fine():
+    """The whole point of the fingerprint check: identical schema, different
+    data (the real score-forward case), must NOT raise."""
+    df = _make_cat_df()
+    config = _make_config()
+    plan = build_feature_plan(df, config)
+    fit_features(df, plan, config)
+
+    new_data = df.with_columns((pl.col("num") * 2.0 + 1.0).alias("num"))
+    apply_feature_plan(new_data, plan)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# apply_scaler: missing-parameter guard
+# ---------------------------------------------------------------------------
+
+
+def test_apply_scaler_raises_on_missing_param_for_requested_column():
+    """A column the caller asks to scale but has no fitted params for is drift,
+    not a no-op: silently leaving it unscaled would let it dominate a distance
+    matrix (e.g. a raw `amount` column next to features on a [-3, 3] range)."""
+    df = pl.DataFrame({"a": [1.0, 2.0, 3.0], "b": [3.0, 4.0, 5.0]})
+    params = fit_scaler(df.select("a"), ["a"], "robust")  # only "a" has params
+    with pytest.raises(PlanError, match=r"\['b'\]"):
+        apply_scaler(df, params, ["a", "b"])  # "b" requested but has no params
+
+
+def test_apply_scaler_raises_when_params_empty_but_columns_requested():
+    df = pl.DataFrame({"a": [1.0, 2.0, 3.0]})
+    with pytest.raises(PlanError, match="a"):
+        apply_scaler(df, {}, ["a"])
+
+
 def test_fit_features_correlation_reduction_drops_correlated():
     n = 100
     x = np.linspace(0.0, 1.0, n)

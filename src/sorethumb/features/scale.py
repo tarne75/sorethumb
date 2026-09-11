@@ -27,6 +27,8 @@ from typing import Literal
 
 import polars as pl
 
+from sorethumb.errors import PlanError
+
 logger = logging.getLogger(__name__)
 
 ScalerParams = dict[str, dict[str, float]]  # col → {center, scale}
@@ -110,17 +112,31 @@ def apply_scaler(
 ) -> pl.DataFrame:
     """Apply stored center/scale parameters to *df* in a single select pass.
 
-    Columns not present in scaler_params (or not in *cols* when supplied) are
-    passed through unchanged. Column order matches the input frame.
+    Every column named in *cols* (default: every column of *df*) must have a
+    fitted entry in *scaler_params*. A column requested for scaling but missing
+    its parameters means the fitted plan and the input have drifted apart --
+    silently leaving that column on its raw scale would let it dominate any
+    distance-based detector's matrix with no error anywhere. Raises PlanError
+    instead.
+
+    Columns of *df* not named in *cols* are passed through unchanged: that is
+    an explicit exclusion by the caller, not drift. Column order matches the
+    input frame.
     """
-    if not scaler_params:
-        return df
+    target_cols = list(df.columns) if cols is None else list(cols)
+    missing = [c for c in target_cols if c in df.columns and c not in scaler_params]
+    if missing:
+        msg = (
+            f"apply_scaler: no fitted scaler parameters for column(s) {missing}. "
+            "The feature plan and the input schema have drifted apart; refusing "
+            "to silently leave these columns unscaled in the feature matrix."
+        )
+        raise PlanError(msg)
 
-    scale_set = set(scaler_params) if cols is None else (set(cols) & set(scaler_params))
-
+    target_set = set(target_cols)
     exprs: list[pl.Expr] = []
     for col in df.columns:
-        if col in scale_set:
+        if col in target_set:
             p = scaler_params[col]
             exprs.append(((pl.col(col).cast(pl.Float64) - p["center"]) / p["scale"]).alias(col))
         else:
