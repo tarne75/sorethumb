@@ -25,6 +25,7 @@ from sorethumb._pipeline import run_detection
 from sorethumb.config import (
     ColumnsConfig,
     DetectorConfig,
+    ExplainConfig,
     HistoryConfig,
     RunConfig,
     ScoringConfig,
@@ -268,6 +269,52 @@ def test_explanation_references_perturbed_column(tmp_path: Path) -> None:
         f"This indicates a sort/lookup mismatch: the raw value is read from the "
         f"wrong original frame position when a time column is present."
     )
+
+
+def test_rows_beyond_max_rows_cap_are_marked_unavailable_not_fabricated(tmp_path: Path) -> None:
+    """explain.max_rows caps per-row attribution methods (gradient/KernelSHAP).
+
+    Rows beyond the cap must come back with attribution_kind="unavailable" and
+    an explicit reason_1 -- not an all-zero vector that top_n_reasons turns into
+    fabricated "column=value" reasons picked from arbitrary leading columns. The
+    rows that DO get explained must be the most anomalous of the flagged set.
+    """
+    csv = tmp_path / "data.csv"
+    _make_planted_csv(csv, n_normal=180, n_anomaly=10, seed=3)
+
+    cfg = Config(
+        source=SourceConfig(uri=str(csv), format="csv"),
+        run=RunConfig(workdir=str(tmp_path / "ws"), seed=42),
+        columns=ColumnsConfig(id_column="id"),
+        # one_class_svm has no native attributor: every source goes through the
+        # capped gradient path, so exceeding max_rows leaves rows with zero
+        # covering sources -- the scenario the guard exists for.
+        detectors=[DetectorConfig(name="one_class_svm")],
+        scoring=ScoringConfig(combination="composite", contamination=0.05, weighting="equal", min_records=5),
+        explain=ExplainConfig(max_rows=3, top_n=2),
+    )
+    result = run_detection(cfg, no_report=True)
+    assert result.n_anomalies > 3, "fixture must flag more rows than explain.max_rows to exercise the cap"
+
+    parquet_path = result.groups[0].results_path
+    assert parquet_path is not None
+    df = pl.read_parquet(parquet_path).sort("composite_score", descending=True)
+
+    kinds = df["attribution_kind"].to_list()
+    assert all(k != "unavailable" for k in kinds[:3]), (
+        f"the most anomalous rows must be explained first; got kinds={kinds}"
+    )
+    assert all(k == "unavailable" for k in kinds[3:]), (
+        f"rows beyond explain.max_rows must be marked unavailable; got kinds={kinds}"
+    )
+
+    unavailable_reasons = df.filter(pl.col("attribution_kind") == "unavailable")["reason_1"].to_list()
+    assert unavailable_reasons
+    assert all(r is not None and "unavailable" in r for r in unavailable_reasons)
+
+    explained_reasons = df.filter(pl.col("attribution_kind") != "unavailable")["reason_1"].to_list()
+    assert explained_reasons
+    assert all(r is not None and "unavailable" not in r and "=" in r for r in explained_reasons)
 
 
 # ---------------------------------------------------------------------------

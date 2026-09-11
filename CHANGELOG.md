@@ -60,6 +60,20 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Explanations beyond `explain.max_rows` were fabricated, not omitted.
+  `gradient_attributions` / `kernel_shap_attributions` (used for every detector
+  without a native attributor — OneClassSVM, ECOD, LOF, HBOS) silently truncate
+  to `explain.max_rows`; `_pipeline.py` zero-padded every row past the cap back
+  to full length, and `top_n_reasons`' descending sort, given an all-zero
+  vector, returned the first `top_n` columns in dict-insertion order —
+  indistinguishable from a real (if weak) reason. Two fixes: flagged rows are
+  now attributed in `composite_score`-descending order, so a truncated run
+  explains the most anomalous rows first and only the least anomalous flagged
+  rows are left uncovered; and `_compute_attributions` now tracks, per row,
+  whether *any* source actually computed a value for it. A row with zero
+  covering sources gets `attribution_kind="unavailable"` and
+  `reason_1="unavailable (beyond explain.max_rows)"` instead of a fabricated
+  `column=value` reason.
 - The apply path was unguarded against schema drift. `apply_feature_plan` never
   checked `plan.schema_fingerprint` against the incoming data, and `apply_scaler`
   silently passed through any column with no fitted scale parameters. Together,
