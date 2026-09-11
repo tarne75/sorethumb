@@ -165,3 +165,31 @@ def test_score_forward_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert a.run_id == b.run_id  # deterministic id
     # second call skips the already-complete group
     assert any(g.status == "skipped" for g in b.groups)
+
+
+def test_score_forward_rejects_drifted_schema(tmp_path: Path) -> None:
+    """New data whose raw schema no longer matches the fitted plan must fail the
+    group loudly (PlanError) -- not silently mis-encode a column or leave one
+    unscaled in the distance matrix.
+    """
+    ws = tmp_path / "ws"
+    src_csv = tmp_path / "train.csv"
+    _planted_csv(src_csv, seed=0)
+    src = run_detection(_cfg(src_csv, ws), no_report=True)
+    assert src.n_succeeded == 1
+
+    # Same rows, but num_b now arrives as non-numeric text — CSV type inference
+    # would otherwise coerce a still-numeric-looking string straight back to
+    # Float64, masking the drift, so use values that can't parse as numbers.
+    # This is the exact "drifted input" scenario: apply_feature_plan must catch
+    # it before apply_scaler ever gets a chance to leave the column unscaled.
+    drifted_csv = tmp_path / "drifted.csv"
+    df = pl.read_csv(src_csv)
+    df.with_columns(pl.Series("num_b", [f"txt_{i}" for i in range(len(df))])).write_csv(str(drifted_csv))
+
+    result = score_forward(_cfg(drifted_csv, ws), src.run_id, no_report=True)
+    assert result.n_succeeded == 0
+    assert result.n_failed == 1
+    err = result.groups[0].error or ""
+    assert "PlanError" in err
+    assert "schema fingerprint" in err

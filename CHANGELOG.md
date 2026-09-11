@@ -60,6 +60,20 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The apply path was unguarded against schema drift. `apply_feature_plan` never
+  checked `plan.schema_fingerprint` against the incoming data, and `apply_scaler`
+  silently passed through any column with no fitted scale parameters. Together,
+  a drifted input (a column renamed, removed, or retyped since the plan was
+  fitted) could reach a distance-based detector with one column left on its raw
+  scale — dominating the matrix — with no error anywhere.
+  `apply_feature_plan` now raises `PlanError` immediately if the input's
+  `schema_fingerprint` doesn't match the plan's (same schema, different values —
+  the real score-forward case — is unaffected). `apply_scaler` now raises
+  `PlanError` if a column it's asked to scale has no fitted parameters, instead
+  of leaving it unscaled; `apply_feature_plan` was adjusted to drop
+  correlation-reduced columns *before* scaling (mirroring `fit_features`) so a
+  column removed by `correlation_reduction` — which never needed a scale
+  parameter in the first place — doesn't trip the new check.
 - `scoring.weighting = "agreement"` was broken. It compared each detector's
   `natural_flag` to the row-wise majority vote; at realistic contamination
   almost no row is flagged, so the "majority" is all-normal, every detector
