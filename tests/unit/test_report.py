@@ -37,7 +37,7 @@ _RECORDS_DF = pl.DataFrame(
         "score": [0.95, 0.88, 0.75],
         "rank": [1, 2, 3],
         "reason_1": ["high_value", "low_value", "outlier"],
-        "attribution_kind": ["exact", "heuristic", "heuristic"],
+        "attribution_kind": ["model_specific", "heuristic", "heuristic"],
     }
 )
 
@@ -223,7 +223,7 @@ class TestRenderReport:
                 "reason_1": ["<script>alert('xss')</script>"],
                 "score": [0.9],
                 "rank": [1],
-                "attribution_kind": ["exact"],
+                "attribution_kind": ["model_specific"],
             }
         )
         grp = GroupSection(

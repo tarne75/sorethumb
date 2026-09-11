@@ -5,10 +5,17 @@ where a tree collapses to a single root node causes shap to index past the end o
 the node array; we catch that, fall back to the gradient method, and emit
 FallbackAttributionWarning — the result tag becomes "heuristic".
 
-The explainer must be constructed with check_additivity=False because
-IsolationForest's score_samples does not equal the SHAP sum of its base value
-and contributions (the path-length trick breaks strict additivity). Additivity
-checking would otherwise raise on every call.
+The explainer is constructed with check_additivity=False because IsolationForest's
+score_samples does not equal the SHAP sum of its base value and contributions —
+additivity checking would otherwise raise on every call. Two things follow from
+that, and both mean the successful result is NOT tagged "exact": (1) additivity
+is unverified, so there is no guarantee the values actually sum to the model
+output; and (2) even where TreeSHAP's decomposition is exact, what it decomposes
+is path length, which IsolationForest's score is a nonlinear transform of — so
+"exact for path length" is not "exact for the score the user sees" either way.
+The tag is "model_specific": more principled than a generic gradient/centroid
+heuristic (it uses the fitted trees' actual structure via the standard TreeSHAP
+algorithm), but not an additivity-guaranteed decomposition of the final score.
 """
 
 from __future__ import annotations
@@ -50,7 +57,8 @@ def tree_shap_attributions(
         The sign is flipped from SHAP's natural direction (which attributes
         toward "more normal") so higher attribution = more anomalous.
     tag:
-        "exact" on success, "heuristic" after fallback.
+        "model_specific" on success (TreeSHAP over the fitted trees, additivity
+        unverified — not "exact"), "heuristic" after fallback.
 
     """
     import shap  # noqa: PLC0415
@@ -62,7 +70,7 @@ def tree_shap_attributions(
         # shap_values: (n_rows, n_features) — SHAP convention: positive = pushes score higher = more normal
         # Negate so positive attribution means more anomalous (consistent with calibrated score direction)
         attributions = -np.asarray(shap_values, dtype=np.float64)
-        return attributions, "exact"
+        return attributions, "model_specific"
 
     except (IndexError, ValueError, RuntimeError) as exc:
         warnings.warn(

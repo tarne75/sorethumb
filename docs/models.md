@@ -58,9 +58,13 @@ each record gets isolated. Records that are isolated quickly are anomalies.
   method may not isolate them quickly)
 - Very high-dimensional sparse data where every record looks isolated
 
-**Explanations.** This is the only detector that produces *exact* explanations
-via TreeSHAP — it can tell you precisely which features contributed to a
-record's anomaly score, and by how much. All other detectors use heuristic
+**Explanations.** This is the only detector that produces *model-specific*
+explanations via TreeSHAP, using the fitted trees' actual structure rather
+than a generic gradient/centroid heuristic. It is not a verified *exact*
+decomposition of the score, though: TreeSHAP is run with
+`check_additivity=False` because IsolationForest's score is a nonlinear
+transform of the path length SHAP explains, so nothing guarantees the
+attributions sum to the model output. All other detectors use heuristic
 approximations for explanations.
 
 **Training cap.** 250,000 rows by default. Above that, a random sample is

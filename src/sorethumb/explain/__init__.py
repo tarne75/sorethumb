@@ -1,8 +1,9 @@
 """Explanation layer: per-row attributions over original input columns.
 
-Each attribution is tagged ``exact`` or ``heuristic``; the tag travels with
-the result through blending and back-projection so callers always know which
-method produced it.
+Each attribution is tagged ``model_specific`` or ``heuristic``; the tag
+travels with the result through blending and back-projection so callers
+always know which method produced it. Nothing here is tagged ``exact`` —
+see ``shap_tree.py`` for why even TreeSHAP's own result isn't.
 """
 
 from sorethumb.explain.blend import blend

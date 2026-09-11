@@ -230,6 +230,16 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- TreeSHAP's `attribution_kind` is `model_specific`, not `exact`. TreeSHAP runs
+  with `check_additivity=False` (IsolationForest's `score_samples` isn't the
+  strict SHAP sum of base value + contributions, so additivity checking would
+  raise on every call) — so additivity is unverified at runtime, and even
+  where the decomposition holds exactly it's exact for *path length*, which
+  IsolationForest's score is a nonlinear transform of. Neither supports
+  calling the result `exact`. `blend()`'s tier logic is renamed to match
+  (`model_specific` iff every contributing source is `model_specific`, else
+  `heuristic`); nothing sorethumb computes is tagged `exact` any more. See
+  `docs/explanations.md` and `docs/approximations.md`.
 - Statistical contract sharpened. The README, `docs/adapting-to-your-data.md`,
   `docs/configuration-examples.md`, `docs/approximations.md`, the
   `scoring.contamination` field description, the run summary and `--json` output
@@ -261,6 +271,9 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Compatibility
 
+- `attribution_kind == "exact"` no longer appears in results Parquet, CLI
+  output, or reports — TreeSHAP rows now read `"model_specific"` (see Changed).
+  Update any downstream filter/comparison on the literal string `"exact"`.
 - One-time re-baseline for existing workspaces: the first run after upgrading
   computes the new logical `dataset_id`, which will not match the old
   content+schema `dataset_fp`, so history recorded before the upgrade stays under
