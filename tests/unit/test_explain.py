@@ -9,6 +9,7 @@ from sorethumb.errors import ExplainError, FallbackAttributionWarning
 from sorethumb.explain.blend import blend
 from sorethumb.explain.centroid import centroid_attributions
 from sorethumb.explain.gradient import gradient_attributions
+from sorethumb.explain.native import ecod_attributions, hbos_attributions
 from sorethumb.explain.project import (
     aggregate_to_original,
     back_project_pca,
@@ -49,6 +50,24 @@ def _fit_ocsvm(n: int = 100, d: int = 4, seed: int = 0):
 
     X = _rng_data(n, d, seed)
     det = OneClassSVMDetector()
+    det.fit(X, seed=seed)
+    return det, X
+
+
+def _fit_ecod(n: int = 200, d: int = 4, seed: int = 0):
+    from sorethumb.detectors.ecod import ECODDetector
+
+    X = _rng_data(n, d, seed)
+    det = ECODDetector()
+    det.fit(X, seed=seed)
+    return det, X
+
+
+def _fit_hbos(n: int = 200, d: int = 4, seed: int = 0):
+    from sorethumb.detectors.hbos import HBOSDetector
+
+    X = _rng_data(n, d, seed)
+    det = HBOSDetector()
     det.fit(X, seed=seed)
     return det, X
 
@@ -185,6 +204,37 @@ def test_tree_shap_outliers_get_higher_attributions():
 
 
 # ---------------------------------------------------------------------------
+# native (ecod_attributions, hbos_attributions)
+# ---------------------------------------------------------------------------
+
+
+def test_ecod_attributions_tag_is_exact():
+    det, X = _fit_ecod()
+    attrs, tag = ecod_attributions(det, X)
+    assert tag == "exact"
+    assert attrs.shape == X.shape
+
+
+def test_ecod_attributions_matches_detector_method():
+    det, X = _fit_ecod()
+    attrs, _ = ecod_attributions(det, X)
+    np.testing.assert_array_equal(attrs, det.feature_contributions(X))
+
+
+def test_hbos_attributions_tag_is_exact():
+    det, X = _fit_hbos()
+    attrs, tag = hbos_attributions(det, X)
+    assert tag == "exact"
+    assert attrs.shape == X.shape
+
+
+def test_hbos_attributions_matches_detector_method():
+    det, X = _fit_hbos()
+    attrs, _ = hbos_attributions(det, X)
+    np.testing.assert_array_equal(attrs, det.feature_contributions(X))
+
+
+# ---------------------------------------------------------------------------
 # blend
 # ---------------------------------------------------------------------------
 
@@ -227,6 +277,38 @@ def test_blend_all_model_specific_tag():
     b = np.ones((5, 3))
     _, tag = blend([(a, "model_specific"), (b, "model_specific")], [0.5, 0.5])
     assert tag == "model_specific"
+
+
+def test_blend_all_exact_tag():
+    a = np.ones((5, 3))
+    b = np.ones((5, 3))
+    _, tag = blend([(a, "exact"), (b, "exact")], [0.5, 0.5])
+    assert tag == "exact"
+
+
+def test_blend_exact_and_model_specific_yields_model_specific():
+    """Mixing tiers keeps only the weaker one -- exact + model_specific = model_specific."""
+    a = np.ones((5, 3))
+    b = np.ones((5, 3))
+    _, tag = blend([(a, "exact"), (b, "model_specific")], [1.0, 1.0])
+    assert tag == "model_specific"
+
+
+def test_blend_exact_and_heuristic_yields_heuristic():
+    """Mixing tiers keeps only the weakest -- exact + heuristic = heuristic,
+    not model_specific (heuristic ranks below model_specific too)."""
+    a = np.ones((5, 3))
+    b = np.ones((5, 3))
+    _, tag = blend([(a, "exact"), (b, "heuristic")], [1.0, 1.0])
+    assert tag == "heuristic"
+
+
+def test_blend_all_three_tiers_yields_heuristic():
+    a = np.ones((5, 3))
+    b = np.ones((5, 3))
+    c = np.ones((5, 3))
+    _, tag = blend([(a, "exact"), (b, "model_specific"), (c, "heuristic")], [1.0, 1.0, 1.0])
+    assert tag == "heuristic"
 
 
 def test_blend_empty_raises():

@@ -58,14 +58,14 @@ each record gets isolated. Records that are isolated quickly are anomalies.
   method may not isolate them quickly)
 - Very high-dimensional sparse data where every record looks isolated
 
-**Explanations.** This is the only detector that produces *model-specific*
-explanations via TreeSHAP, using the fitted trees' actual structure rather
-than a generic gradient/centroid heuristic. It is not a verified *exact*
-decomposition of the score, though: TreeSHAP is run with
-`check_additivity=False` because IsolationForest's score is a nonlinear
-transform of the path length SHAP explains, so nothing guarantees the
-attributions sum to the model output. All other detectors use heuristic
-approximations for explanations.
+**Explanations.** This detector produces *model-specific* explanations via
+TreeSHAP, using the fitted trees' actual structure rather than a generic
+gradient/centroid heuristic. It is not a verified *exact* decomposition of
+the score, though: TreeSHAP is run with `check_additivity=False` because
+IsolationForest's score is a nonlinear transform of the path length SHAP
+explains, so nothing guarantees the attributions sum to the model output.
+(ECOD and HBOS produce genuinely *exact* explanations — see their entries
+below; KMeans, One-Class SVM, and LOF use heuristic approximations.)
 
 **Training cap.** 250,000 rows by default. Above that, a random sample is
 taken for training, but all rows are scored.
@@ -215,6 +215,11 @@ would both be flagged.
 
 **Training cap.** 500,000 rows.
 
+**Explanations.** *Exact* — ECOD's score is already an unweighted average of
+independent per-column tail-probability terms, so the per-feature attribution
+is that term itself: summing it recovers the score with zero error, not an
+approximation of it. See `docs/explanations.md`.
+
 **Config.**
 ```toml
 [[detectors]]
@@ -294,6 +299,11 @@ It's the simplest detector conceptually and the fastest computationally.
 - It is the least sensitive detector overall; use it for breadth, not depth
 
 **Training cap.** 500,000 rows.
+
+**Explanations.** *Exact* — like ECOD, HBOS's score is already an unweighted
+average of independent per-column terms (a bin log-density here instead of a
+tail probability), so the per-feature attribution is that term itself:
+summing it recovers the score with zero error. See `docs/explanations.md`.
 
 **Config.**
 ```toml

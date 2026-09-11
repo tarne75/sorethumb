@@ -35,13 +35,41 @@ more principled than a generic gradient/centroid heuristic (it uses the fitted
 trees' actual structure via the standard TreeSHAP algorithm), while stopping
 short of claiming the additivity guarantee "exact" would imply.
 
+## ECOD / HBOS — exact by construction, not an approximation
+
+Both detectors already define their score as an unweighted average of
+independent per-feature terms (an empirical-CDF tail probability for ECOD, a
+histogram bin log-density for HBOS). `explain/native.py` returns exactly
+those terms as the per-feature attribution — summing them recovers the score
+with zero error, because that sum *is* the score's definition. This is the
+one attribution method in `sorethumb` that involves no approximation step at
+all, hence the `exact` tag (see `docs/explanations.md`).
+
+## Finite-difference gradients — restricted to smooth-enough scores
+
+`explain/gradient.py`'s central finite-difference is only applied to
+OneClassSVM and LOF (`_pipeline.py::_compute_attributions`) — the two
+detectors whose score responds continuously to a small perturbation.
+ECOD and HBOS are excluded on purpose: their score is a discrete rank/bin
+lookup with no sub-resolution structure, so a `step_factor`-sized
+perturbation (default 1% of a feature's std) of a genuinely anomalous,
+far-tail row routinely lands in the exact same rank or bin as the
+unperturbed row — an exact zero finite difference for precisely the row an
+explanation matters most for. They get the exact decomposition above
+instead. A detector type the dispatch doesn't recognise is skipped (logged,
+not attributed) rather than defaulting to gradient — silently guessing at a
+score's smoothness is exactly the failure mode this restriction exists to
+prevent.
+
 ## KernelSHAP — Monte Carlo approximation
 
-When `explain.kernel_shap = true`, attributions for non-tree detectors are computed via
-`shap.KernelExplainer`. This uses Monte Carlo sampling of the feature space to estimate
-Shapley values. The result is labelled `heuristic`, not `model_specific` — it never touches
-the detector's internal structure, unlike TreeSHAP. Accuracy increases with
-`nsamples` but so does runtime. The default `nsamples` is documented in `explain/`.
+When `explain.kernel_shap = true`, attributions for OneClassSVM/LOF are computed via
+`shap.KernelExplainer` instead of finite-difference gradients (ECOD and HBOS always use
+their exact decomposition above, regardless of this setting). This uses Monte Carlo
+sampling of the feature space to estimate Shapley values. The result is labelled
+`heuristic`, not `model_specific` — it never touches the detector's internal structure,
+unlike TreeSHAP. Accuracy increases with `nsamples` but so does runtime. The default
+`nsamples` is documented in `explain/`.
 
 ## Feature matrix dtype — float32 default
 

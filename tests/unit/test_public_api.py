@@ -189,7 +189,9 @@ def test_explain_init_exports_all_public_functions() -> None:
         back_project_pca,
         blend,
         centroid_attributions,
+        ecod_attributions,
         gradient_attributions,
+        hbos_attributions,
         tree_shap_attributions,
     )
 
@@ -198,7 +200,9 @@ def test_explain_init_exports_all_public_functions() -> None:
         back_project_pca,
         blend,
         centroid_attributions,
+        ecod_attributions,
         gradient_attributions,
+        hbos_attributions,
         tree_shap_attributions,
     ):
         assert callable(fn)
@@ -212,7 +216,9 @@ def test_explain_init_all_list() -> None:
         "back_project_pca",
         "blend",
         "centroid_attributions",
+        "ecod_attributions",
         "gradient_attributions",
+        "hbos_attributions",
         "tree_shap_attributions",
     }
 

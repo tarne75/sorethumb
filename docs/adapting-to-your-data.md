@@ -138,7 +138,7 @@ is generated at the workspace root. Open it to see:
 - Per-group anomaly counts and rates
 - A trend chart if you have a time column
 - A per-anomaly explanation table: which features drove the score, labelled
-  model_specific or heuristic
+  exact, model_specific, or heuristic
 
 The run is idempotent — running it again for the same dataset and period skips
 groups already completed. Use `--force` to re-run everything.

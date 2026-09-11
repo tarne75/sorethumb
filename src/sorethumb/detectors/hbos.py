@@ -84,11 +84,16 @@ class HBOSDetector:
         train_outlier_scores = self._hbos_score(X)
         self._score_threshold = float(np.percentile(train_outlier_scores, 95))
 
-    def _hbos_score(self, X: np.ndarray) -> np.ndarray:
-        """Per-row HBOS outlier score. Higher = more anomalous."""
+    def _per_feature_terms(self, X: np.ndarray) -> np.ndarray:
+        """Per-(row, feature) term of the HBOS score, before averaging.
+
+        ``_hbos_score`` and ``feature_contributions`` are both thin wrappers
+        over this: the score is ``terms.sum(axis=1) / d`` by definition, so
+        this one array is the exact, sole source of truth for both.
+        """
         n_test = X.shape[0]
         d = len(self._edges)
-        scores = np.zeros(n_test, dtype=np.float64)
+        terms = np.zeros((n_test, d), dtype=np.float64)
 
         for j, (edges, log_dens) in enumerate(zip(self._edges, self._log_densities, strict=True)):
             col = X[:, j]
@@ -98,9 +103,24 @@ class HBOSDetector:
                 0,
                 len(log_dens) - 1,
             )
-            scores += -log_dens[bin_idx]
+            terms[:, j] = -log_dens[bin_idx]
 
-        return scores / d
+        return terms
+
+    def _hbos_score(self, X: np.ndarray) -> np.ndarray:
+        """Per-row HBOS outlier score. Higher = more anomalous."""
+        return self._per_feature_terms(X).sum(axis=1) / len(self._edges)
+
+    def feature_contributions(self, X: np.ndarray) -> np.ndarray:
+        """Exact per-feature decomposition of the HBOS outlier score.
+
+        Positive = pushes the row toward being anomalous (same convention as
+        every other attribution source). Summing across features recovers
+        ``_hbos_score(X)`` with zero error — this *is* the score's own
+        definition (an average of independent per-feature bin log-densities),
+        not an approximation of it, so "exact" here carries no caveat.
+        """
+        return self._per_feature_terms(X) / len(self._edges)
 
     def score_samples(self, X: np.ndarray) -> np.ndarray:
         """Return anomaly scores. Higher = more normal (protocol convention)."""

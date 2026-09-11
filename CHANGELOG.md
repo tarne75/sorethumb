@@ -8,6 +8,17 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Native, exact per-feature attributions for ECOD and HBOS. Both detectors
+  already define their score as an unweighted average of independent
+  per-feature terms (an empirical-CDF tail probability for ECOD, a histogram
+  bin log-density for HBOS); `feature_contributions()` on each detector
+  returns those terms directly (`explain/native.py`), so summing the
+  attribution recovers the score with zero error — a new `attribution_kind`
+  value, `"exact"`, reflects that this is a stronger guarantee than
+  TreeSHAP's `"model_specific"` (additivity unverified). `blend()`'s tier
+  logic is now a proper ranking (`exact` > `model_specific` > `heuristic`):
+  the blended tag is the weakest of the contributing sources', not a binary
+  all-or-nothing check.
 - Realised per-detector flag rates surfaced. `ScoreEnsemble.combine()` returns a
   new `per_detector_rates` (the fraction each detector's own heuristic boundary
   flagged, for every input detector); `GroupSummary` carries it as
@@ -60,6 +71,18 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- ECOD and HBOS explanations went through finite-difference gradients
+  (`explain/gradient.py`), whose default 1%-of-std perturbation routinely
+  produced an exact all-zero (or noisy) attribution vector for precisely the
+  rows that matter most. Both detectors' scores are a discrete rank/bin
+  lookup (empirical-CDF tail rank for ECOD, histogram bin for HBOS) with no
+  sub-resolution structure: a genuinely anomalous, far-tail row's small
+  perturbation routinely lands in the exact same rank or bin as the
+  unperturbed row. `_compute_attributions` now dispatches ECOD/HBOS to their
+  own exact decomposition instead (see Added); finite-difference gradients
+  are restricted to OneClassSVM and LOF, the two detectors whose score
+  responds continuously to a small perturbation, and an unrecognised
+  detector type is skipped (logged) rather than defaulting to gradient.
 - PCA back-projection could mislabel or fabricate reasons when PCA is on
   (`features.pca=true`). `back_project_pca` was called with
   `n_features=len(plan.output_features)` — a column count/identity fixed

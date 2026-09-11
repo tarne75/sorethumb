@@ -392,6 +392,38 @@ def test_pca_back_projection_failure_marks_all_flagged_rows_unavailable(
     assert all(r == "unavailable (PCA back-projection failed)" for r in reasons), reasons
 
 
+def test_ecod_hbos_get_exact_native_attributions(tmp_path: Path) -> None:
+    """ECOD and HBOS decompose their score into per-feature terms exactly --
+
+    no finite-difference gradient involved. Both flagged their attributions
+    must come back attribution_kind="exact" with a real column=value reason,
+    never "heuristic" (which the old gradient-fallback path would have given,
+    routinely as an all-zero vector for a far-tail row landing in the same
+    histogram bin / empirical-CDF rank as its unperturbed position).
+    """
+    csv = tmp_path / "data.csv"
+    _make_planted_csv(csv, n_normal=180, n_anomaly=10, seed=13)
+
+    cfg = Config(
+        source=SourceConfig(uri=str(csv), format="csv"),
+        run=RunConfig(workdir=str(tmp_path / "ws"), seed=42),
+        columns=ColumnsConfig(id_column="id"),
+        detectors=[DetectorConfig(name="ecod"), DetectorConfig(name="hbos")],
+        scoring=ScoringConfig(combination="composite", contamination=0.05, weighting="equal", min_records=5),
+    )
+    result = run_detection(cfg, no_report=True)
+    assert result.n_anomalies > 0
+
+    parquet_path = result.groups[0].results_path
+    assert parquet_path is not None
+    df_anomalies = pl.read_parquet(parquet_path)
+
+    kinds = df_anomalies["attribution_kind"].to_list()
+    reasons = df_anomalies["reason_1"].to_list()
+    assert all(k == "exact" for k in kinds), f"expected every flagged row exact; got {kinds}"
+    assert all(r is not None and "=" in r for r in reasons), reasons
+
+
 # ---------------------------------------------------------------------------
 # Phase 3 → resume / deterministic run_id
 # ---------------------------------------------------------------------------

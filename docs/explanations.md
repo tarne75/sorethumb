@@ -1,10 +1,46 @@
-# Explanations: model-specific vs heuristic
+# Explanations: exact, model-specific, and heuristic
 
 sorethumb attributes each anomalous row's score to the original features that
-contributed most to it. Not all attribution methods are equally trustworthy,
-and none of them is labelled `exact` — this file documents exactly which
-methods are `model_specific` and which are `heuristic`, and what each one
-actually measures.
+contributed most to it. Not all attribution methods are equally trustworthy —
+this file documents which methods are `exact`, which are `model_specific`,
+and which are `heuristic`, and what each one actually measures. When more
+than one detector contributes to a row's explanation, the blended result
+keeps only the *weakest* of the contributing tags (`exact` > `model_specific`
+> `heuristic` — see "Blending and aggregation" below).
+
+---
+
+## Exact attributions
+
+### ECOD and HBOS
+
+**Method:** Both detectors define their score, by construction, as an
+unweighted average of independent per-feature terms — an empirical-CDF tail
+probability for ECOD, a histogram bin log-density for HBOS. The per-feature
+term *is* the per-feature contribution; nothing is inferred or approximated.
+
+**What it measures:** How much each feature's own tail rarity (ECOD) or
+bin rarity (HBOS) contributes to the row's total outlier score.
+
+**Note:** summing the returned contribution vector recovers the row's outlier
+score with zero error — not "high fidelity", zero error, because the score
+was already defined as that sum. This is a stronger guarantee than
+TreeSHAP's `model_specific` tag below: there is no unverified additivity
+assumption here, because there was never an assumption to verify.
+
+**Label in output:** `exact`.
+
+**Applicable when:** detector is `ecod` or `hbos`.
+
+**Why not finite-difference gradients:** both scores are literally step
+functions of the input — a rank position (ECOD) or a histogram bin index
+(HBOS), with no sub-resolution structure at all. A `step_factor`-sized
+perturbation (default 1% of a feature's std) of a genuinely anomalous,
+far-tail row routinely lands in the *exact same* rank or bin as the
+unperturbed row, producing an exact zero finite difference for precisely the
+row an explanation matters most for. That is why ECOD and HBOS get this
+dedicated exact decomposition instead of ever reaching the gradient method
+below.
 
 ---
 
@@ -58,12 +94,10 @@ not distinguished in the output tag; see below).
 
 **Applicable when:** detector is `kmeans_distance`.
 
-### Gradient attributions (One-Class SVM and others)
+### Gradient attributions (One-Class SVM, LOF)
 
-**Method:** Input gradient of the decision function with respect to each input
-feature, evaluated at the anomalous row. Integrated gradients (a single forward
-pass minus a single backward pass) are used when the model exposes a
-differentiable score function.
+**Method:** Central finite-difference of the decision function with respect
+to each input feature, evaluated at the anomalous row (`explain/gradient.py`).
 
 **What it measures:** How much the anomaly score would change per unit change in
 each feature. This is a local linearisation — it is accurate for features with
@@ -77,7 +111,14 @@ bounded.
 
 **Label in output:** `heuristic`.
 
-**Applicable when:** detector supports neither TreeSHAP nor centroid attribution.
+**Applicable when:** detector is `one_class_svm` or `lof` — the two detectors
+whose score responds continuously to a small perturbation. OneClassSVM's
+decision function is a differentiable kernel expansion; LOF's score is built
+from continuous distances (its only discreteness is *which* points count as
+neighbours, which a small perturbation essentially never flips for a genuine
+outlier). Finite-difference gradients are restricted to these two
+specifically because ECOD and HBOS are the opposite case — see "Exact
+attributions" above.
 
 ---
 
@@ -86,7 +127,11 @@ bounded.
 When multiple detectors contribute, their per-feature attributions are blended
 using the same weights as the composite score. This means a detector that
 contributes more to the final anomaly score also contributes proportionally
-more to the explanation.
+more to the explanation. The blended tag is the *weakest* of the contributing
+tags (`exact` > `model_specific` > `heuristic`): averaging an exact ECOD
+decomposition with a heuristic gradient result doesn't un-corrupt the
+heuristic part, so the blend can only be as trustworthy as its least
+trustworthy input.
 
 After blending, `derived → original` aggregation maps one-hot encoded columns
 back to their source column. A row that triggers `cat__A = 1, cat__B = 0` does
@@ -105,9 +150,10 @@ anomalous row from the rest of the population.
   there is a 90% chance the anomaly is caused by unusual revenue.
 - **They are local.** The attribution is computed for the specific row, not for
   the class of anomalies that share its pattern.
-- **None of them are guaranteed to sum to the model output.** Heuristic methods
-  make no such claim to begin with; `model_specific` (TreeSHAP) runs with
-  additivity checking disabled, so it isn't verified there either. All of them
-  are directionally correct, not numerically exact.
+- **Only `exact` (ECOD, HBOS) is guaranteed to sum to the model output**, and
+  only because the score was already defined that way. Heuristic methods make
+  no such claim to begin with; `model_specific` (TreeSHAP) runs with
+  additivity checking disabled, so it isn't verified there either. Both are
+  directionally correct, not numerically exact.
 - **They do not imply causation.** An anomalous revenue figure may be caused by
   an anomalous quantity, not by revenue itself, if the two are correlated.
