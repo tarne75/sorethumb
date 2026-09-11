@@ -18,6 +18,14 @@ column, fits an ensemble of detectors, ranks the records that stand out, and
 explains *why* each one stands out in terms of the original columns — so the
 result is actionable without a background in machine learning.
 
+**What it is:** a *ranker* — an ordering of records by statistical oddity — and,
+if you set a review budget, a *selector* that hands back the top slice of that
+ranking. **What it is not:** a prevalence estimator. The flagged count is the
+size of the shortlist you asked for, not a measurement of how many anomalies
+your data contains. `contamination = "auto"` is the median of three heuristic
+per-detector cut-offs; the run output reports each detector's realised rate so
+the number is never mistaken for ground truth.
+
 It is built to run on a single machine — a laptop, a CI runner, one VM — for
 datasets from roughly ten thousand to a few million rows. At that size a
 distributed engine adds cost, operational surface, and non-determinism without
@@ -118,7 +126,7 @@ config = Config(
     run={"workdir": "/tmp/sorethumb_demo"},
 )
 result = run_detection(config, no_report=True)
-print(f"Found {result.n_anomalies} anomalies across {result.n_succeeded} groups")
+print(f"Flagged {result.n_anomalies} rows for review across {result.n_succeeded} group(s)")
 ```
 
 ---
@@ -205,9 +213,19 @@ INFO  [group=ALL] SHAP explanations (TreeSHAP) for 421 flagged rows …
 INFO  Results written: results/<run_id>/ALL/anomalies.parquet
 
 Run abc12345  succeeded=1  skipped=0  failed=0
-  Total anomalies: 421
+  Flagged for review: 421 (0.50% of 84 231 rows) — the review shortlist at the
+  chosen budget, not an estimate of true prevalence
+
+  Realised detector flag rates (own natural boundary):
+    isolation_forest=1.83%, kmeans_distance=0.74%, one_class_svm=2.10%
+
   Report: ./runs/abc12345/report.html
 ```
+
+The three per-detector rates are heuristic boundaries, not measurements, and
+they disagree; `contamination = "auto"` is just their median. Treat the flagged
+count as *"records worth a look given this budget"*, never *"this is how many
+anomalies the data has"*.
 
 **4. Print the top anomalies with their SHAP reasons**
 
@@ -227,7 +245,7 @@ sorethumb anomalies --reasons 5 --top 50   # five reason columns
 │  3 │ 0.9601 │ heuristic │ session_duration=0.1 │ amount=9 200.00        │
 │  …                                                                      │
 └────┴────────┴───────────┴──────────────────────┴────────────────────────┘
-  421 anomaly row(s)   run=abc12345678   workspace=.
+  421 flagged row(s)   run=abc12345678   workspace=.
 ```
 
 `kind=exact` means TreeSHAP (Isolation Forest); `kind=heuristic` means centroid
@@ -358,6 +376,11 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
   `MemoryBudgetError` before any model is fitted. It is not a live RSS ceiling —
   Python cannot impose one — so actual peak memory can still exceed the budget.
 - The composite score is an interpretable ranking score, not a calibrated probability.
+- `contamination` is a review budget, not a prevalence estimate. The flagged
+  count is *"the top N% of the ranking"*, chosen by you (or, for `"auto"`, the
+  median of three heuristic per-detector cut-offs that themselves disagree —
+  see the realised rates in the run output). It says nothing about how many
+  genuine anomalies the data holds; only labelled data can tell you that.
 - Only Isolation Forest yields exact (TreeSHAP) attributions; all others are heuristic
   (centroid distance or input gradient). See [docs/explanations.md](docs/explanations.md).
 - Self-calibration maps every run's scores to roughly uniform on [0, 1] by

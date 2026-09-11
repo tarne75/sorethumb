@@ -36,8 +36,11 @@ tabular anomaly detection tasks. If your use case requires `float64` precision, 
 
 ## `auto` contamination — median of natural flag rates
 
-When `scoring.contamination = "auto"`, the contamination rate is derived as the median
-of each enabled detector's natural flag rate (the fraction of training rows the detector's
-own boundary flags as anomalous). This is a heuristic — it does not produce a calibrated
-estimate of the true anomaly rate. Validation against labelled benchmark datasets is
-ongoing; see the benchmark table in the README.
+When `scoring.contamination = "auto"`, the review budget is derived as the median
+of each enabled detector's natural flag rate (the fraction of rows the detector's
+own boundary flags as anomalous). This is a heuristic — it does not produce a
+calibrated estimate of the true anomaly rate, and the per-detector rates it takes
+the median of routinely disagree by 2–3×. The run summary and `sorethumb run --json`
+report each detector's realised rate so the resulting flag count is read as a
+shortlist size, not a measurement. Validation against labelled benchmark datasets
+is ongoing; see the benchmark table in the README.

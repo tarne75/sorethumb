@@ -167,10 +167,13 @@ class ScoreEnsemble:
             "combined_score": np.ndarray, shape (n,)
             "anomaly_flag": np.ndarray[bool], shape (n,)
             "threshold": float
-            "contamination_used": float (the resolved contamination rate)
+            "contamination_used": float — the review-budget fraction actually
+                applied; not an estimate of true anomaly prevalence
             "weights": dict[str, float] (dropped members appear with weight 0.0)
             "is_auto_contamination": bool
             "dropped_members": list[str] (detectors excluded by the bad-member guard)
+            "per_detector_rates": dict[str, float] — realised fraction each
+                detector's own natural boundary flagged, all input detectors
 
         """
         names = list(scores.keys())
@@ -179,6 +182,13 @@ class ScoreEnsemble:
             raise ValueError(msg)
 
         n = len(next(iter(scores.values())))
+
+        # Realised rate of each detector's own heuristic boundary, before any
+        # weighting, guard, or combination. Surfaced so nobody mistakes the
+        # combined flag count (or contamination="auto", their median) for an
+        # estimate of how many anomalies the data contains.
+        per_detector_rates = {d: float(np.asarray(natural_flags[d], dtype=bool).mean()) for d in names}
+
         score_matrix = np.column_stack([scores[d] for d in names])  # shape (n, k)
 
         # ── Bad-member guard ──────────────────────────────────────────────
@@ -257,6 +267,7 @@ class ScoreEnsemble:
             "weights": weights_out,
             "is_auto_contamination": is_auto,
             "dropped_members": dropped,
+            "per_detector_rates": per_detector_rates,
         }
 
     # ------------------------------------------------------------------

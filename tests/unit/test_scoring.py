@@ -204,12 +204,30 @@ def test_score_ensemble_combine_returns_keys():
     scores, flags = _make_scores_flags()
     ens = ScoreEnsemble(contamination=0.1)
     result = ens.combine(scores, flags)
-    assert "combined_score" in result
-    assert "anomaly_flag" in result
-    assert "threshold" in result
-    assert "contamination_used" in result
-    assert "weights" in result
-    assert "is_auto_contamination" in result
+    for key in (
+        "combined_score",
+        "anomaly_flag",
+        "threshold",
+        "contamination_used",
+        "weights",
+        "is_auto_contamination",
+        "dropped_members",
+        "per_detector_rates",
+    ):
+        assert key in result
+
+
+def test_per_detector_rates_are_the_realised_natural_flag_fractions():
+    n = 400
+    fa = np.zeros(n, dtype=bool)
+    fa[:20] = True  # detector a flags 5%
+    fb = np.zeros(n, dtype=bool)
+    fb[:60] = True  # detector b flags 15%
+    scores = {"a": np.linspace(0, 1, n), "b": np.linspace(0, 1, n)}
+    result = ScoreEnsemble(contamination="auto").combine(scores, {"a": fa, "b": fb})
+    assert result["per_detector_rates"] == {"a": pytest.approx(0.05), "b": pytest.approx(0.15)}
+    # contamination="auto" is just their median — not a measurement.
+    assert result["contamination_used"] == pytest.approx(0.10)
 
 
 def test_score_ensemble_combined_score_shape():

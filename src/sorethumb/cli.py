@@ -1621,8 +1621,32 @@ def _print_run_summary(result: RunResult) -> None:
         f"\n[{status_color}]Run {result.run_id}[/{status_color}]  "
         f"succeeded={result.n_succeeded}  skipped={result.n_skipped}  failed={result.n_failed}"
     )
-    if result.n_anomalies:
-        console.print(f"  Total anomalies: {result.n_anomalies:,}")
+
+    total_rows = sum(g.n_records for g in result.groups if g.status in ("success", "skipped"))
+    if result.n_anomalies or total_rows:
+        pct = (
+            f" ({100.0 * result.n_anomalies / total_rows:.2f}% of {total_rows:,} rows)" if total_rows else ""
+        )
+        console.print(
+            f"  Flagged for review: {result.n_anomalies:,}{pct} — "
+            "the review shortlist at the chosen budget, [dim]not an estimate of true prevalence[/dim]"
+        )
+
+    # Realised per-detector rates: what each detector's own heuristic boundary
+    # flagged. contamination='auto' is the median of these — surfaced so it is
+    # not read as "how many anomalies you have".
+    rate_groups = [g for g in result.groups if g.detector_flag_rates]
+    if rate_groups:
+        console.print("\n  [bold]Realised detector flag rates[/bold] (own natural boundary):")
+        for g in rate_groups[:8]:
+            parts = ", ".join(f"{d}={r * 100:.2f}%" for d, r in g.detector_flag_rates.items())
+            dropped = (
+                f"  [yellow]dropped: {', '.join(g.dropped_detectors)}[/yellow]" if g.dropped_detectors else ""
+            )
+            label = "" if g.group_label == "__all__" else f"[{g.group_label}] "
+            console.print(f"    {label}{parts}{dropped}")
+        if len(rate_groups) > 8:
+            console.print(f"    [dim]… and {len(rate_groups) - 8} more groups[/dim]")
 
     # Print per-group timings, slowest first
     timed = sorted(
@@ -1664,7 +1688,10 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
                 "group_key": g.group_key,
                 "group_label": g.group_label,
                 "n_records": g.n_records,
-                "n_anomalies": g.n_anomalies,
+                "n_flagged": g.n_anomalies,  # review shortlist size, not a prevalence estimate
+                "n_anomalies": g.n_anomalies,  # kept for compatibility; same value as n_flagged
+                "detector_flag_rates": g.detector_flag_rates,
+                "dropped_detectors": g.dropped_detectors,
                 "status": g.status,
                 "error": g.error,
                 "elapsed_seconds": g.elapsed_seconds,
