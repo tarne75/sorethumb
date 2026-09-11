@@ -1337,20 +1337,38 @@ def _compute_attributions(
 ) -> tuple[dict[str, np.ndarray], str, dict[int, str]] | None:
     """Compute blended attributions for flagged rows. Returns None on failure.
 
-    ``explain.enabled=False`` skips the stage entirely. For detectors without a
-    native attributor (anything but IsolationForest / KMeans) ``explain.kernel_shap``
-    routes to KernelSHAP instead of the input-gradient method. ``explain
-    .permutation_importance`` runs an extra per-detector cross-check.
+    ``explain.enabled=False`` skips the stage entirely. Dispatch per detector:
+    IsolationForest → TreeSHAP (``model_specific``), KMeans → centroid distance
+    (``heuristic``), ECOD/HBOS → their own exact additive decomposition
+    (``exact`` — see ``explain/native.py``), OneClassSVM/LOF → finite-difference
+    input-gradient by default or KernelSHAP when ``explain.kernel_shap`` is set
+    (both ``heuristic``). Anything else is skipped, logged, uncounted — see the
+    note below on why gradient is not a safe default for an unvetted detector.
+    ``explain.permutation_importance`` runs an extra per-detector cross-check.
+
+    Finite-difference gradients are restricted to detectors whose score is a
+    genuinely smooth (or smooth-enough) function of the input: OneClassSVM's
+    decision function is a differentiable kernel expansion, and LOF's score is
+    built from continuous distances (its only discreteness is *which* points
+    count as neighbours, which a small perturbation essentially never flips for
+    a genuine outlier). ECOD and HBOS are the opposite case — their score is a
+    discrete rank/bin lookup with no sub-resolution structure at all, so a
+    ``step_factor``-sized perturbation of a genuinely anomalous (far-tail) row
+    routinely lands in the exact same rank position or histogram bin, producing
+    an exact zero finite difference for precisely the row that matters most.
+    That is why they get a dedicated exact branch instead of ever reaching the
+    gradient fallback.
 
     ``gradient_attributions`` / ``kernel_shap_attributions`` cap the rows they
     attribute at ``explain.max_rows`` and return a *shorter* array for the rest
-    — they do not raise or pad meaningfully themselves. TreeSHAP and centroid
-    attributions have no such cap; they always cover every flagged row. A flagged
-    row beyond the cap is only ever covered if a full-coverage source (or another
-    detector that itself has room) has something for it — never invented. Per
-    row, this tracks whether *any* source actually covered it; ``flagged_idx``
-    is assumed ordered most-anomalous-first (the caller's job), so "beyond the
-    cap" always means "least anomalous of the flagged set", not an arbitrary cut.
+    — they do not raise or pad meaningfully themselves. TreeSHAP, centroid, and
+    the native ECOD/HBOS attributions have no such cap; they always cover every
+    flagged row. A flagged row beyond the cap is only ever covered if a
+    full-coverage source (or another detector that itself has room) has
+    something for it — never invented. Per row, this tracks whether *any*
+    source actually covered it; ``flagged_idx`` is assumed ordered
+    most-anomalous-first (the caller's job), so "beyond the cap" always means
+    "least anomalous of the flagged set", not an arbitrary cut.
 
     Returns ``(original_attributions, blend_tag, unavailable_reasons)`` — the
     last maps original-frame row indices among ``flagged_idx`` to a human
@@ -1364,10 +1382,15 @@ def _compute_attributions(
     could not be back-projected to original columns, which fails for every
     flagged row at once rather than a subset.
     """
+    from sorethumb.detectors.ecod import ECODDetector  # noqa: PLC0415
+    from sorethumb.detectors.hbos import HBOSDetector  # noqa: PLC0415
     from sorethumb.detectors.isolation_forest import IsolationForestDetector  # noqa: PLC0415
     from sorethumb.detectors.kmeans_distance import KMeansDetector  # noqa: PLC0415
+    from sorethumb.detectors.lof import LOFDetector  # noqa: PLC0415
+    from sorethumb.detectors.one_class_svm import OneClassSVMDetector  # noqa: PLC0415
     from sorethumb.explain.centroid import centroid_attributions  # noqa: PLC0415
     from sorethumb.explain.gradient import gradient_attributions, kernel_shap_attributions  # noqa: PLC0415
+    from sorethumb.explain.native import ecod_attributions, hbos_attributions  # noqa: PLC0415
     from sorethumb.explain.shap_tree import tree_shap_attributions  # noqa: PLC0415
 
     if not config.explain.enabled:
@@ -1394,16 +1417,36 @@ def _compute_attributions(
             elif isinstance(det, KMeansDetector):
                 full_attr, tag = centroid_attributions(det, X)  # also uncapped
                 attr = full_attr[flagged_idx]
-            else:
-                # No native attributor: input-gradient by default, KernelSHAP
-                # when explain.kernel_shap is set. Both operate on flagged rows
-                # only for cost control, and truncate to explain.max_rows —
-                # `attr` can come back shorter than X_flagged.
+            elif isinstance(det, ECODDetector):
+                full_attr, tag = ecod_attributions(det, X)  # exact, uncapped
+                attr = full_attr[flagged_idx]
+            elif isinstance(det, HBOSDetector):
+                full_attr, tag = hbos_attributions(det, X)  # exact, uncapped
+                attr = full_attr[flagged_idx]
+            elif isinstance(det, (OneClassSVMDetector, LOFDetector)):
+                # Finite-difference gradients, restricted to detectors whose
+                # score responds continuously to a small perturbation (see the
+                # docstring above). Both operate on flagged rows only for cost
+                # control, and truncate to explain.max_rows — `attr` can come
+                # back shorter than X_flagged.
                 max_rows = config.explain.max_rows
                 if config.explain.kernel_shap:
                     attr, tag = kernel_shap_attributions(det, X_flagged, max_rows=max_rows)
                 else:
                     attr, tag = gradient_attributions(det, X_flagged, max_rows=max_rows)
+            else:
+                # An attribution method for this detector type hasn't been
+                # vetted for smoothness. Finite-difference on a step-function
+                # score (as ECOD/HBOS were, before the dedicated branches
+                # above) silently produces all-zero or noisy attributions for
+                # exactly the far-tail rows we're trying to explain — skip
+                # rather than guess.
+                logger.debug(
+                    "No vetted attribution method for detector %r (%s); skipping.",
+                    det_name,
+                    type(det).__name__,
+                )
+                continue
         except Exception:
             logger.debug("Attribution skipped for detector %r.", det_name, exc_info=True)
             continue

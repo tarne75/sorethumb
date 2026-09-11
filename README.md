@@ -248,10 +248,13 @@ sorethumb anomalies --reasons 5 --top 50   # five reason columns
   421 flagged row(s)   run=abc12345678   workspace=.
 ```
 
-`kind=model_specific` means TreeSHAP (Isolation Forest) — it uses the fitted
-trees' actual structure, but (`check_additivity=False`) isn't a verified exact
-decomposition of the score; `kind=heuristic` means centroid or gradient
-attribution. See [docs/explanations.md](docs/explanations.md).
+`kind=exact` means ECOD/HBOS's own additive score decomposition (summing it
+recovers the score with zero error, by construction); `kind=model_specific`
+means TreeSHAP (Isolation Forest) — it uses the fitted trees' actual
+structure, but (`check_additivity=False`) isn't a verified exact
+decomposition of the score; `kind=heuristic` means centroid distance
+(KMeans) or finite-difference gradient (One-Class SVM, LOF). See
+[docs/explanations.md](docs/explanations.md).
 
 For a machine-readable result pipe `--json`:
 
@@ -383,10 +386,15 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
   median of three heuristic per-detector cut-offs that themselves disagree —
   see the realised rates in the run output). It says nothing about how many
   genuine anomalies the data holds; only labelled data can tell you that.
-- Only Isolation Forest yields model-specific (TreeSHAP) attributions, and even
-  those aren't a verified exact decomposition of the score
-  (`check_additivity=False`); all others are heuristic (centroid distance or
-  input gradient). See [docs/explanations.md](docs/explanations.md).
+- ECOD and HBOS are the only detectors with a truly exact attribution — their
+  score is already an additive sum of per-feature terms, so decomposing it is
+  zero-error by construction. Isolation Forest yields model-specific
+  (TreeSHAP) attributions, and even those aren't a verified exact
+  decomposition of the score (`check_additivity=False`); KMeans and
+  One-Class SVM/LOF are heuristic (centroid distance or finite-difference
+  gradient, the latter restricted to the two detectors whose score responds
+  continuously to a small perturbation). See
+  [docs/explanations.md](docs/explanations.md).
 - Self-calibration maps every run's scores to roughly uniform on [0, 1] by
   construction, so two independently-fitted runs — including the per-period runs
   `sorethumb backfill` produces — are not on a common scale. A `sorethumb history`

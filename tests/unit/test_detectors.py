@@ -539,6 +539,49 @@ def test_ecod_score_on_unseen_data():
     assert scores.shape == (50,)
 
 
+def test_ecod_feature_contributions_shape():
+    X = _normal_data(n=200)
+    det = ECODDetector()
+    det.fit(X, seed=0)
+    contrib = det.feature_contributions(X)
+    assert contrib.shape == (200, 4)
+    assert contrib.dtype.kind == "f"
+
+
+def test_ecod_feature_contributions_sum_to_outlier_score():
+    """Exact decomposition: summing contributions recovers -score_samples()."""
+    X = _data_with_outliers(n=200, n_outliers=10)
+    det = ECODDetector()
+    det.fit(X, seed=0)
+    contrib = det.feature_contributions(X)
+    scores = det.score_samples(X)  # higher = more normal
+    np.testing.assert_allclose(contrib.sum(axis=1), -scores, rtol=1e-10, atol=1e-10)
+
+
+def test_ecod_feature_contributions_are_nonnegative():
+    """Each term is -log(tail probability in [0, 1]) -- never negative."""
+    X = _data_with_outliers(n=200, n_outliers=10)
+    det = ECODDetector()
+    det.fit(X, seed=0)
+    contrib = det.feature_contributions(X)
+    assert (contrib >= 0.0).all()
+
+
+def test_ecod_feature_contributions_higher_for_planted_outlier_feature():
+    """A feature perturbed far outside the training range dominates that row's
+    contribution vector -- the decomposition attributes to the right column."""
+    rng = np.random.default_rng(3)
+    X = rng.standard_normal((200, 4))
+    det = ECODDetector()
+    det.fit(X, seed=0)
+
+    row = np.zeros((1, 4))
+    row[0, 2] = 999.0  # column 2 is the sole outlier
+    contrib = det.feature_contributions(row)
+    assert contrib[0, 2] == contrib[0].max()
+    assert contrib[0, 2] > contrib[0, [0, 1, 3]].sum()
+
+
 # ---------------------------------------------------------------------------
 # LOF
 # ---------------------------------------------------------------------------
@@ -691,6 +734,40 @@ def test_hbos_score_on_unseen_data():
     det.fit(X_train, seed=0)
     scores = det.score_samples(X_test)
     assert scores.shape == (50,)
+
+
+def test_hbos_feature_contributions_shape():
+    X = _normal_data(n=200)
+    det = HBOSDetector()
+    det.fit(X, seed=0)
+    contrib = det.feature_contributions(X)
+    assert contrib.shape == (200, 4)
+    assert contrib.dtype.kind == "f"
+
+
+def test_hbos_feature_contributions_sum_to_outlier_score():
+    """Exact decomposition: summing contributions recovers -score_samples()."""
+    X = _data_with_outliers(n=200, n_outliers=10)
+    det = HBOSDetector()
+    det.fit(X, seed=0)
+    contrib = det.feature_contributions(X)
+    scores = det.score_samples(X)  # higher = more normal
+    np.testing.assert_allclose(contrib.sum(axis=1), -scores, rtol=1e-10, atol=1e-10)
+
+
+def test_hbos_feature_contributions_higher_for_planted_outlier_feature():
+    """A feature perturbed far outside the training range dominates that row's
+    contribution vector -- the decomposition attributes to the right column."""
+    rng = np.random.default_rng(5)
+    X = rng.standard_normal((200, 4))
+    det = HBOSDetector()
+    det.fit(X, seed=0)
+
+    row = np.zeros((1, 4))
+    row[0, 1] = 999.0  # column 1 is the sole outlier
+    contrib = det.feature_contributions(row)
+    assert contrib[0, 1] == contrib[0].max()
+    assert contrib[0, 1] > contrib[0, [0, 2, 3]].sum()
 
 
 def test_auto_bins_normal_data():
