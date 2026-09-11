@@ -88,6 +88,14 @@ class FeaturePlan:
     pca_components: list[list[float]] | None = None
     pca_mean: list[float] | None = None
     pca_explained_variance_ratio: list[float] | None = None
+    # The exact ordered column list of the matrix as it stood immediately
+    # before PCA was applied (after demotion and correlation reduction) —
+    # what pca_components' loadings actually operate on. Set by
+    # features/build.py::fit_features. output_features is NOT this: it is
+    # built pre-demotion, pre-correlation-drop, so its width and identity can
+    # differ from what PCA was fit on. None for plans with PCA off, or plans
+    # persisted before this field existed.
+    pre_pca_feature_names: list[str] | None = None
     scaler_type: str = "robust"  # "standard" | "robust"
     output_dtype: str = "float32"  # "float32" | "float64"
     # Columns demoted from one-hot to frequency encoding due to width control
@@ -133,6 +141,7 @@ class FeaturePlan:
             "pca_components": self.pca_components,
             "pca_mean": self.pca_mean,
             "pca_explained_variance_ratio": self.pca_explained_variance_ratio,
+            "pre_pca_feature_names": self.pre_pca_feature_names,
             "scaler_type": self.scaler_type,
             "output_dtype": self.output_dtype,
             "demoted_columns": sorted(self.demoted_columns),
@@ -171,6 +180,7 @@ class FeaturePlan:
             pca_components=d.get("pca_components"),
             pca_mean=d.get("pca_mean"),
             pca_explained_variance_ratio=d.get("pca_explained_variance_ratio"),
+            pre_pca_feature_names=d.get("pre_pca_feature_names"),
             scaler_type=d.get("scaler_type", "robust"),
             output_dtype=d.get("output_dtype", "float32"),
             demoted_columns=set(d.get("demoted_columns", [])),
@@ -268,6 +278,46 @@ def build_feature_plan(df: pl.DataFrame, config: Config) -> FeaturePlan:
 # ------------------------------------------------------------------
 # Internal helpers
 # ------------------------------------------------------------------
+
+
+def recompute_output_features(
+    plan: FeaturePlan,
+    demoted: set[str],
+    schema: pl.Schema,
+    features_config: FeaturesConfig,
+) -> tuple[list[str], dict[str, str]]:
+    """Recompute ``output_features`` / ``derived_to_original`` after width demotion.
+
+    ``build_feature_plan`` sets both from each column's *original* treatment,
+    decided before ``features/build.py`` ever runs width-control demotion
+    (one-hot -> frequency). A demoted column's real output is a single
+    frequency-encoded feature, not the one-hot dummies ``output_features``
+    still lists -- left uncorrected, the plan misdescribes its own matrix
+    (wrong width, wrong per-column identity) to every caller that trusts it,
+    including PCA back-projection.
+
+    Mirrors ``features/encode.py::build_encoding_exprs``'s demotion override
+    (``col in demoted`` -> ``Treatment.frequency``) so the returned feature
+    list has the same order and identity as the actually-encoded frame.
+    """
+    output_features: list[str] = []
+    d2o: dict[str, str] = {}
+
+    for dec in plan.decisions:
+        treatment = Treatment.frequency if dec.column in demoted else dec.treatment
+        col_feats = _features_for_column(
+            dec.column,
+            treatment,
+            dec.emit_missing_indicator,
+            plan.one_hot_categories,
+            schema,
+            features_config,
+        )
+        for feat in col_feats:
+            output_features.append(feat)
+            d2o[feat] = dec.column
+
+    return output_features, d2o
 
 
 def _build_protected(columns_config: ColumnsConfig) -> set[str]:

@@ -60,6 +60,28 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- PCA back-projection could mislabel or fabricate reasons when PCA is on
+  (`features.pca=true`). `back_project_pca` was called with
+  `n_features=len(plan.output_features)` — a column count/identity fixed
+  *before* width-control demotion and correlation-drop, not the width
+  `plan.pca_components`' loadings were actually fit on. A mismatch raised
+  (caught) or, when the counts happened to coincide, silently mapped
+  attributions to the wrong original columns; either way the failure was
+  logged at DEBUG and the fallback attributed in raw PCA-component space
+  (`pc_6="high"` is not a reason a user can act on). Separately,
+  `plan.output_features` / `derived_to_original` were never recomputed after
+  demotion, so the plan misdescribed its own matrix (still listing one-hot
+  dummies for a column that now emits one frequency feature) independent of
+  PCA. Fixes: `FeaturePlan` gains `pre_pca_feature_names`, the exact
+  column list snapshotted immediately before the PCA step (after demotion and
+  correlation reduction) — back-projection now uses that, not
+  `output_features`. `fit_features` recomputes `output_features` /
+  `derived_to_original` after demotion so both describe the real matrix. A
+  back-projection failure (bad shape, or any other exception) now logs at
+  WARNING and marks every flagged row in the group `attribution_kind
+  ="unavailable"` with `reason_1="unavailable (PCA back-projection failed)"`
+  — a failure here isn't per-row, so nothing in the group gets a trustworthy
+  original-column attribution.
 - Explanations beyond `explain.max_rows` were fabricated, not omitted.
   `gradient_attributions` / `kernel_shap_attributions` (used for every detector
   without a native attributor — OneClassSVM, ECOD, LOF, HBOS) silently truncate

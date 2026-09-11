@@ -472,6 +472,34 @@ def test_apply_feature_plan_with_pca():
     np.testing.assert_array_almost_equal(fit_space.matrix, apply_space.matrix, decimal=5)
 
 
+def test_fit_features_pre_pca_feature_names_no_pca_matches_final_names():
+    """With PCA off, the pre-PCA snapshot IS the final feature space."""
+    df = _make_cat_df()
+    config = _make_config(pca=False)
+    plan = build_feature_plan(df, config)
+    space = fit_features(df, plan, config)
+    assert plan.pre_pca_feature_names == list(space.feature_names)
+
+
+def test_fit_features_pre_pca_feature_names_with_pca():
+    """With PCA on, plan.pre_pca_feature_names is the width/identity PCA was
+    actually fit on -- not plan.output_features (pre-demotion, pre-correlation
+    -drop) and not the post-PCA pc_i names either."""
+    df = _make_cat_df()
+    config = _make_config(
+        pca=True, pca_max_components=3, pca_min_explained_variance=0.70, correlation_reduction=False
+    )
+    plan = build_feature_plan(df, config)
+    space = fit_features(df, plan, config)
+
+    assert plan.pre_pca_feature_names is not None
+    assert not any(n.startswith("pc_") for n in plan.pre_pca_feature_names)
+    assert all(n.startswith("pc_") for n in space.feature_names)  # final space IS PCA space
+    # This is exactly the width back_project_pca's loadings-shape check needs:
+    assert plan.pca_components is not None
+    assert len(plan.pre_pca_feature_names) == len(plan.pca_components[0])
+
+
 def test_apply_feature_plan_with_correlated_columns_dropped():
     """Regression: a column plan.correlation_drop_list removes must not need a
     scaler param (it never reaches the matrix) — apply must not raise for it."""
@@ -482,6 +510,30 @@ def test_apply_feature_plan_with_correlated_columns_dropped():
     assert plan.correlation_drop_list, "fixture must actually exercise correlation dropping"
     apply_space = apply_feature_plan(df, plan)  # must not raise
     assert not (set(plan.correlation_drop_list) & set(apply_space.feature_names))
+
+
+def test_fit_features_recomputes_output_features_after_demotion():
+    """A demoted column's real output is one frequency feature, not the
+    one-hot dummies build_feature_plan planned before demotion ran. Left
+    uncorrected, plan.output_features / derived_to_original describe columns
+    that no longer exist in the matrix and are missing the one that does."""
+    df = pl.DataFrame({"cat": [f"c{i}" for i in range(50)] * 2})
+    config = _make_config(one_hot_max_cardinality=100, max_feature_width=5, pca=False)
+    plan = build_feature_plan(df, config)
+    # Before fit: build_feature_plan only knows the pre-demotion plan (one-hot,
+    # cardinality 50 <= one_hot_max_cardinality=100).
+    assert any(f.startswith("cat__") for f in plan.output_features)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FeatureWidthWarning)
+        space = fit_features(df, plan, config)
+
+    assert "cat" in plan.demoted_columns
+    # After fit: output_features must describe the matrix fit_features actually
+    # produced, not the pre-demotion plan.
+    assert plan.output_features == list(space.feature_names)
+    assert plan.output_features == ["cat"]
+    assert plan.derived_to_original == {"cat": "cat"}
 
 
 # ---------------------------------------------------------------------------

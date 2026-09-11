@@ -32,7 +32,7 @@ from sorethumb.features.reduce import apply_pca, fit_pca
 from sorethumb.features.scale import apply_scaler, fit_scaler
 from sorethumb.features.space import FeatureSpace
 from sorethumb.io.fingerprint import schema_fingerprint
-from sorethumb.profiling.plan import FeaturePlan
+from sorethumb.profiling.plan import FeaturePlan, recompute_output_features
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,13 @@ def fit_features(df: pl.DataFrame, plan: FeaturePlan, config: Config) -> Feature
         extra_freq[col] = {str(row[col]): float(row["proportion"]) for row in vc.iter_rows(named=True)}
         plan.frequency_maps[col] = extra_freq[col]
 
+    # A demoted column's output is now a single frequency feature, not the
+    # one-hot dummies build_feature_plan originally listed for it — recompute
+    # so the plan keeps describing the matrix it actually produces.
+    plan.output_features, plan.derived_to_original = recompute_output_features(
+        plan, demoted, df.schema, config.features
+    )
+
     # Build encoded polars frame
     enc_df = _encode(df, plan, demoted, extra_freq)
 
@@ -113,6 +120,12 @@ def fit_features(df: pl.DataFrame, plan: FeaturePlan, config: Config) -> Feature
 
     feature_names = scaled_df.columns
     matrix = _to_matrix(scaled_df, config.features.dtype)
+
+    # Snapshot the matrix's exact column order/identity right before the
+    # optional PCA step below — this, not plan.output_features (which
+    # predates demotion and correlation-drop), is what pca_components'
+    # loadings operate on and what back-projection must invert.
+    plan.pre_pca_feature_names = list(feature_names)
 
     # PCA
     if config.features.pca and matrix.shape[1] > 1:

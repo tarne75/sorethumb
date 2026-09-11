@@ -1277,19 +1277,20 @@ def _finalize_group(
 
     # Fill in reasons for flagged rows
     if attribution_cols is not None and n_anomalies > 0:
-        orig_attributions, attr_kind, uncovered_positions = attribution_cols
+        orig_attributions, attr_kind, unavailable_reasons = attribution_cols
         orig_df_rows = df_group.to_dicts()  # pre-encoding values
 
         for row_pos in flagged_idx:
             row_pos_i = int(row_pos)
 
-            if row_pos_i in uncovered_positions:
-                # Every attribution source that ran was capped (explain.max_rows)
-                # before reaching this row — none of them computed anything for
-                # it. Say so explicitly; an all-zero vector here would otherwise
-                # read as "no feature stood out" instead of "never computed".
+            unavailable_reason = unavailable_reasons.get(row_pos_i)
+            if unavailable_reason is not None:
+                # No source covered this row (beyond explain.max_rows), or PCA
+                # back-projection failed for the whole group. Either way, say
+                # so explicitly; an all-zero vector here would otherwise read
+                # as "no feature stood out" instead of "never computed".
                 records["attribution_kind"][row_pos_i] = "unavailable"
-                records["reason_1"][row_pos_i] = "unavailable (beyond explain.max_rows)"
+                records["reason_1"][row_pos_i] = unavailable_reason
                 continue
 
             raw_row_data = orig_df_rows[row_pos_i] if row_pos_i < len(orig_df_rows) else {}
@@ -1333,7 +1334,7 @@ def _compute_attributions(
     flagged_idx: np.ndarray,
     plan: FeaturePlan,
     group_space: FeatureSpace,
-) -> tuple[dict[str, np.ndarray], str, set[int]] | None:
+) -> tuple[dict[str, np.ndarray], str, dict[int, str]] | None:
     """Compute blended attributions for flagged rows. Returns None on failure.
 
     ``explain.enabled=False`` skips the stage entirely. For detectors without a
@@ -1351,11 +1352,17 @@ def _compute_attributions(
     is assumed ordered most-anomalous-first (the caller's job), so "beyond the
     cap" always means "least anomalous of the flagged set", not an arbitrary cut.
 
-    Returns ``(original_attributions, blend_tag, uncovered_row_positions)`` —
-    the last is the set of original-frame row indices among ``flagged_idx`` that
-    no source covered; callers must not run ``top_n_reasons`` on these and must
-    mark them unavailable instead, or an all-zero vector reads as "no feature
-    stood out" when the truth is "never computed".
+    Returns ``(original_attributions, blend_tag, unavailable_reasons)`` — the
+    last maps original-frame row indices among ``flagged_idx`` to a human
+    -readable reason no original-column attribution exists for that row (rows
+    absent from the mapping have one). Callers must not run ``top_n_reasons``
+    on a row present in this mapping and must mark it unavailable with the
+    given reason instead, or an all-zero vector reads as "no feature stood
+    out" when the truth is "never computed". Rows can land here for two
+    distinct reasons: no attribution source covered them (beyond
+    ``explain.max_rows``), or — when PCA is active — the PCA-space result
+    could not be back-projected to original columns, which fails for every
+    flagged row at once rather than a subset.
     """
     from sorethumb.detectors.isolation_forest import IsolationForestDetector  # noqa: PLC0415
     from sorethumb.detectors.kmeans_distance import KMeansDetector  # noqa: PLC0415
@@ -1414,28 +1421,57 @@ def _compute_attributions(
     if not sources:
         return None
 
-    uncovered_positions = {int(i) for i in flagged_idx[~covered]}
+    unavailable_reasons: dict[int, str] = {
+        int(i): "unavailable (beyond explain.max_rows)" for i in flagged_idx[~covered]
+    }
 
     if config.explain.permutation_importance:
         _run_permutation_importance_crosscheck(config, det_instances, X, plan, group_space)
 
     blended, blend_tag = blend(sources, source_weights)
 
-    # PCA back-projection if applicable
+    # PCA back-projection if applicable. plan.pre_pca_feature_names is the
+    # exact column order/width of the matrix PCA was actually fit on — set by
+    # fit_features right before the PCA step, after demotion and correlation
+    # reduction. plan.output_features is NOT that: it's built pre-demotion,
+    # pre-correlation-drop, so its width can silently differ from what
+    # plan.pca_components expects, and even a shape match would still mislabel
+    # every feature after a demotion changed which columns survived.
     feature_attributions = blended
     feature_names = group_space.feature_names
     if plan.pca_components is not None:
         from sorethumb.explain.project import back_project_pca  # noqa: PLC0415
 
-        try:
-            feature_attributions = back_project_pca(
-                blended,
-                np.array(plan.pca_components),
-                n_features=len(plan.output_features),
+        pca_failed = False
+        if plan.pre_pca_feature_names is None:
+            pca_failed = True
+            logger.warning(
+                "PCA is active but plan.pre_pca_feature_names is unset (plan "
+                "predates this field); back-projection is unavailable."
             )
-            feature_names = plan.output_features
-        except Exception:
-            logger.debug("PCA back-projection failed; using feature-space attributions.", exc_info=True)
+        else:
+            try:
+                feature_attributions = back_project_pca(
+                    blended,
+                    np.array(plan.pca_components),
+                    n_features=len(plan.pre_pca_feature_names),
+                )
+                feature_names = plan.pre_pca_feature_names
+            except Exception:
+                pca_failed = True
+                logger.warning(
+                    "PCA back-projection failed for %d flagged row(s); marking "
+                    "them unavailable rather than attributing in PCA-component "
+                    "space (e.g. pc_6) or against a mismatched feature list.",
+                    n_flagged,
+                    exc_info=True,
+                )
+        if pca_failed:
+            # A back-projection failure is not per-row -- if the loadings can't
+            # be applied to this blend, no flagged row in this group has a
+            # trustworthy original-column attribution.
+            reason = "unavailable (PCA back-projection failed)"
+            return {}, blend_tag, dict.fromkeys((int(i) for i in flagged_idx), reason)
 
     orig_attributions = aggregate_to_original(feature_attributions, feature_names, plan.derived_to_original)
 
@@ -1446,7 +1482,7 @@ def _compute_attributions(
         full_arr[flagged_idx] = arr
         expanded[orig_col] = full_arr
 
-    return expanded, blend_tag, uncovered_positions
+    return expanded, blend_tag, unavailable_reasons
 
 
 def _run_permutation_importance_crosscheck(
