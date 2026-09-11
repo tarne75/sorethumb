@@ -8,6 +8,13 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Realised per-detector flag rates surfaced. `ScoreEnsemble.combine()` returns a
+  new `per_detector_rates` (the fraction each detector's own heuristic boundary
+  flagged, for every input detector); `GroupSummary` carries it as
+  `detector_flag_rates` (plus `dropped_detectors`), the run summary prints it,
+  and `sorethumb run --json` reports it per group. `contamination="auto"` is the
+  median of these — showing them stops the flagged count being read as "how many
+  anomalies you have".
 - Ensemble bad-member guard. Before weighting or combining, `ScoreEnsemble`
   drops any detector whose score *ranking* is anti-correlated with the ensemble
   median (Spearman's rho < −0.15) — a member fighting the consensus rather than
@@ -173,6 +180,15 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Statistical contract sharpened. The README, `docs/adapting-to-your-data.md`,
+  `docs/configuration-examples.md`, `docs/approximations.md`, the
+  `scoring.contamination` field description, the run summary and `--json` output
+  no longer present `contamination` / `contamination="auto"` as a prevalence
+  estimate. `contamination` is a **review budget** (the size of the shortlist you
+  will look at); `"auto"` is a heuristic median of per-detector cut-offs that
+  disagree. The CLI summary line "Total anomalies: N" is now "Flagged for review:
+  N (X% of M rows) — … not an estimate of true prevalence"; `--json` groups gain
+  `n_flagged` alongside the retained `n_anomalies`.
 - `_pipeline`: the per-group ledger/status bookkeeping and the
   ensemble→threshold→explain→write tail are factored into shared helpers
   (`_execute_group`, `_finalize_group`) used by both `run_detection` and

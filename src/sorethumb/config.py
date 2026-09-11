@@ -325,10 +325,13 @@ class ScoringConfig(BaseModel):
     contamination: str | float = Field(
         "auto",
         description=(
-            "Expected fraction of anomalies. 'auto' uses each detector's natural boundary "
-            "(OCSVM zero-hyperplane, KMeans Tukey fence, IsolationForest offset). "
-            "A float in (0, 0.5] makes each detector flag exactly that fraction of rows "
-            "and also sets the OneClassSVM nu training parameter to match."
+            "Review-budget knob: the fraction of rows to flag. NOT an estimate of "
+            "how many anomalies the data contains -- it sizes the shortlist you are "
+            "willing to review. A float in (0, 0.5] makes each detector flag exactly "
+            "that fraction and sets the OneClassSVM nu to match. 'auto' lets each "
+            "detector use its own heuristic boundary (OCSVM zero-hyperplane, KMeans "
+            "Tukey fence, IsolationForest offset); these rates differ per detector and "
+            "the run output reports the realised rate of each."
         ),
     )
     combination: Literal["composite", "intersection", "union"] = Field(

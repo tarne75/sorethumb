@@ -414,10 +414,11 @@ train_row_cap = 20_000
 
 ## `[scoring]`
 
-### Known contamination rate
+### Fixed review budget
 
-If domain knowledge says roughly 2 % of records are anomalous, set it directly
-instead of letting sorethumb estimate from the score distribution.
+Flag a fixed fraction of the ranking for review — e.g. the top 2 % — instead of
+letting each detector fall back to its own heuristic boundary (`"auto"`).
+`contamination` sizes the shortlist; it is not a prevalence estimate.
 
 ```toml
 [source]

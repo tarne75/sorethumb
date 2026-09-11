@@ -340,6 +340,23 @@ def test_run_json_output(workspace):
     data = json.loads(result.stdout)
     assert "run_id" in data
     assert "groups" in data
+    g = data["groups"][0]
+    assert g["n_flagged"] == g["n_anomalies"]  # review-shortlist size, renamed for honesty
+    assert isinstance(g["detector_flag_rates"], dict)
+    assert set(g["detector_flag_rates"]) == {"isolation_forest"}  # the workspace fixture's detector
+    assert all(0.0 <= r <= 1.0 for r in g["detector_flag_rates"].values())
+    assert g["dropped_detectors"] == []
+
+
+def test_run_summary_frames_flagged_count_as_a_review_shortlist(workspace):
+    _, toml_path, _ = workspace
+    result = runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
+    assert result.exit_code == 0
+    out = result.stdout
+    assert "Flagged for review" in out
+    assert "not an estimate of true prevalence" in out
+    assert "Realised detector flag rates" in out
+    assert "Total anomalies" not in out
 
 
 def test_run_with_groups(workspace_grouped):

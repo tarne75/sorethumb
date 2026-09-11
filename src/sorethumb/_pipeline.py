@@ -129,7 +129,7 @@ class GroupSummary:
     group_key: str
     group_label: str
     n_records: int
-    n_anomalies: int
+    n_anomalies: int  # rows flagged for review at the chosen budget — not a prevalence estimate
     anomaly_rate: float | None
     results_path: Path | None
     status: str  # "success" | "skipped" | "failed" | "too_few_records"
@@ -138,6 +138,11 @@ class GroupSummary:
     drifted: bool
     refit_reason: str | None
     warnings_issued: list[str]
+    # Realised fraction each detector's own heuristic boundary flagged, and any
+    # detectors the ensemble guard dropped as anti-correlated. Empty for skipped
+    # groups (recomputed only on a live run).
+    detector_flag_rates: dict[str, float] = field(default_factory=dict)
+    dropped_detectors: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -822,6 +827,8 @@ def _group_summary(
     results_path: Path | None = None,
     drifted: bool = False,
     refit_reason: str | None = None,
+    detector_flag_rates: dict[str, float] | None = None,
+    dropped_detectors: list[str] | None = None,
 ) -> GroupSummary:
     return GroupSummary(
         group_key=group_key,
@@ -836,6 +843,8 @@ def _group_summary(
         drifted=drifted,
         refit_reason=refit_reason,
         warnings_issued=[],
+        detector_flag_rates=detector_flag_rates or {},
+        dropped_detectors=dropped_detectors or [],
     )
 
 
@@ -1208,6 +1217,8 @@ def _finalize_group(
     composite_score: np.ndarray = result_dict["combined_score"]
     anomaly_flag: np.ndarray = result_dict["anomaly_flag"]
     weights_used: dict[str, float] = result_dict["weights"]
+    detector_flag_rates: dict[str, float] = result_dict["per_detector_rates"]
+    dropped_detectors: list[str] = result_dict["dropped_members"]
 
     flagged_idx = np.where(anomaly_flag)[0]
     n_anomalies = int(anomaly_flag.sum())
@@ -1291,6 +1302,8 @@ def _finalize_group(
         anomaly_rate=anomaly_rate,
         results_path=results_path,
         drifted=drifted,
+        detector_flag_rates=detector_flag_rates,
+        dropped_detectors=dropped_detectors,
     )
 
 

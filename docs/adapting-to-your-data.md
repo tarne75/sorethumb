@@ -106,17 +106,23 @@ enabled = false
 
 ---
 
-## Step 4: Set contamination
+## Step 4: Set the review budget (`contamination`)
 
-`scoring.contamination = "auto"` (the default) estimates the anomaly rate from
-the score distribution. This works well when you have no prior knowledge of the
-expected anomaly rate.
+`contamination` is how much of the ranking you want back, **not** an estimate of
+how many anomalies exist. `scoring.contamination = "auto"` (the default) lets
+each detector fall back to its own heuristic boundary; the flagged count is
+whatever those boundaries produce, and the run output prints each detector's
+realised rate so you can see they disagree.
 
-If you know the rate (e.g. from a labelled validation set), set it explicitly:
+Set it explicitly to a fixed shortlist size — e.g. "I have capacity to review
+the top 2% each day":
 ```toml
 [scoring]
-contamination = 0.02  # 2% of records are anomalous
+contamination = 0.02  # flag the top 2% of the ranking for review
 ```
+
+A labelled validation set can tell you which budget gives acceptable
+precision/recall; `contamination` itself never measures prevalence.
 
 ---
 
