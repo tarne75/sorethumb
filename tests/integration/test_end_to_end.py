@@ -26,6 +26,7 @@ from sorethumb.config import (
     ColumnsConfig,
     DetectorConfig,
     ExplainConfig,
+    FeaturesConfig,
     HistoryConfig,
     RunConfig,
     ScoringConfig,
@@ -315,6 +316,80 @@ def test_rows_beyond_max_rows_cap_are_marked_unavailable_not_fabricated(tmp_path
     explained_reasons = df.filter(pl.col("attribution_kind") != "unavailable")["reason_1"].to_list()
     assert explained_reasons
     assert all(r is not None and "unavailable" not in r and "=" in r for r in explained_reasons)
+
+
+def test_pca_back_projection_uses_pre_pca_feature_names(tmp_path: Path) -> None:
+    """With PCA on, reasons must name real original columns (num_a, num_b, cat)
+
+    -- never a PCA component (pc_0, pc_1, ...). back_project_pca needs the
+    exact column list the matrix had right before PCA ran (post width-control
+    demotion, post correlation-drop); plan.output_features is the pre-demotion
+    list and can silently mismatch it.
+    """
+    csv = tmp_path / "data.csv"
+    _make_planted_csv(csv, n_normal=180, n_anomaly=10, seed=11)
+
+    cfg = Config(
+        source=SourceConfig(uri=str(csv), format="csv"),
+        run=RunConfig(workdir=str(tmp_path / "ws"), seed=42),
+        columns=ColumnsConfig(id_column="id"),
+        detectors=[DetectorConfig(name="isolation_forest")],
+        features=FeaturesConfig(pca=True, pca_max_components=2, pca_min_explained_variance=0.5),
+        scoring=ScoringConfig(combination="composite", contamination=0.05, weighting="equal", min_records=5),
+    )
+    result = run_detection(cfg, no_report=True)
+    assert result.n_anomalies > 0
+
+    parquet_path = result.groups[0].results_path
+    assert parquet_path is not None
+    df_anomalies = pl.read_parquet(parquet_path)
+
+    reasons = df_anomalies["reason_1"].drop_nulls().to_list()
+    assert reasons, "expected at least one non-null reason"
+    assert not any(r.split("=", 1)[0].startswith("pc_") for r in reasons), (
+        f"reasons must reference original columns, not PCA components: {reasons}"
+    )
+    assert any("num_a" in r for r in reasons), f"expected the planted column to surface: {reasons}"
+
+
+def test_pca_back_projection_failure_marks_all_flagged_rows_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A back-projection failure is not per-row: if the PCA loadings can't be
+
+    applied to the blended attribution, no flagged row in the group has a
+    trustworthy original-column attribution. Every flagged row must come back
+    attribution_kind="unavailable" with an explicit reason -- never silently
+    attributed in raw PCA-component space (pc_3="high" is not a real reason).
+    """
+    csv = tmp_path / "data.csv"
+    _make_planted_csv(csv, n_normal=180, n_anomaly=10, seed=11)
+
+    cfg = Config(
+        source=SourceConfig(uri=str(csv), format="csv"),
+        run=RunConfig(workdir=str(tmp_path / "ws"), seed=42),
+        columns=ColumnsConfig(id_column="id"),
+        detectors=[DetectorConfig(name="isolation_forest")],
+        features=FeaturesConfig(pca=True, pca_max_components=2, pca_min_explained_variance=0.5),
+        scoring=ScoringConfig(combination="composite", contamination=0.05, weighting="equal", min_records=5),
+    )
+
+    def _raise(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("forced back-projection failure")
+
+    monkeypatch.setattr("sorethumb.explain.project.back_project_pca", _raise)
+
+    result = run_detection(cfg, no_report=True)
+    assert result.n_anomalies > 0
+
+    parquet_path = result.groups[0].results_path
+    assert parquet_path is not None
+    df_anomalies = pl.read_parquet(parquet_path)
+
+    kinds = df_anomalies["attribution_kind"].to_list()
+    reasons = df_anomalies["reason_1"].to_list()
+    assert all(k == "unavailable" for k in kinds), f"expected every flagged row unavailable; got {kinds}"
+    assert all(r == "unavailable (PCA back-projection failed)" for r in reasons), reasons
 
 
 # ---------------------------------------------------------------------------
