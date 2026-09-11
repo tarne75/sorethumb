@@ -19,11 +19,28 @@ is seeded and deterministic. The elbow criterion (computed on the full training 
 the primary selection criterion; silhouette breaks ties. No accuracy guarantee is made for
 the selected `k` when the true cluster structure requires >20,000 rows to distinguish.
 
+## TreeSHAP for Isolation Forest — additivity unverified, and not of the final score
+
+`shap.TreeExplainer` is run with `check_additivity=False`, because IsolationForest's
+`score_samples` is not exactly the SHAP sum of its base value and per-feature
+contributions — the path-length trick breaks strict additivity, and additivity
+checking would otherwise raise on every call. Two consequences follow, and both
+are why the result is labelled `model_specific`, not `exact`: (1) with the check
+disabled, there is no runtime guarantee the returned values actually sum to the
+model output; (2) even where TreeSHAP's decomposition is exact, what it
+decomposes is path length, which IsolationForest's score is a nonlinear
+transform of — so an exact accounting of path length is still not an exact
+accounting of the score the user sees. `model_specific` reflects that this is
+more principled than a generic gradient/centroid heuristic (it uses the fitted
+trees' actual structure via the standard TreeSHAP algorithm), while stopping
+short of claiming the additivity guarantee "exact" would imply.
+
 ## KernelSHAP — Monte Carlo approximation
 
 When `explain.kernel_shap = true`, attributions for non-tree detectors are computed via
 `shap.KernelExplainer`. This uses Monte Carlo sampling of the feature space to estimate
-Shapley values. The result is labelled `heuristic`, not `exact`. Accuracy increases with
+Shapley values. The result is labelled `heuristic`, not `model_specific` — it never touches
+the detector's internal structure, unlike TreeSHAP. Accuracy increases with
 `nsamples` but so does runtime. The default `nsamples` is documented in `explain/`.
 
 ## Feature matrix dtype — float32 default

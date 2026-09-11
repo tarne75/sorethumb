@@ -6,9 +6,11 @@ the weighted component-wise mean using the scoring weights.
 
 A single source is returned as-is (no normalisation needed).
 
-Blended tag is ``exact`` only if every contributing source is ``exact``.
-In practice this means only a pure IsolationForest run without PCA produces
-an ``exact`` tag; any mixture or PCA back-projection yields ``heuristic``.
+Blended tag is ``model_specific`` only if every contributing source is
+``model_specific``. In practice this means only a pure IsolationForest run
+produces a ``model_specific`` tag; any mixture (or a source that fell back to
+a heuristic) yields ``heuristic``. Nothing sorethumb computes is tagged
+``exact`` — see ``shap_tree.py`` for why even TreeSHAP's own result isn't.
 """
 
 from __future__ import annotations
@@ -36,7 +38,8 @@ def blend(
     blended:
         Shape (n_rows, n_features). Combined attribution vector.
     tag:
-        "exact" iff all source tags are "exact", else "heuristic".
+        "model_specific" iff all source tags are "model_specific", else
+        "heuristic".
 
     """
     if not sources:
@@ -57,16 +60,16 @@ def blend(
         normed_weights = [w / total_weight for w in weights]
 
     blended = np.zeros_like(sources[0][0], dtype=np.float64)
-    all_exact = True
+    all_model_specific = True
 
     for (mat, tag), w in zip(sources, normed_weights, strict=True):
-        if tag != "exact":
-            all_exact = False
+        if tag != "model_specific":
+            all_model_specific = False
         # L2-normalise each row independently to prevent magnitude domination
         norms = np.linalg.norm(mat, axis=1, keepdims=True)
         norms = np.where(norms == 0.0, 1.0, norms)
         normed = mat / norms
         blended += w * normed
 
-    final_tag = "exact" if all_exact else "heuristic"
+    final_tag = "model_specific" if all_model_specific else "heuristic"
     return blended, final_tag

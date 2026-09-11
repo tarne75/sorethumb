@@ -91,7 +91,7 @@ sorethumb ships three detectors and enables all three by default:
 
 | Detector | Best for | Limitation |
 | --- | --- | --- |
-| `isolation_forest` | High-dimensional tabular data; exact SHAP explanations | Quadratic memory in n_features |
+| `isolation_forest` | High-dimensional tabular data; model-specific SHAP explanations | Quadratic memory in n_features |
 | `kmeans_distance` | Cluster-structured data; fast on large datasets | Assumes cluster structure exists |
 | `one_class_svm` | Compact, non-linear decision boundaries | Very slow without a row cap |
 
@@ -138,7 +138,7 @@ is generated at the workspace root. Open it to see:
 - Per-group anomaly counts and rates
 - A trend chart if you have a time column
 - A per-anomaly explanation table: which features drove the score, labelled
-  exact or heuristic
+  model_specific or heuristic
 
 The run is idempotent — running it again for the same dataset and period skips
 groups already completed. Use `--force` to re-run everything.

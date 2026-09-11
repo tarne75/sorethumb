@@ -139,7 +139,7 @@ def test_tree_shap_shape():
     det, X = _fit_if(n=200)
     attrs, tag = tree_shap_attributions(det, X[:20])
     assert attrs.shape == (20, 4)
-    assert tag == "exact"
+    assert tag == "model_specific"
 
 
 def test_tree_shap_dtype():
@@ -191,17 +191,17 @@ def test_tree_shap_outliers_get_higher_attributions():
 
 def test_blend_single_source():
     mat = np.ones((10, 4))
-    result, tag = blend([(mat, "exact")], [1.0])
+    result, tag = blend([(mat, "model_specific")], [1.0])
     np.testing.assert_array_equal(result, mat)
-    assert tag == "exact"
+    assert tag == "model_specific"
 
 
 def test_blend_two_sources_equal_weights():
     a = np.ones((10, 4)) * 2.0
     b = np.ones((10, 4)) * 2.0
-    result, tag = blend([(a, "exact"), (b, "heuristic")], [1.0, 1.0])
+    result, tag = blend([(a, "model_specific"), (b, "heuristic")], [1.0, 1.0])
     assert result.shape == (10, 4)
-    assert tag == "heuristic"  # not all exact
+    assert tag == "heuristic"  # not all model_specific
 
 
 def test_blend_l2_normalised_then_averaged():
@@ -222,11 +222,11 @@ def test_blend_magnitude_dominated_source_not_allowed_to_dominate():
     np.testing.assert_allclose(result[0, 0], result[0, 1], rtol=1e-6)
 
 
-def test_blend_all_exact_tag():
+def test_blend_all_model_specific_tag():
     a = np.ones((5, 3))
     b = np.ones((5, 3))
-    _, tag = blend([(a, "exact"), (b, "exact")], [0.5, 0.5])
-    assert tag == "exact"
+    _, tag = blend([(a, "model_specific"), (b, "model_specific")], [0.5, 0.5])
+    assert tag == "model_specific"
 
 
 def test_blend_empty_raises():
@@ -237,7 +237,7 @@ def test_blend_empty_raises():
 def test_blend_mismatched_lengths_raises():
     a = np.ones((5, 3))
     with pytest.raises(ValueError, match="same length"):
-        blend([(a, "exact"), (a, "exact")], [1.0])
+        blend([(a, "model_specific"), (a, "model_specific")], [1.0])
 
 
 def test_blend_zero_weight_falls_back_to_equal():

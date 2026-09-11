@@ -1,27 +1,38 @@
-# Explanations: exact vs heuristic
+# Explanations: model-specific vs heuristic
 
 sorethumb attributes each anomalous row's score to the original features that
-contributed most to it. Not all attribution methods are equally trustworthy.
-This file documents exactly which methods are exact and which are heuristic,
-and what each heuristic actually measures.
+contributed most to it. Not all attribution methods are equally trustworthy,
+and none of them is labelled `exact` — this file documents exactly which
+methods are `model_specific` and which are `heuristic`, and what each one
+actually measures.
 
 ---
 
-## Exact attributions
+## Model-specific attributions
 
 ### TreeSHAP (Isolation Forest only)
 
-**Method:** SHAP values computed by exact path enumeration over all trees in
-the Isolation Forest ensemble.
+**Method:** SHAP values computed by path enumeration over all trees in the
+Isolation Forest ensemble, via `shap.TreeExplainer` with
+`check_additivity=False`.
 
 **What it measures:** Each feature's contribution to the row's path length
 relative to the expected path length across the training set. A short path
 means the record was isolated early, which is what anomaly means for IF.
 
-**Note:** TreeSHAP requires `check_additivity=False` for Isolation Forest because
-the path-length trick breaks the strict SHAP additivity assumption (the sum of
-SHAP values does not equal the model output in the usual sense). The values are
-still directionally correct and comparable across features within a row.
+**Note:** this is *not* tagged `exact`, for two separate reasons.
+`check_additivity=False` is required because the path-length trick breaks the
+strict SHAP additivity assumption (the sum of SHAP values does not equal the
+model output in the usual sense), so additivity is unverified at runtime. And
+even where the decomposition holds exactly, what it decomposes is path
+length — IsolationForest's score is a nonlinear transform of that, so an
+exact accounting of path length is still not an exact accounting of the score
+itself. `model_specific` reflects that this uses the fitted trees' actual
+structure (more principled than a generic gradient/centroid heuristic)
+without claiming the guarantee `exact` would imply. The values are still
+directionally correct and comparable across features within a row.
+
+**Label in output:** `model_specific`.
 
 **Applicable when:** detector is `isolation_forest` and `explain.enabled = true`.
 
@@ -42,7 +53,8 @@ from any large cluster's centre. This is not a Shapley value — it does not hav
 theoretical guarantees (efficiency, symmetry, dummy) that SHAP values carry.
 In practice it is a reliable proxy for "why this row is a KMeans outlier."
 
-**Label in output:** `heuristic:centroid`
+**Label in output:** `heuristic` (the mechanism — centroid vs gradient — is
+not distinguished in the output tag; see below).
 
 **Applicable when:** detector is `kmeans_distance`.
 
@@ -63,7 +75,7 @@ non-linearities.
 slow. The default cap (`explain.max_rows = 5000`) keeps total explanation time
 bounded.
 
-**Label in output:** `heuristic:gradient`
+**Label in output:** `heuristic`.
 
 **Applicable when:** detector supports neither TreeSHAP nor centroid attribution.
 
@@ -93,7 +105,9 @@ anomalous row from the rest of the population.
   there is a 90% chance the anomaly is caused by unusual revenue.
 - **They are local.** The attribution is computed for the specific row, not for
   the class of anomalies that share its pattern.
-- **For heuristic methods, they are not guaranteed to sum to the model output.**
-  They are directionally correct, not numerically exact.
+- **None of them are guaranteed to sum to the model output.** Heuristic methods
+  make no such claim to begin with; `model_specific` (TreeSHAP) runs with
+  additivity checking disabled, so it isn't verified there either. All of them
+  are directionally correct, not numerically exact.
 - **They do not imply causation.** An anomalous revenue figure may be caused by
   an anomalous quantity, not by revenue itself, if the two are correlated.

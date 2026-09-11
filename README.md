@@ -54,7 +54,7 @@ machinery those libraries leave to the user:
    detector scores onto [0, 1] against its own training distribution. Scores are
    comparable *across* runs only when a fitted calibrator is reused —
    `sorethumb score --from-run RUN_ID` — since a plain run self-calibrates.
-3. **Per-record explanations** in original feature terms, labelled exact or heuristic.
+3. **Per-record explanations** in original feature terms, labelled model_specific or heuristic.
 4. **Run history you can reason about** — models and calibrators are persisted, so a
    `score --from-run` trend line moves with the data, not with a refitted model. A
    plain `backfill` refits each period; its trend shows relative movement, not an
@@ -237,19 +237,21 @@ sorethumb anomalies --reasons 5 --top 50   # five reason columns
 
 ```
                     Anomalies — run abc12345678
-┌────┬────────┬───────────┬──────────────────────┬────────────────────────┐
-│  # │  score │ kind      │ reason 1             │ reason 2               │
-├────┼────────┼───────────┼──────────────────────┼────────────────────────┤
-│  1 │ 0.9821 │ exact     │ amount=14 500.00     │ country=NG             │
-│  2 │ 0.9714 │ exact     │ hour_of_day=3        │ failed_attempts=12     │
-│  3 │ 0.9601 │ heuristic │ session_duration=0.1 │ amount=9 200.00        │
-│  …                                                                      │
-└────┴────────┴───────────┴──────────────────────┴────────────────────────┘
+┌────┬────────┬────────────────┬──────────────────────┬────────────────────────┐
+│  # │  score │ kind           │ reason 1             │ reason 2               │
+├────┼────────┼────────────────┼──────────────────────┼────────────────────────┤
+│  1 │ 0.9821 │ model_specific │ amount=14 500.00     │ country=NG             │
+│  2 │ 0.9714 │ model_specific │ hour_of_day=3        │ failed_attempts=12     │
+│  3 │ 0.9601 │ heuristic      │ session_duration=0.1 │ amount=9 200.00        │
+│  …                                                                           │
+└────┴────────┴────────────────┴──────────────────────┴────────────────────────┘
   421 flagged row(s)   run=abc12345678   workspace=.
 ```
 
-`kind=exact` means TreeSHAP (Isolation Forest); `kind=heuristic` means centroid
-or gradient attribution. See [docs/explanations.md](docs/explanations.md).
+`kind=model_specific` means TreeSHAP (Isolation Forest) — it uses the fitted
+trees' actual structure, but (`check_additivity=False`) isn't a verified exact
+decomposition of the score; `kind=heuristic` means centroid or gradient
+attribution. See [docs/explanations.md](docs/explanations.md).
 
 For a machine-readable result pipe `--json`:
 
@@ -295,7 +297,7 @@ that no single blind spot dominates the ensemble:
 
 | Detector | Key | Algorithm | Strength | Weakness |
 |----------|-----|-----------|----------|----------|
-| `isolation_forest` | ★ default | Random tree partitioning | Fast, scales to millions of rows, exact TreeSHAP attributions | Struggles with very high-dimensional sparse data |
+| `isolation_forest` | ★ default | Random tree partitioning | Fast, scales to millions of rows, model-specific TreeSHAP attributions | Struggles with very high-dimensional sparse data |
 | `kmeans_distance` | ★ default | CBLOF: negative distance to nearest *large*-cluster centroid | Interpretable; a tight anomaly cluster can't hide by capturing its own centroid | Assumes anomalies are ≲ 10 % of rows (tune `large_cluster_coverage`); spherical clusters; sensitive to `k` |
 | `one_class_svm` | ★ default | RBF kernel boundary | Genuinely different family, useful in ensemble | Quadratic training cost; capped at 25 k rows by default |
 
@@ -381,8 +383,10 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
   median of three heuristic per-detector cut-offs that themselves disagree —
   see the realised rates in the run output). It says nothing about how many
   genuine anomalies the data holds; only labelled data can tell you that.
-- Only Isolation Forest yields exact (TreeSHAP) attributions; all others are heuristic
-  (centroid distance or input gradient). See [docs/explanations.md](docs/explanations.md).
+- Only Isolation Forest yields model-specific (TreeSHAP) attributions, and even
+  those aren't a verified exact decomposition of the score
+  (`check_additivity=False`); all others are heuristic (centroid distance or
+  input gradient). See [docs/explanations.md](docs/explanations.md).
 - Self-calibration maps every run's scores to roughly uniform on [0, 1] by
   construction, so two independently-fitted runs — including the per-period runs
   `sorethumb backfill` produces — are not on a common scale. A `sorethumb history`
@@ -403,6 +407,6 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
 - [Detector models](docs/models.md)
 - [Example runs](docs/example-runs.md)
 - [Adapting to your data](docs/adapting-to-your-data.md)
-- [Explanations: exact vs heuristic](docs/explanations.md)
+- [Explanations: model-specific vs heuristic](docs/explanations.md)
 - [Approximations and error characteristics](docs/approximations.md)
 - [Contributing](CONTRIBUTING.md)

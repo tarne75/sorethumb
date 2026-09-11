@@ -8,6 +8,6 @@
 - [Detector models](models.md)
 - [Example runs](example-runs.md)
 - [Adapting to your data](adapting-to-your-data.md)
-- [Explanations: exact vs heuristic](explanations.md)
+- [Explanations: model-specific vs heuristic](explanations.md)
 - [Approximations and error characteristics](approximations.md)
 - [Contributing](../CONTRIBUTING.md)
