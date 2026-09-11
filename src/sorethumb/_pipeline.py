@@ -1224,6 +1224,13 @@ def _finalize_group(
     n_anomalies = int(anomaly_flag.sum())
     anomaly_rate = n_anomalies / n_rows if n_rows > 0 else None
 
+    # Most-anomalous first. explain.max_rows caps per-row attribution methods
+    # (gradient, KernelSHAP); ordering severity-descending before that cap bites
+    # means a truncated run still explains the rows that matter most, and the
+    # ones it had to skip are the least anomalous of the flagged set.
+    if n_anomalies > 0:
+        flagged_idx = flagged_idx[np.argsort(composite_score[flagged_idx])[::-1]]
+
     # ── Explanations ────────────────────────────────────────────────────────
     top_n = config.explain.top_n
     attribution_cols = _compute_attributions(
@@ -1270,23 +1277,34 @@ def _finalize_group(
 
     # Fill in reasons for flagged rows
     if attribution_cols is not None and n_anomalies > 0:
-        orig_attributions, attr_kind = attribution_cols
+        orig_attributions, attr_kind, uncovered_positions = attribution_cols
         orig_df_rows = df_group.to_dicts()  # pre-encoding values
 
         for row_pos in flagged_idx:
-            raw_row_data = orig_df_rows[int(row_pos)] if int(row_pos) < len(orig_df_rows) else {}
+            row_pos_i = int(row_pos)
+
+            if row_pos_i in uncovered_positions:
+                # Every attribution source that ran was capped (explain.max_rows)
+                # before reaching this row — none of them computed anything for
+                # it. Say so explicitly; an all-zero vector here would otherwise
+                # read as "no feature stood out" instead of "never computed".
+                records["attribution_kind"][row_pos_i] = "unavailable"
+                records["reason_1"][row_pos_i] = "unavailable (beyond explain.max_rows)"
+                continue
+
+            raw_row_data = orig_df_rows[row_pos_i] if row_pos_i < len(orig_df_rows) else {}
             reasons = top_n_reasons(
-                row_idx=int(row_pos),
+                row_idx=row_pos_i,
                 original_attributions=orig_attributions,
                 raw_row=raw_row_data,
                 top_n=top_n,
             )
-            records["attribution_kind"][int(row_pos)] = attr_kind
+            records["attribution_kind"][row_pos_i] = attr_kind
             for r_i, reason in enumerate(reasons):
                 reason_col = cast("str | None", reason.get("column"))
                 raw_val = reason.get("raw_value")
                 label = f"{reason_col}={raw_val}" if reason_col else None
-                records[f"reason_{r_i + 1}"][int(row_pos)] = label
+                records[f"reason_{r_i + 1}"][row_pos_i] = label
 
     df_results = pl.DataFrame(records)
     df_anomalies = df_results.filter(pl.col("flagged"))
@@ -1315,13 +1333,29 @@ def _compute_attributions(
     flagged_idx: np.ndarray,
     plan: FeaturePlan,
     group_space: FeatureSpace,
-) -> tuple[dict[str, np.ndarray], str] | None:
+) -> tuple[dict[str, np.ndarray], str, set[int]] | None:
     """Compute blended attributions for flagged rows. Returns None on failure.
 
     ``explain.enabled=False`` skips the stage entirely. For detectors without a
     native attributor (anything but IsolationForest / KMeans) ``explain.kernel_shap``
     routes to KernelSHAP instead of the input-gradient method. ``explain
     .permutation_importance`` runs an extra per-detector cross-check.
+
+    ``gradient_attributions`` / ``kernel_shap_attributions`` cap the rows they
+    attribute at ``explain.max_rows`` and return a *shorter* array for the rest
+    — they do not raise or pad meaningfully themselves. TreeSHAP and centroid
+    attributions have no such cap; they always cover every flagged row. A flagged
+    row beyond the cap is only ever covered if a full-coverage source (or another
+    detector that itself has room) has something for it — never invented. Per
+    row, this tracks whether *any* source actually covered it; ``flagged_idx``
+    is assumed ordered most-anomalous-first (the caller's job), so "beyond the
+    cap" always means "least anomalous of the flagged set", not an arbitrary cut.
+
+    Returns ``(original_attributions, blend_tag, uncovered_row_positions)`` —
+    the last is the set of original-frame row indices among ``flagged_idx`` that
+    no source covered; callers must not run ``top_n_reasons`` on these and must
+    mark them unavailable instead, or an all-zero vector reads as "no feature
+    stood out" when the truth is "never computed".
     """
     from sorethumb.detectors.isolation_forest import IsolationForestDetector  # noqa: PLC0415
     from sorethumb.detectors.kmeans_distance import KMeansDetector  # noqa: PLC0415
@@ -1337,24 +1371,27 @@ def _compute_attributions(
 
     n_rows = len(X)
     n_features = X.shape[1]
+    n_flagged = len(flagged_idx)
     X_flagged = X[flagged_idx]
 
     sources: list[tuple[np.ndarray, str]] = []
     source_weights: list[float] = []
+    covered = np.zeros(n_flagged, dtype=bool)  # True where >=1 source has a real value
 
     for det_name, det in det_instances.items():
         try:
             if isinstance(det, IsolationForestDetector):
-                # Full matrix needed; SHAP attributes all rows
+                # Full matrix needed; SHAP attributes all rows — never capped.
                 full_attr, tag = tree_shap_attributions(det, X, group_name=det_name)
                 attr = full_attr[flagged_idx]
             elif isinstance(det, KMeansDetector):
-                full_attr, tag = centroid_attributions(det, X)
+                full_attr, tag = centroid_attributions(det, X)  # also uncapped
                 attr = full_attr[flagged_idx]
             else:
                 # No native attributor: input-gradient by default, KernelSHAP
                 # when explain.kernel_shap is set. Both operate on flagged rows
-                # only for cost control.
+                # only for cost control, and truncate to explain.max_rows —
+                # `attr` can come back shorter than X_flagged.
                 max_rows = config.explain.max_rows
                 if config.explain.kernel_shap:
                     attr, tag = kernel_shap_attributions(det, X_flagged, max_rows=max_rows)
@@ -1364,15 +1401,20 @@ def _compute_attributions(
             logger.debug("Attribution skipped for detector %r.", det_name, exc_info=True)
             continue
 
-        # Pad to full n_rows shape centred on flagged positions
-        # (blend expects same shape; flagged_idx positions us correctly)
-        full = np.zeros((len(flagged_idx), n_features), dtype=np.float64)
+        covered[: len(attr)] = True
+        # Pad to full n_flagged shape centred on flagged positions (blend expects
+        # same shape). Padding is a real "this source has nothing to add" zero
+        # for rows it covers-but-computes-zero-for; for rows beyond its cap it is
+        # a placeholder only `covered` (tracked above) can distinguish from that.
+        full = np.zeros((n_flagged, n_features), dtype=np.float64)
         full[: len(attr)] = attr
         sources.append((full, tag))
         source_weights.append(weights_used.get(det_name, 1.0))
 
     if not sources:
         return None
+
+    uncovered_positions = {int(i) for i in flagged_idx[~covered]}
 
     if config.explain.permutation_importance:
         _run_permutation_importance_crosscheck(config, det_instances, X, plan, group_space)
@@ -1398,14 +1440,13 @@ def _compute_attributions(
     orig_attributions = aggregate_to_original(feature_attributions, feature_names, plan.derived_to_original)
 
     # Expand to full-frame indexing so top_n_reasons can look up row_pos directly
-    n_flagged = len(flagged_idx)
     expanded: dict[str, np.ndarray] = {}
     for orig_col, arr in orig_attributions.items():
         full_arr = np.zeros(n_rows, dtype=np.float64)
-        full_arr[flagged_idx[:n_flagged]] = arr[:n_flagged]
+        full_arr[flagged_idx] = arr
         expanded[orig_col] = full_arr
 
-    return expanded, blend_tag
+    return expanded, blend_tag, uncovered_positions
 
 
 def _run_permutation_importance_crosscheck(
