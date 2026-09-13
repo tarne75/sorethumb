@@ -20,7 +20,7 @@
 
 ALTER TABLE dataset ADD COLUMN snapshot_fp TEXT;
 
-CREATE TABLE dataset_snapshot (
+CREATE TABLE IF NOT EXISTS dataset_snapshot (
     dataset_fp          TEXT NOT NULL REFERENCES dataset(dataset_fp),
     snapshot_fp         TEXT NOT NULL,
     schema_fingerprint  TEXT NOT NULL,
@@ -32,7 +32,7 @@ CREATE TABLE dataset_snapshot (
     PRIMARY KEY (dataset_fp, snapshot_fp)
 );
 
-CREATE INDEX idx_dataset_snapshot_fp ON dataset_snapshot(snapshot_fp);
+CREATE INDEX IF NOT EXISTS idx_dataset_snapshot_fp ON dataset_snapshot(snapshot_fp);
 
 INSERT INTO dataset_snapshot
     (dataset_fp, snapshot_fp, schema_fingerprint, content_fingerprint,

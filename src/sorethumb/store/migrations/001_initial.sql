@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS schema_migration (
     applied_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
-CREATE TABLE dataset (
+CREATE TABLE IF NOT EXISTS dataset (
     dataset_fp          TEXT PRIMARY KEY,
     source_uri          TEXT NOT NULL,
     schema_fingerprint  TEXT NOT NULL,
@@ -16,7 +16,7 @@ CREATE TABLE dataset (
     last_seen           TEXT NOT NULL
 );
 
-CREATE TABLE run (
+CREATE TABLE IF NOT EXISTS run (
     run_id          TEXT PRIMARY KEY,
     dataset_fp      TEXT NOT NULL REFERENCES dataset(dataset_fp),
     config_hash     TEXT NOT NULL,
@@ -31,7 +31,7 @@ CREATE TABLE run (
     error_text      TEXT
 );
 
-CREATE TABLE run_group (
+CREATE TABLE IF NOT EXISTS run_group (
     run_id          TEXT NOT NULL REFERENCES run(run_id),
     group_key       TEXT NOT NULL,
     group_values_json TEXT NOT NULL,
@@ -46,7 +46,7 @@ CREATE TABLE run_group (
     PRIMARY KEY (run_id, group_key)
 );
 
-CREATE TABLE period (
+CREATE TABLE IF NOT EXISTS period (
     dataset_fp   TEXT NOT NULL REFERENCES dataset(dataset_fp),
     period_label TEXT NOT NULL,
     period_from  TEXT NOT NULL,
@@ -54,7 +54,7 @@ CREATE TABLE period (
     PRIMARY KEY (dataset_fp, period_label)
 );
 
-CREATE TABLE totals (
+CREATE TABLE IF NOT EXISTS totals (
     dataset_fp    TEXT NOT NULL,
     group_key     TEXT NOT NULL,
     period_label  TEXT NOT NULL,
@@ -66,7 +66,7 @@ CREATE TABLE totals (
     PRIMARY KEY (dataset_fp, group_key, period_label)
 );
 
-CREATE TABLE model (
+CREATE TABLE IF NOT EXISTS model (
     model_id            TEXT PRIMARY KEY,
     run_id              TEXT NOT NULL REFERENCES run(run_id),
     group_key           TEXT NOT NULL,
@@ -78,12 +78,12 @@ CREATE TABLE model (
     fitted_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
-CREATE TABLE calibrator (
+CREATE TABLE IF NOT EXISTS calibrator (
     model_id            TEXT PRIMARY KEY REFERENCES model(model_id),
     quantile_values_json TEXT NOT NULL
 );
 
-CREATE TABLE artifact (
+CREATE TABLE IF NOT EXISTS artifact (
     artifact_id  TEXT PRIMARY KEY,
     path         TEXT NOT NULL UNIQUE,
     kind         TEXT NOT NULL,

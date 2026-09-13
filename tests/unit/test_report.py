@@ -181,6 +181,25 @@ class TestWriteGroupCsv:
         back = pl.read_csv(str(path))
         assert back["reason_1"].to_list() == ["'=x", None]
 
+    def test_leaves_existing_csv_on_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Written via atomic_write (temp file + rename): a failure partway
+        through must leave a prior file untouched, not truncated."""
+        from sorethumb import _atomic
+
+        path = write_group_csv(_RECORDS_DF, tmp_path, "atomickey1234567")
+        original = path.read_bytes()
+
+        def _boom(*_a: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(_atomic.os, "replace", _boom)
+        with pytest.raises(OSError, match="disk full"):
+            write_group_csv(_RECORDS_DF, tmp_path, "atomickey1234567")
+        monkeypatch.undo()
+
+        assert path.read_bytes() == original
+        assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
 
 # ---------------------------------------------------------------------------
 # html.py — offline, escaping, CSV links, provenance
@@ -301,6 +320,25 @@ class TestRenderReport:
         path = render_report(_RUN_META, [], tmp_path)
         content = path.read_text(encoding="utf-8")
         assert "contamination" in content  # from config_json
+
+    def test_leaves_existing_index_html_on_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """index.html is written via atomic_write (temp file + rename): a
+        failure partway through must leave a prior report untouched."""
+        from sorethumb import _atomic
+
+        path = render_report(_RUN_META, [_group()], tmp_path)
+        original = path.read_bytes()
+
+        def _boom(*_a: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(_atomic.os, "replace", _boom)
+        with pytest.raises(OSError, match="disk full"):
+            render_report(_RUN_META, [_group()], tmp_path)
+        monkeypatch.undo()
+
+        assert path.read_bytes() == original
+        assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
 
 
 # ---------------------------------------------------------------------------

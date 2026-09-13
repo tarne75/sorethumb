@@ -8,4 +8,4 @@
 
 ALTER TABLE run ADD COLUMN source_run_id TEXT;
 
-CREATE INDEX idx_run_source ON run(source_run_id);
+CREATE INDEX IF NOT EXISTS idx_run_source ON run(source_run_id);

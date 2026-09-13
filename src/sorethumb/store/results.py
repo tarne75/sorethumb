@@ -7,6 +7,9 @@ in-progress group is lost.
 The Parquet file is the authoritative record of which rows were flagged. The
 database row_group table only stores aggregate counts; the per-row detail lives
 in Parquet.
+
+Written atomically (sibling temp file + rename, see ``sorethumb._atomic``): a
+crash mid-write, or a reader racing the writer, never sees a truncated file.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from pathlib import Path
 
 import polars as pl
 
+from sorethumb._atomic import atomic_write
 from sorethumb.store.workspace import Workspace
 
 logger = logging.getLogger(__name__)
@@ -52,7 +56,10 @@ def write_results(
     out_dir = workspace.results_dir(run_id, group_key)
     out_path = out_dir / _RESULT_FILENAME
 
-    df.write_parquet(str(out_path))
+    # Temp file + rename: a reader (or a crash) never sees a half-written
+    # Parquet file, and this is the only record of which rows were flagged.
+    with atomic_write(out_path) as tmp:
+        df.write_parquet(str(tmp))
     byte_size = out_path.stat().st_size
     logger.info(
         "Results written: run=%s group=%s rows=%d path=%s",

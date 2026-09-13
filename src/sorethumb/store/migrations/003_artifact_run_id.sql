@@ -16,4 +16,4 @@
 
 ALTER TABLE artifact ADD COLUMN run_id TEXT;
 
-CREATE INDEX idx_artifact_run_id ON artifact(run_id);
+CREATE INDEX IF NOT EXISTS idx_artifact_run_id ON artifact(run_id);

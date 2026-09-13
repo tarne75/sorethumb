@@ -219,6 +219,108 @@ def test_store_second_open_no_duplicate_migration(tmp_path):
         assert len(versions) == len(set(versions)), "duplicate migration versions"
 
 
+# ---------------------------------------------------------------------------
+# Store hardening: busy_timeout, migration checksums, schema ceiling
+# ---------------------------------------------------------------------------
+
+
+def test_busy_timeout_is_set(tmp_path):
+    with Store(tmp_path / "m.db") as store:
+        (timeout_ms,) = store._conn.execute("PRAGMA busy_timeout").fetchone()
+    assert timeout_ms > 0, "absent busy_timeout: a concurrent writer fails instantly instead of waiting"
+
+
+def test_concurrent_opens_all_succeed_and_migrate_once(tmp_path):
+    """Several threads racing Store(db_path) on a fresh workspace must all
+    succeed, and every migration must be recorded exactly once -- this is
+    what busy_timeout plus the lock-then-recheck in _apply_one_migration are
+    for."""
+    import threading
+
+    db = tmp_path / "race.db"
+    errors: list[Exception] = []
+
+    def _open() -> None:
+        try:
+            Store(db).close()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_open) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, f"concurrent Store() opens raised: {errors}"
+    with Store(db) as store:
+        versions = [
+            r[0] for r in store._conn.execute("SELECT version FROM schema_migration ORDER BY version")
+        ]
+    assert versions == [1, 2, 3, 4, 5]
+
+
+def test_migrations_record_a_checksum(tmp_path):
+    with Store(tmp_path / "m.db") as store:
+        rows = store._conn.execute("SELECT version, checksum FROM schema_migration").fetchall()
+    assert rows
+    for version, checksum in rows:
+        assert checksum, f"migration {version} recorded no checksum"
+
+
+def test_tampered_checksum_raises_on_reopen(tmp_path):
+    db = tmp_path / "m.db"
+    Store(db).close()
+
+    import sqlite3
+
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE schema_migration SET checksum='not-the-real-checksum' WHERE version=1")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(StoreError, match="checksum"):
+        Store(db)
+
+
+def test_schema_ceiling_rejects_newer_workspace(tmp_path):
+    """A workspace already migrated past what this code knows must not be
+    silently adopted -- an older client writing against an unknown schema
+    risks corrupting it."""
+    db = tmp_path / "m.db"
+    Store(db).close()
+
+    import sqlite3
+
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO schema_migration (version, checksum) VALUES (999, 'x')")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(StoreError, match="newer than this sorethumb"):
+        Store(db)
+
+
+def test_alter_add_column_replay_is_idempotent(tmp_path):
+    """Simulates a partial-crash retry: the column from an ALTER TABLE ADD
+    COLUMN migration is already there, but its schema_migration row is
+    missing. Re-applying must skip the ALTER, not raise "duplicate column
+    name"."""
+    db = tmp_path / "m.db"
+    with Store(db) as store:
+        store._conn.execute("DELETE FROM schema_migration WHERE version=3")
+        store._conn.commit()
+
+        files = {v: (sql, checksum) for v, sql, checksum in store._discover_migration_files()}
+        sql, checksum = files[3]
+        store._apply_one_migration(3, sql, checksum)  # must not raise
+
+        cols = {r[1] for r in store._conn.execute("PRAGMA table_info(artifact)")}
+        assert "run_id" in cols
+        row = store._conn.execute("SELECT version FROM schema_migration WHERE version=3").fetchone()
+        assert row is not None
+
+
 def test_store_dataset_upsert(tmp_path):
     with _open_ws(tmp_path) as ws:
         s = ws.store
@@ -342,6 +444,33 @@ def test_read_results_missing_returns_none(tmp_path):
         assert result is None
 
 
+def test_write_results_leaves_existing_file_on_failure(tmp_path, monkeypatch):
+    """write_results goes through atomic_write (temp file + rename); a failure
+    during the rename must leave the previous Parquet file (and any prior
+    reader of it) untouched, not a half-written replacement."""
+    from sorethumb import _atomic
+
+    with _open_ws(tmp_path) as ws:
+        ws.store.upsert_dataset("fp1", "uri", "sfp", "cfp", 3, 3)
+        ws.store.insert_run("run1", "fp1", "{}", 0)
+
+        df1 = pl.DataFrame({"row_id": [0, 1, 2]})
+        path = write_results(ws, "run1", "gk01", df1)
+        original_bytes = path.read_bytes()
+
+        def _boom(*_a):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(_atomic.os, "replace", _boom)
+        df2 = pl.DataFrame({"row_id": [9, 9, 9, 9]})
+        with pytest.raises(OSError, match="disk full"):
+            write_results(ws, "run1", "gk01", df2)
+        monkeypatch.undo()
+
+        assert path.read_bytes() == original_bytes  # untouched, not truncated/replaced
+        assert not [p for p in path.parent.iterdir() if p.name.endswith(".tmp")]
+
+
 # ---------------------------------------------------------------------------
 # Interrupted run: completed groups survive
 # ---------------------------------------------------------------------------
@@ -459,7 +588,7 @@ def test_three_detector_group_round_trips_per_detector(tmp_path):
 
 
 def test_atomic_write_text_leaves_original_on_failure(tmp_path, monkeypatch):
-    from sorethumb.store import models as m
+    from sorethumb import _atomic
 
     target = tmp_path / "f.json"
     target.write_text("original", encoding="utf-8")
@@ -467,9 +596,9 @@ def test_atomic_write_text_leaves_original_on_failure(tmp_path, monkeypatch):
     def _boom(*_a):
         raise OSError("disk full")
 
-    monkeypatch.setattr(m.os, "replace", _boom)
+    monkeypatch.setattr(_atomic.os, "replace", _boom)
     with pytest.raises(OSError, match="disk full"):
-        m._atomic_write_text(target, "new content")
+        _atomic.atomic_write_text(target, "new content")
     monkeypatch.undo()
 
     assert target.read_text(encoding="utf-8") == "original"  # untouched

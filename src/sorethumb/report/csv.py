@@ -9,6 +9,9 @@ string cell and column name is neutralised against formula injection before the
 frame is written: a leading =, +, -, @, or control character (tab/CR/LF) is the
 trigger Excel, LibreOffice and Google Sheets use to evaluate a cell as a
 formula, so such values are prefixed with a single quote.
+
+Written atomically (sibling temp file + rename, see sorethumb._atomic) so a
+reader never opens a half-written CSV.
 """
 
 from __future__ import annotations
@@ -17,6 +20,8 @@ import logging
 from pathlib import Path
 
 import polars as pl
+
+from sorethumb._atomic import atomic_write
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +70,7 @@ def write_group_csv(df: pl.DataFrame, out_dir: Path, group_key: str) -> Path:
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{group_key}.csv"
-    _neutralize_frame(df).write_csv(str(path))
+    with atomic_write(path) as tmp:
+        _neutralize_frame(df).write_csv(str(tmp))
     logger.info("CSV written: %s (%d rows).", path, len(df))
     return path

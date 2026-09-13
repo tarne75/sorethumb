@@ -10,8 +10,9 @@ by detector so several detectors can share a group directory:
 The run's fitted FeaturePlan is written once per run at models/<run_id>/plan.json
 (save_plan / load_plan) for score-forward reuse.
 
-Every write is atomic (sibling temp file + fsync + os.replace), so a crash mid
-write never leaves a half-written model file for a later score-forward run.
+Every write is atomic (sibling temp file + fsync + os.replace, see
+sorethumb._atomic), so a crash mid write never leaves a half-written model
+file for a later score-forward run.
 
 score_with_existing() loads a source run's plan and fitted models, applies them
 to new data without re-fitting, compares feature_schema_hash to detect drift,
@@ -20,14 +21,11 @@ and checks the fit-time library versions against the current environment.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import importlib.metadata
 import json
 import logging
-import os
 import platform
-import tempfile
 import warnings
 from pathlib import Path
 from typing import Any
@@ -35,6 +33,7 @@ from typing import Any
 import joblib
 import numpy as np
 
+from sorethumb._atomic import atomic_write, atomic_write_text
 from sorethumb.errors import (
     ModelSchemaDriftError,
     ModelSchemaDriftWarning,
@@ -56,41 +55,10 @@ def _plan_digest(plan_json: str) -> str:
     return hashlib.sha256(plan_json.encode()).hexdigest()[:32]
 
 
-def _atomic_write_bytes(path: Path, data: bytes) -> None:
-    """Write *data* to *path* atomically.
-
-    A reader sees either the previous file or the fully-written new one — never a
-    partial file. Write to a sibling temp file (same directory, so the same
-    filesystem), fsync, then ``os.replace``.
-    """
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)  # noqa: PTH105 — os.replace IS the atomic-rename primitive
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)  # noqa: PTH108
-        raise
-
-
-def _atomic_write_text(path: Path, text: str) -> None:
-    _atomic_write_bytes(path, text.encode("utf-8"))
-
-
 def _atomic_joblib_dump(obj: Any, path: Path) -> None:
     """``joblib.dump`` via a sibling temp file, then ``os.replace``."""
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
-    os.close(fd)
-    try:
+    with atomic_write(path) as tmp:
         joblib.dump(obj, tmp)
-        os.replace(tmp, path)  # noqa: PTH105 — os.replace IS the atomic-rename primitive
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)  # noqa: PTH108
-        raise
 
 
 _PLAN_FILENAME = "plan.json"
@@ -105,7 +73,7 @@ def save_plan(workspace: Workspace, run_id: str, plan_json: str) -> str:
     apply it to new data without re-fitting.
     """
     path = workspace.run_dir(run_id) / _PLAN_FILENAME
-    _atomic_write_text(path, plan_json)
+    atomic_write_text(path, plan_json)
     digest = _plan_digest(plan_json)
     workspace.store.register_artifact(
         artifact_id=f"{run_id}_plan",
@@ -200,7 +168,7 @@ def save_model(
 
     calibrator_path = out_dir / f"{detector_name}.calibrator.json"
     calibrator_d = calibrator.to_dict()
-    _atomic_write_text(calibrator_path, json.dumps(calibrator_d))
+    atomic_write_text(calibrator_path, json.dumps(calibrator_d))
 
     # Write manifest
     params = detector.get_params()
@@ -217,7 +185,7 @@ def save_model(
         "library_versions": _library_versions(),
     }
     manifest_path = out_dir / f"{detector_name}.manifest.json"
-    _atomic_write_text(manifest_path, json.dumps(manifest, default=str))
+    atomic_write_text(manifest_path, json.dumps(manifest, default=str))
 
     # Register with the database
     params_json = json.dumps(params, default=str)

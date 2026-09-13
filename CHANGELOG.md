@@ -8,6 +8,20 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Store durability hardening. `PRAGMA busy_timeout` (30s) is now set on every
+  connection, so a second process writing to the same workspace waits for the
+  lock instead of failing instantly with "database is locked". Each migration
+  runs under an explicit `BEGIN IMMEDIATE`/`COMMIT` (SQLite only auto-wraps
+  DML, not DDL, so a bare `with conn:` around `CREATE`/`ALTER`/`DROP` was
+  never really transactional); a checksum of each bundled migration file is
+  recorded and verified on replay, and opening a workspace whose schema is
+  newer than the installed sorethumb understands now fails closed rather than
+  limping on with a stale schema. Bundled migrations 001-005 are all
+  idempotent (`IF NOT EXISTS` / `ADD COLUMN` de-duplication), so a crash
+  mid-migration can be safely retried. HTML/JSON reports and CSV exports are
+  now written atomically (shared `sorethumb._atomic` module, previously only
+  used for model artifacts), so a reader can never open a half-written file.
+
 - Native, exact per-feature attributions for ECOD and HBOS. Both detectors
   already define their score as an unweighted average of independent
   per-feature terms (an empirical-CDF tail probability for ECOD, a histogram

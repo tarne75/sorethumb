@@ -4,13 +4,26 @@ All writes go through parameterised statements. The only non-parameterised SQL
 is in migration files, which are reviewed and committed as source.
 
 One Store owns one connection. Nothing else in the library should open the database.
+
+Concurrency: ``PRAGMA busy_timeout`` makes a second process's writer wait for
+the first to finish instead of failing instantly with "database is locked" —
+this matters most while migrating, so each migration runs under an explicit
+``BEGIN IMMEDIATE`` (see ``_apply_one_migration``): that takes the write lock
+up front, making the "is this version already applied?" re-check race-free
+against a concurrent process that got there first. Note this also means
+migration DDL genuinely rolls back on failure, unlike a bare ``with conn:``
+around DDL — Python's sqlite3 module only auto-opens a transaction ahead of
+DML (INSERT/UPDATE/DELETE), not DDL, so without an explicit BEGIN each
+CREATE/ALTER/DROP would commit individually as it runs.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.resources
 import logging
+import re
 import sqlite3
 import sys
 from collections.abc import Generator
@@ -23,6 +36,17 @@ from sorethumb.errors import StoreError
 logger = logging.getLogger(__name__)
 
 _MIGRATIONS_PACKAGE = "sorethumb.store.migrations"
+
+# How long a writer waits for another connection's lock before raising
+# "database is locked". Absent, concurrent runs against the same workspace
+# fail instantly rather than simply queuing.
+_BUSY_TIMEOUT_MS = 30_000
+
+# SQLite has no ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS``; this is the one
+# DDL shape in the bundled migrations that a plain ``IF NOT EXISTS`` can't
+# cover, so a replayed migration would otherwise fail with "duplicate column
+# name" on retry. Matched against each statement in ``_execute_ddl``.
+_ALTER_ADD_COLUMN_RE = re.compile(r"^ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)", re.IGNORECASE)
 
 
 def _now_utc() -> str:
@@ -59,6 +83,10 @@ class Store:
         self._path = db_path
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # Set before anything else: switching journal mode can itself need the
+        # lock, and this is what turns a concurrent run's "database is locked"
+        # into a bounded wait instead of an instant failure.
+        self._conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._apply_migrations()
@@ -83,39 +111,128 @@ class Store:
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS schema_migration "
             "(version INTEGER PRIMARY KEY, "
-            "applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))"
+            "applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')), "
+            "checksum TEXT)"
         )
         self._conn.commit()
+        self._backfill_checksum_column()
 
-        applied: set[int] = {
-            row[0] for row in self._conn.execute("SELECT version FROM schema_migration ORDER BY version")
-        }
+        migration_files = self._discover_migration_files()
+        self._check_schema_ceiling(migration_files)
 
-        # Discover migration SQL files bundled with the package
-        migration_files: list[tuple[int, str]] = []
+        for version, sql, checksum in migration_files:
+            self._apply_one_migration(version, sql, checksum)
+
+    def _backfill_checksum_column(self) -> None:
+        """Add ``checksum`` to a workspace whose ``schema_migration`` predates it.
+
+        Its rows keep ``checksum=NULL`` for migrations already applied —
+        nothing to verify them against — but every migration applied from
+        here on records one.
+        """
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(schema_migration)")}
+        if "checksum" not in cols:
+            self._conn.execute("ALTER TABLE schema_migration ADD COLUMN checksum TEXT")
+            self._conn.commit()
+
+    def _discover_migration_files(self) -> list[tuple[int, str, str]]:
+        """Return (version, sql, sha256-of-sql) for every bundled migration, sorted."""
+        migration_files: list[tuple[int, str, str]] = []
         try:
             pkg = importlib.resources.files(_MIGRATIONS_PACKAGE)
             for entry in pkg.iterdir():
                 name = entry.name
                 if name.endswith(".sql") and name[:3].isdigit():
                     version = int(name[:3])
-                    migration_files.append((version, entry.read_text(encoding="utf-8")))
+                    sql = entry.read_text(encoding="utf-8")
+                    checksum = hashlib.sha256(sql.encode()).hexdigest()
+                    migration_files.append((version, sql, checksum))
         except (FileNotFoundError, AttributeError, TypeError) as exc:
             raise StoreError(f"Cannot load migration files from {_MIGRATIONS_PACKAGE}: {exc}") from exc
-
         migration_files.sort(key=lambda x: x[0])
+        return migration_files
 
-        for version, sql in migration_files:
-            if version in applied:
-                continue
+    def _check_schema_ceiling(self, migration_files: list[tuple[int, str, str]]) -> None:
+        """Refuse to open a workspace whose schema is newer than this code knows.
+
+        A workspace migrated by a newer sorethumb has tables/columns this
+        version has never heard of; writing against it with a stale
+        understanding of the schema risks corrupting data rather than just
+        under-using it, so this fails closed instead of limping on.
+        """
+        latest_known = migration_files[-1][0] if migration_files else 0
+        row = self._conn.execute("SELECT MAX(version) AS v FROM schema_migration").fetchone()
+        max_applied = row["v"] if row else None
+        if max_applied is not None and max_applied > latest_known:
+            raise StoreError(
+                f"This workspace's schema is at migration {max_applied:03d}, newer than "
+                f"this sorethumb installation understands (up to {latest_known:03d}). It "
+                "was likely created or migrated by a newer sorethumb version. Upgrade "
+                "sorethumb before opening this workspace."
+            )
+
+    def _apply_one_migration(self, version: int, sql: str, checksum: str) -> None:
+        """Apply one migration file as a real atomic transaction, if not already applied.
+
+        ``BEGIN IMMEDIATE`` takes the write lock before the "already applied?"
+        check, so that check is race-free against another process that is
+        concurrently migrating this same database (``busy_timeout`` governs
+        how long this waits for that lock rather than failing instantly).
+        """
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = self._conn.execute(
+                "SELECT checksum FROM schema_migration WHERE version=?", (version,)
+            ).fetchone()
+            if row is not None:
+                self._conn.execute("ROLLBACK")
+                self._verify_checksum(version, row["checksum"], checksum)
+                return
             logger.info("Applying migration %03d.", version)
-            # Execute every statement in the migration file and record the version
-            # as one atomic transaction so a crash leaves the schema in a clean state.
-            with self._conn:
-                for stmt in _iter_sql_statements(sql):
-                    self._conn.execute(stmt)
-                self._conn.execute("INSERT OR IGNORE INTO schema_migration (version) VALUES (?)", (version,))
+            for stmt in _iter_sql_statements(sql):
+                self._execute_ddl(stmt)
+            self._conn.execute(
+                "INSERT INTO schema_migration (version, checksum) VALUES (?, ?)",
+                (version, checksum),
+            )
+            self._conn.execute("COMMIT")
             logger.info("Migration %03d applied.", version)
+        except BaseException:
+            with contextlib.suppress(sqlite3.OperationalError):
+                self._conn.execute("ROLLBACK")
+            raise
+
+    def _verify_checksum(self, version: int, recorded: str | None, current: str) -> None:
+        """Raise if a migration already on record doesn't match the bundled file.
+
+        ``recorded is None`` means this workspace's version row predates
+        checksum tracking — nothing to compare against, so that's not a
+        mismatch.
+        """
+        if recorded is not None and recorded != current:
+            raise StoreError(
+                f"Migration {version:03d}'s checksum does not match what was recorded "
+                "when it was applied to this workspace. The migration file bundled with "
+                f"this sorethumb install has changed since (recorded={recorded[:12]}… "
+                f"now={current[:12]}…); refusing to trust the schema."
+            )
+
+    def _execute_ddl(self, stmt: str) -> None:
+        """Execute one migration statement, replay-safe.
+
+        ``CREATE TABLE``/``CREATE INDEX`` in the migration files already say
+        ``IF NOT EXISTS``. ``ALTER TABLE ... ADD COLUMN`` has no such clause in
+        SQLite, so it is special-cased here: skip it if the column is already
+        there instead of failing with "duplicate column name".
+        """
+        match = _ALTER_ADD_COLUMN_RE.match(stmt.strip())
+        if match:
+            table, column = match.group(1), match.group(2)
+            existing_cols = {row[1] for row in self._conn.execute(f"PRAGMA table_info({table})")}
+            if column in existing_cols:
+                logger.info("Column %s.%s already present; skipping.", table, column)
+                return
+        self._conn.execute(stmt)
 
     # ------------------------------------------------------------------
     # dataset

@@ -7,7 +7,7 @@
 --
 -- Existing rows are migrated with config_hash = '' so they remain queryable.
 
-CREATE TABLE totals_new (
+CREATE TABLE IF NOT EXISTS totals_new (
     dataset_fp    TEXT NOT NULL,
     group_key     TEXT NOT NULL,
     period_label  TEXT NOT NULL,
@@ -28,6 +28,6 @@ SELECT
     anomaly_count, population, rate, run_id, computed_at
 FROM totals;
 
-DROP TABLE totals;
+DROP TABLE IF EXISTS totals;
 
 ALTER TABLE totals_new RENAME TO totals;

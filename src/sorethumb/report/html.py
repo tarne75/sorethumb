@@ -8,6 +8,10 @@ reloaded in the same process, which is the worst possible failure profile.
 The generated file must work from a file:// URL with no internet connection. All
 CSS and images are inline. External CSS, CDN links, and <script src="..."> are
 forbidden.
+
+index.html / index.json are written atomically (sibling temp file + rename,
+see sorethumb._atomic) so a browser or another process never opens a
+half-written report.
 """
 
 from __future__ import annotations
@@ -20,6 +24,8 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
+
+from sorethumb._atomic import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +109,7 @@ def render_report(
 
     html_content = _page(run_meta.run_id, "\n".join(body_parts))
     out_path = out_dir / "index.html"
-    out_path.write_text(html_content, encoding="utf-8")
+    atomic_write_text(out_path, html_content)
     logger.info("HTML report written: %s.", out_path)
     return out_path
 
@@ -130,7 +136,7 @@ def _write_json_report(run_meta: RunMeta, groups: list[GroupSection], out_dir: P
         ],
     }
     path = out_dir / "index.json"
-    path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    atomic_write_text(path, json.dumps(payload, indent=2, default=str))
     logger.info("JSON report written: %s.", path)
     return path
 
