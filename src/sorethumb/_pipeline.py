@@ -56,7 +56,14 @@ from sorethumb.profiling.plan import FeaturePlan, build_feature_plan
 from sorethumb.report.html import GroupSection, RunMeta, render_report
 from sorethumb.scoring.calibrate import Calibrator
 from sorethumb.scoring.combine import ScoreEnsemble
-from sorethumb.store.models import load_model, load_plan, save_model, save_plan, score_with_existing
+from sorethumb.store.models import (
+    load_model,
+    load_plan,
+    plan_digest,
+    save_model,
+    save_plan,
+    score_with_existing,
+)
 from sorethumb.store.results import read_results, results_path, write_results
 from sorethumb.store.workspace import Workspace, group_value_json_default, make_group_key
 
@@ -685,8 +692,22 @@ def score_forward(
     slow_after = config.run.slow_stage_seconds
 
     with Workspace.open(ws_path) as ws, _strict_warnings(config.run.strict):
-        if ws.store.get_run(source_run_id) is None:
+        source_run = ws.store.get_run(source_run_id)
+        if source_run is None:
             msg = f"Source run {source_run_id!r} not found in workspace {ws_path}."
+            raise StoreError(msg)
+        if source_run["status"] != "complete":
+            msg = (
+                f"Source run {source_run_id!r} has status {source_run['status']!r}; "
+                "only a complete run has trustworthy persisted models to score forward from."
+            )
+            raise StoreError(msg)
+        if source_run.get("source_run_id") is not None:
+            msg = (
+                f"Source run {source_run_id!r} is itself a score-forward run (from "
+                f"{source_run['source_run_id']!r}); score-forward requires a fitted run, "
+                "not another score-forward run."
+            )
             raise StoreError(msg)
 
         # The exact fitted plan from the source run (frequency maps, scaler
@@ -1215,6 +1236,7 @@ def _score_forward_group(
         X,
         group_space.feature_schema_hash,
         enabled_names,
+        plan_digest(plan.to_json()),
         strict=strict,
     )
     raw_scores_map: dict[str, np.ndarray] = res["scores"]

@@ -54,6 +54,18 @@ class ModelVersionMismatchError(SorethumbError):
     """Raised in strict mode when a persisted model was fitted under different library versions."""
 
 
+class ModelIntegrityError(SorethumbError):
+    """Raised when a persisted model artifact fails an identity or content check.
+
+    Covers a manifest whose recorded (run_id, group_key, detector_name, plan_digest)
+    doesn't match what it's being loaded for, and an estimator/calibrator file whose
+    content no longer matches the digest recorded at save time -- both signal the
+    on-disk bundle was corrupted, truncated, or swapped with another model's files.
+    Unlike drift/version warnings, this always fails closed regardless of ``strict``:
+    there is no safe degraded behaviour for an artifact that fails an integrity check.
+    """
+
+
 class SorethumbWarning(UserWarning):
     """Base warning. Promoted to an exception when run.strict = True.
 

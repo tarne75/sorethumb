@@ -35,6 +35,7 @@ import numpy as np
 
 from sorethumb._atomic import atomic_write, atomic_write_text
 from sorethumb.errors import (
+    ModelIntegrityError,
     ModelSchemaDriftError,
     ModelSchemaDriftWarning,
     ModelVersionMismatchError,
@@ -51,7 +52,8 @@ logger = logging.getLogger(__name__)
 _TRACKED_LIBRARIES = ("sorethumb", "scikit-learn", "numpy", "scipy", "joblib")
 
 
-def _plan_digest(plan_json: str) -> str:
+def plan_digest(plan_json: str) -> str:
+    """Digest a serialised FeaturePlan for manifest/round-trip identity checks."""
     return hashlib.sha256(plan_json.encode()).hexdigest()[:32]
 
 
@@ -59,6 +61,15 @@ def _atomic_joblib_dump(obj: Any, path: Path) -> None:
     """``joblib.dump`` via a sibling temp file, then ``os.replace``."""
     with atomic_write(path) as tmp:
         joblib.dump(obj, tmp)
+
+
+def _sha256_file(path: Path) -> str:
+    """Full SHA-256 hex digest of a file's on-disk bytes."""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 _PLAN_FILENAME = "plan.json"
@@ -74,7 +85,7 @@ def save_plan(workspace: Workspace, run_id: str, plan_json: str) -> str:
     """
     path = workspace.run_dir(run_id) / _PLAN_FILENAME
     atomic_write_text(path, plan_json)
-    digest = _plan_digest(plan_json)
+    digest = plan_digest(plan_json)
     workspace.store.register_artifact(
         artifact_id=f"{run_id}_plan",
         path=str(path),
@@ -165,12 +176,16 @@ def save_model(
     # atomic (temp file + rename) so a crash never leaves a half-written file.
     estimator_path = out_dir / f"{detector_name}.joblib"
     _atomic_joblib_dump(detector, estimator_path)
+    estimator_digest = _sha256_file(estimator_path)
 
     calibrator_path = out_dir / f"{detector_name}.calibrator.json"
     calibrator_d = calibrator.to_dict()
     atomic_write_text(calibrator_path, json.dumps(calibrator_d))
+    calibrator_digest = _sha256_file(calibrator_path)
 
-    # Write manifest
+    # Write manifest. file_digests lets a later load_model verify the estimator
+    # and calibrator files it's about to deserialise haven't been corrupted,
+    # truncated, or swapped with another model's files since this write.
     params = detector.get_params()
     manifest = {
         "model_id": model_id,
@@ -178,11 +193,12 @@ def save_model(
         "group_key": group_key,
         "detector_name": detector_name,
         "feature_schema_hash": feature_schema_hash,
-        "plan_digest": _plan_digest(plan_json),
+        "plan_digest": plan_digest(plan_json),
         "train_row_count": train_row_count,
         "params": params,
         "seed": seed,
         "library_versions": _library_versions(),
+        "file_digests": {"estimator": estimator_digest, "calibrator": calibrator_digest},
     }
     manifest_path = out_dir / f"{detector_name}.manifest.json"
     atomic_write_text(manifest_path, json.dumps(manifest, default=str))
@@ -226,11 +242,26 @@ def load_model(
     detector_name: str,
     *,
     strict: bool = False,
+    expected_plan_digest: str | None = None,
 ) -> tuple[Any, Calibrator, dict[str, Any]]:
-    """Load a fitted detector, its calibrator, and the manifest dict.
+    """Load a fitted detector, its calibrator, and the manifest dict — fail closed.
 
     Returns (detector, calibrator, manifest).
-    Raises StoreError if the model files are absent.
+
+    Raises StoreError if the estimator, calibrator, or manifest file is simply
+    absent (e.g. this detector was never fitted for this run/group — a caller
+    such as :func:`score_with_existing` may treat that as "no model to score
+    with" and continue with other detectors).
+
+    Raises ModelIntegrityError -- never silently degraded, regardless of
+    *strict* -- if a file exists but fails an integrity check: the manifest's
+    recorded (run_id, group_key, detector_name) doesn't match what was
+    requested (a swapped/misplaced manifest), *expected_plan_digest* is given
+    and doesn't match the manifest's ``plan_digest`` (scoring against the wrong
+    source plan), or the estimator/calibrator file's content no longer matches
+    the digest recorded at save time (corruption or a swapped file). There is
+    no legacy/un-namespaced filename fallback: this is the only supported
+    on-disk format.
 
     The fit-time library versions recorded in the manifest are compared against
     the current environment: a mismatch raises ModelVersionMismatchError when
@@ -243,31 +274,49 @@ def load_model(
         msg = f"Model file not found: {estimator_path}"
         raise StoreError(msg)
 
-    # Namespaced paths; fall back to the pre-namespacing filenames for
-    # workspaces written by an older sorethumb.
-    manifest_path = _first_existing(out_dir / f"{detector_name}.manifest.json", out_dir / "manifest.json")
-    manifest: dict[str, Any] = {}
-    if manifest_path is not None:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_path = out_dir / f"{detector_name}.manifest.json"
+    if not manifest_path.exists():
+        msg = f"Manifest file not found: {manifest_path}"
+        raise StoreError(msg)
+    manifest: dict[str, Any] = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    identity = {"run_id": run_id, "group_key": group_key, "detector_name": detector_name}
+    mismatched = {k: (v, manifest.get(k)) for k, v in identity.items() if manifest.get(k) != v}
+    if mismatched:
+        detail = ", ".join(f"{k}: expected={want!r} manifest={got!r}" for k, (want, got) in mismatched.items())
+        msg = f"Manifest identity mismatch at {manifest_path} ({detail}); refusing to load a swapped model."
+        raise ModelIntegrityError(msg)
+
+    if expected_plan_digest is not None and manifest.get("plan_digest") != expected_plan_digest:
+        msg = (
+            f"Manifest plan_digest mismatch at {manifest_path}: "
+            f"expected={expected_plan_digest!r} manifest={manifest.get('plan_digest')!r}. "
+            "This model was fitted against a different FeaturePlan than the one loaded now."
+        )
+        raise ModelIntegrityError(msg)
+
+    digests = manifest.get("file_digests") or {}
+    estimator_digest = digests.get("estimator")
+    if not estimator_digest or _sha256_file(estimator_path) != estimator_digest:
+        msg = f"Estimator file digest mismatch or missing for {estimator_path}; file may be corrupt."
+        raise ModelIntegrityError(msg)
+
+    calibrator_path = out_dir / f"{detector_name}.calibrator.json"
+    if not calibrator_path.exists():
+        msg = f"Calibrator file not found: {calibrator_path}"
+        raise StoreError(msg)
+    calibrator_digest = digests.get("calibrator")
+    if not calibrator_digest or _sha256_file(calibrator_path) != calibrator_digest:
+        msg = f"Calibrator file digest mismatch or missing for {calibrator_path}; file may be corrupt."
+        raise ModelIntegrityError(msg)
+
     _check_library_versions(manifest, strict=strict)
 
     detector = joblib.load(str(estimator_path))
-
-    calibrator_path = _first_existing(
-        out_dir / f"{detector_name}.calibrator.json", out_dir / "calibrator.json"
-    )
-    if calibrator_path is not None:
-        calibrator_d = json.loads(calibrator_path.read_text(encoding="utf-8"))
-        calibrator = Calibrator.from_dict(calibrator_d)
-    else:
-        calibrator = Calibrator()
+    calibrator_d = json.loads(calibrator_path.read_text(encoding="utf-8"))
+    calibrator = Calibrator.from_dict(calibrator_d)
 
     return detector, calibrator, manifest
-
-
-def _first_existing(*paths: Path) -> Path | None:
-    """Return the first path that exists, or None."""
-    return next((p for p in paths if p.exists()), None)
 
 
 def score_with_existing(
@@ -277,6 +326,7 @@ def score_with_existing(
     new_feature_matrix: np.ndarray,
     feature_schema_hash: str,
     detector_names: list[str],
+    plan_digest: str,
     *,
     strict: bool = False,
 ) -> dict[str, Any]:
@@ -305,6 +355,11 @@ def score_with_existing(
         Hash of the new data's feature schema (from FeatureSpace).
     detector_names:
         Which detectors to score with. Must match what was saved.
+    plan_digest:
+        Digest of the FeaturePlan being applied to the new data (see
+        :func:`plan_digest`). Verified against each manifest's ``plan_digest`` --
+        a mismatch means these models were fitted against a different plan and
+        raises ModelIntegrityError unconditionally (not gated on *strict*).
     strict:
         If True, raise on schema drift or library-version mismatch instead of warning.
 
@@ -321,6 +376,11 @@ def score_with_existing(
     No detector is re-fitted: each is unpickled from the source run and only
     ``score_samples`` / ``natural_flag`` are called.
 
+    A detector with no persisted model at all (never fitted in the source run)
+    is recorded in "missing" and skipped, so the group can still score with the
+    rest. A detector whose persisted files exist but fail an integrity check
+    (swapped manifest, wrong plan, corrupt file) raises ModelIntegrityError
+    instead -- that is never treated as "just missing".
     """
     scores: dict[str, np.ndarray] = {}
     calibrated: dict[str, np.ndarray] = {}
@@ -332,8 +392,15 @@ def score_with_existing(
     for det_name in detector_names:
         try:
             detector, calibrator, manifest = load_model(
-                workspace, source_run_id, group_key, det_name, strict=strict
+                workspace,
+                source_run_id,
+                group_key,
+                det_name,
+                strict=strict,
+                expected_plan_digest=plan_digest,
             )
+        except ModelIntegrityError:
+            raise
         except StoreError:
             logger.warning(
                 "No saved model for detector=%s group=%s run=%s; skipping.",

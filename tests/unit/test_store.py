@@ -9,6 +9,7 @@ import polars as pl
 import pytest
 
 from sorethumb.errors import (
+    ModelIntegrityError,
     ModelSchemaDriftError,
     ModelSchemaDriftWarning,
     ModelVersionMismatchError,
@@ -17,7 +18,7 @@ from sorethumb.errors import (
 )
 from sorethumb.store.db import Store, _iter_sql_statements
 from sorethumb.store.identifiers import validate_identifier
-from sorethumb.store.models import load_model, save_model, score_with_existing
+from sorethumb.store.models import load_model, plan_digest, save_model, score_with_existing
 from sorethumb.store.results import read_results, write_results
 from sorethumb.store.workspace import Workspace, make_group_key
 
@@ -694,6 +695,100 @@ def test_load_model_without_version_block_is_silent(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# load_model fails closed: missing manifest/calibrator, corruption, swapped
+# manifest, wrong plan (P0-5)
+# ---------------------------------------------------------------------------
+
+
+def test_save_model_manifest_records_file_digests(tmp_path):
+    with _open_ws(tmp_path) as ws:
+        _gk, manifest_path = _save_one_model(ws)
+        manifest = json.loads(manifest_path.read_text())
+    digests = manifest["file_digests"]
+    assert len(digests["estimator"]) == 64  # sha256 hex
+    assert len(digests["calibrator"]) == 64
+
+
+def test_load_model_missing_manifest_raises(tmp_path):
+    """A manifest deleted out from under an estimator file must fail, never
+    silently proceed with an empty manifest dict."""
+    with _open_ws(tmp_path) as ws:
+        gk, manifest_path = _save_one_model(ws)
+        manifest_path.unlink()
+
+        with pytest.raises(StoreError, match="Manifest file not found"):
+            load_model(ws, "run1", gk, "isolation_forest")
+
+
+def test_load_model_missing_calibrator_raises(tmp_path):
+    """A calibrator file deleted out from under a model must fail, never
+    silently fall back to an unfitted Calibrator()."""
+    with _open_ws(tmp_path) as ws:
+        gk, manifest_path = _save_one_model(ws)
+        calibrator_path = manifest_path.parent / "isolation_forest.calibrator.json"
+        calibrator_path.unlink()
+
+        with pytest.raises(StoreError, match="Calibrator file not found"):
+            load_model(ws, "run1", gk, "isolation_forest")
+
+
+def test_load_model_corrupt_estimator_raises_integrity_error(tmp_path):
+    with _open_ws(tmp_path) as ws:
+        gk, manifest_path = _save_one_model(ws)
+        estimator_path = manifest_path.parent / "isolation_forest.joblib"
+        estimator_path.write_bytes(b"not a joblib file at all")
+
+        with pytest.raises(ModelIntegrityError, match="digest mismatch"):
+            load_model(ws, "run1", gk, "isolation_forest")
+
+
+def test_load_model_corrupt_calibrator_raises_integrity_error(tmp_path):
+    with _open_ws(tmp_path) as ws:
+        gk, manifest_path = _save_one_model(ws)
+        calibrator_path = manifest_path.parent / "isolation_forest.calibrator.json"
+        calibrator_path.write_text('{"tampered": true}')
+
+        with pytest.raises(ModelIntegrityError, match="digest mismatch"):
+            load_model(ws, "run1", gk, "isolation_forest")
+
+
+def test_load_model_swapped_manifest_raises_integrity_error(tmp_path):
+    """A manifest whose recorded identity doesn't match what's being requested
+    (e.g. copied from another detector/group/run) must be rejected outright."""
+    with _open_ws(tmp_path) as ws:
+        gk, manifest_path = _save_one_model(ws)
+        manifest = json.loads(manifest_path.read_text())
+        manifest["detector_name"] = "kmeans_distance"  # doesn't match the file it names
+        manifest_path.write_text(json.dumps(manifest))
+
+        with pytest.raises(ModelIntegrityError, match="identity mismatch"):
+            load_model(ws, "run1", gk, "isolation_forest")
+
+
+def test_load_model_wrong_plan_digest_raises_integrity_error(tmp_path):
+    """Scoring against a FeaturePlan other than the one a model was fitted with
+    must be rejected, not silently applied."""
+    with _open_ws(tmp_path) as ws:
+        gk, _manifest_path = _save_one_model(ws)  # saved with plan_json="{}"
+
+        with pytest.raises(ModelIntegrityError, match="plan_digest mismatch"):
+            load_model(
+                ws,
+                "run1",
+                gk,
+                "isolation_forest",
+                expected_plan_digest=plan_digest('{"different": "plan"}'),
+            )
+
+        # The correct plan digest still loads fine.
+        det, cal, _manifest = load_model(
+            ws, "run1", gk, "isolation_forest", expected_plan_digest=plan_digest("{}")
+        )
+        assert det.name == "isolation_forest"
+        assert cal._quantile_values is not None
+
+
+# ---------------------------------------------------------------------------
 # score_with_existing
 # ---------------------------------------------------------------------------
 
@@ -711,7 +806,9 @@ def test_score_with_existing_identical_record(tmp_path):
         save_model(ws, "run1", gk, det, cal, "{}", schema_hash, 200, 0)
 
         # Score same training data forward (must match)
-        result = score_with_existing(ws, "run1", gk, X_train, schema_hash, ["isolation_forest"])
+        result = score_with_existing(
+            ws, "run1", gk, X_train, schema_hash, ["isolation_forest"], plan_digest("{}")
+        )
 
     assert not result["drifted"]
     cal_scores = result["calibrated"]["isolation_forest"]
@@ -731,7 +828,9 @@ def test_score_with_existing_drift_strict_raises(tmp_path):
         save_model(ws, "run1", gk, det, cal, "{}", "old_hash", 100, 0)
 
         with pytest.raises(ModelSchemaDriftError, match="drift"):
-            score_with_existing(ws, "run1", gk, X, "new_hash", ["isolation_forest"], strict=True)
+            score_with_existing(
+                ws, "run1", gk, X, "new_hash", ["isolation_forest"], plan_digest("{}"), strict=True
+            )
 
 
 def test_score_with_existing_drift_warning(tmp_path):
@@ -746,7 +845,9 @@ def test_score_with_existing_drift_warning(tmp_path):
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            result = score_with_existing(ws, "run1", gk, X, "new_hash", ["isolation_forest"], strict=False)
+            result = score_with_existing(
+                ws, "run1", gk, X, "new_hash", ["isolation_forest"], plan_digest("{}"), strict=False
+            )
 
     assert result["drifted"]
     assert any(issubclass(x.category, ModelSchemaDriftWarning) for x in w)
@@ -757,11 +858,32 @@ def test_score_with_existing_missing_model_skips(tmp_path):
     X = rng.standard_normal((50, 4))
 
     with _open_ws(tmp_path) as ws:
-        result = score_with_existing(ws, "norun", "nogroup", X, "hash", ["isolation_forest"])
+        result = score_with_existing(
+            ws, "norun", "nogroup", X, "hash", ["isolation_forest"], plan_digest("{}")
+        )
 
     assert result["scores"] == {}
     assert result["calibrated"] == {}
     assert not result["drifted"]
+
+
+def test_score_with_existing_corrupt_model_raises_not_skips(tmp_path):
+    """A detector with genuinely no persisted model is lenient (skipped, in
+    "missing"). A detector whose persisted files exist but fail an integrity
+    check must never be treated the same way -- it has to raise."""
+    det, X = _fit_detector()
+    cal = _fitted_calibrator(det, X)
+
+    with _open_ws(tmp_path) as ws:
+        ws.store.upsert_dataset("fp1", "uri", "sfp", "cfp", 100, 4)
+        ws.store.insert_run("run1", "fp1", "{}", 0)
+        gk = make_group_key({"g": "A"})
+        save_model(ws, "run1", gk, det, cal, "{}", "hash_abc", 100, 0)
+        estimator_path = ws.models_dir("run1", gk) / "isolation_forest.joblib"
+        estimator_path.write_bytes(b"corrupted")
+
+        with pytest.raises(ModelIntegrityError, match="digest mismatch"):
+            score_with_existing(ws, "run1", gk, X, "hash_abc", ["isolation_forest"], plan_digest("{}"))
 
 
 # ---------------------------------------------------------------------------

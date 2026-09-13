@@ -85,6 +85,34 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Score-forward artifact loading did not fail closed. `sorethumb score
+  --from-run` accepted a source run of any status (`running`, `failed`, or
+  even another score-forward run) as long as its row existed;
+  `store.models.load_model` defaulted a missing manifest to `{}` and a
+  missing calibrator file to a freshly-constructed, unfitted `Calibrator()`
+  instead of raising, and fell back to pre-namespacing shared filenames
+  (`manifest.json`/`calibrator.json`) left over from before per-detector
+  namespacing. None of it verified that the manifest actually described the
+  file sitting next to it, or that the file hadn't been corrupted or swapped
+  since it was written. `score_forward` now rejects a source run whose
+  status isn't `complete` and rejects a source run that is itself a
+  score-forward run (one never persists its own models, so there would be
+  nothing trustworthy to load). `save_model` records a SHA-256 digest of the
+  estimator and calibrator files it just wrote (manifest `file_digests`);
+  `load_model` now requires the manifest and calibrator file to exist (never
+  defaults or falls back to a legacy filename — this is the only supported
+  on-disk format for the first release), verifies the manifest's
+  `run_id`/`group_key`/`detector_name` match what was requested, verifies an
+  optional caller-supplied `plan_digest` against the manifest's (rejecting a
+  model fitted against a different `FeaturePlan`), and re-hashes the
+  estimator/calibrator files before `joblib.load`/parsing them, comparing
+  against the recorded digests. Any of these identity or digest checks
+  failing raises a new `ModelIntegrityError` unconditionally (not gated on
+  `run.strict` — there is no safe degraded behaviour for a tampered or
+  corrupted pickle); `score_with_existing` lets it propagate instead of
+  treating it the same as a detector that was simply never fitted (that
+  case, a genuinely absent model, remains a lenient per-detector skip, not a
+  failure).
 - Null group values were silently dropped instead of processed, and a
   fallback `row_id` (used whenever no `id_column` is configured) collided
   across groups. `_slice_group_frame` filtered a group by casting the column

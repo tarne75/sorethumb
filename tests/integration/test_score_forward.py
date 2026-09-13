@@ -6,6 +6,7 @@ No network; all data generated in-process.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -212,6 +213,106 @@ def test_score_forward_missing_model_is_failed_not_complete_and_is_retried(tmp_p
 
     with Workspace.open(ws) as w:
         assert w.store.run_status(fwd2.run_id) == "failed"
+
+
+def test_score_forward_rejects_incomplete_source_run(tmp_path: Path) -> None:
+    """A source run that is still 'running' (crashed before completion) or
+    'failed' has no trustworthy persisted models and must be rejected outright,
+    not scored against (P0-5)."""
+    ws = tmp_path / "ws"
+    csv = tmp_path / "data.csv"
+    _planted_csv(csv, seed=0)
+    src = run_detection(_cfg(csv, ws), no_report=True)
+    assert src.n_succeeded >= 1
+
+    with Workspace.open(ws) as w:
+        w.store.mark_run_failed(src.run_id, "simulated crash")
+
+    with pytest.raises(StoreError, match="status"):
+        score_forward(_cfg(csv, ws), src.run_id, no_report=True)
+
+
+def test_score_forward_rejects_score_forward_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A score-forward run never persists its own models -- it must be
+    rejected as a source for a further score-forward run (P0-5)."""
+    ws = tmp_path / "ws"
+    csv = tmp_path / "data.csv"
+    _planted_csv(csv, seed=0)
+    src = run_detection(_cfg(csv, ws), no_report=True)
+
+    _ban_all_fitting(monkeypatch)
+    fwd = score_forward(_cfg(csv, ws), src.run_id, no_report=True)
+    assert fwd.n_succeeded >= 1
+
+    with pytest.raises(StoreError, match="score-forward run"):
+        score_forward(_cfg(csv, ws), fwd.run_id, no_report=True)
+
+
+def test_score_forward_rejects_corrupted_model_file(tmp_path: Path) -> None:
+    """A corrupted persisted estimator file must fail the group loudly, not be
+    silently unpickled or skipped as though it were never fitted (P0-5)."""
+    ws = tmp_path / "ws"
+    csv = tmp_path / "data.csv"
+    _planted_csv(csv, seed=0)
+    src = run_detection(_cfg(csv, ws), no_report=True)
+    good_group = next(g for g in src.groups if g.status == "success")
+
+    with Workspace.open(ws) as w:
+        model_dir = w.models_dir(src.run_id, good_group.group_key)
+        (model_dir / "isolation_forest.joblib").write_bytes(b"not actually a joblib file")
+
+    fwd = score_forward(_cfg(csv, ws), src.run_id, no_report=True)
+    assert fwd.n_failed == 1
+    assert fwd.n_succeeded == 0
+    err = fwd.groups[0].error or ""
+    assert "ModelIntegrityError" in err
+
+
+def test_score_forward_rejects_swapped_manifest(tmp_path: Path) -> None:
+    """A manifest copied onto a different detector's files must be rejected,
+    not loaded as though it described the file it's sitting next to (P0-5)."""
+    ws = tmp_path / "ws"
+    csv = tmp_path / "data.csv"
+    _planted_csv(csv, seed=0)
+    src = run_detection(_cfg(csv, ws), no_report=True)
+    good_group = next(g for g in src.groups if g.status == "success")
+
+    with Workspace.open(ws) as w:
+        model_dir = w.models_dir(src.run_id, good_group.group_key)
+        manifest_path = model_dir / "isolation_forest.manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["detector_name"] = "kmeans_distance"  # no longer matches the file it's next to
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    fwd = score_forward(_cfg(csv, ws), src.run_id, no_report=True)
+    assert fwd.n_failed == 1
+    err = fwd.groups[0].error or ""
+    assert "ModelIntegrityError" in err
+
+
+def test_score_forward_multi_detector_round_trip_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A clean, uncorrupted multi-detector source run must score forward
+    successfully end to end (P0-5's positive case)."""
+    ws = tmp_path / "ws"
+    src_csv, new_csv = tmp_path / "train.csv", tmp_path / "new.csv"
+    _planted_csv(src_csv, seed=0)
+    _planted_csv(new_csv, seed=1)
+
+    src = run_detection(_cfg(src_csv, ws), no_report=True)  # isolation_forest + kmeans_distance
+    assert src.n_succeeded >= 1
+
+    _ban_all_fitting(monkeypatch)
+    fwd = score_forward(_cfg(new_csv, ws), src.run_id, no_report=True)
+
+    assert fwd.n_failed == 0, [g.error for g in fwd.groups if g.error]
+    assert fwd.n_succeeded >= 1
+    good = next(g for g in fwd.groups if g.status == "success")
+    scores = pl.read_parquet(good.results_path)
+    for det_name in ("isolation_forest", "kmeans_distance"):
+        assert f"score_raw_{det_name}" in scores.columns
+        assert f"score_cal_{det_name}" in scores.columns
 
 
 def test_score_forward_rejects_drifted_schema(tmp_path: Path) -> None:
