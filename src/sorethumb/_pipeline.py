@@ -930,17 +930,37 @@ def _execute_group(
             warns = [str(w.message) for w in caught]
         gsummary.elapsed_seconds = elapsed
         gsummary.warnings_issued = warns
-        ws.store.upsert_run_group(
-            run_id=run_id,
-            group_key=group_key,
-            group_values_json=gv_json,
-            group_label=group_label,
-            status="complete",
-            record_count=n_records,
-            anomaly_count=gsummary.n_anomalies,
-            rate=gsummary.anomaly_rate,
-            timing_seconds=gsummary.elapsed_seconds,
-        )
+        # ``body`` can report failure by returning a GroupSummary(status="failed")
+        # instead of raising (e.g. "no detector produced scores") -- that must
+        # land in the ledger as "failed", not "complete", or a retry sees the
+        # group as already done, skips it, and the run can be reported complete
+        # without the group ever having actually succeeded. "success" and
+        # "too_few_records" are both genuine terminal outcomes -- persisted as
+        # "complete" so a resume does not re-run them.
+        ledger_status = "failed" if gsummary.status == "failed" else "complete"
+        if ledger_status == "failed":
+            ws.store.upsert_run_group(
+                run_id=run_id,
+                group_key=group_key,
+                group_values_json=gv_json,
+                group_label=group_label,
+                status="failed",
+                record_count=n_records,
+                error=gsummary.error,
+                timing_seconds=gsummary.elapsed_seconds,
+            )
+        else:
+            ws.store.upsert_run_group(
+                run_id=run_id,
+                group_key=group_key,
+                group_values_json=gv_json,
+                group_label=group_label,
+                status="complete",
+                record_count=n_records,
+                anomaly_count=gsummary.n_anomalies,
+                rate=gsummary.anomaly_rate,
+                timing_seconds=gsummary.elapsed_seconds,
+            )
         return gsummary
     except Exception as exc:
         elapsed = _clock() - t0

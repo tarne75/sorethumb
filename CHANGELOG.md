@@ -85,6 +85,16 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A group that failed without raising (e.g. "no detector produced scores",
+  or a score-forward group whose requested detector was never persisted in
+  the source run) was written to the `run_group` ledger as `status='complete'`
+  regardless of the `GroupSummary.status` the group body actually returned.
+  A later call with the same inputs (same deterministic `run_id`) then saw
+  that group as already done, skipped re-executing it, and could report the
+  run as complete without the group ever having genuinely succeeded.
+  `_execute_group` now persists `failed` when the body reports `status="failed"`
+  (so a retry re-executes it), and `complete` for both `success` and
+  `too_few_records` (both genuine terminal outcomes).
 - `evaluate_scores` returned `0.0` for ROC-AUC/AP when a population has only
   one class present (both are mathematically undefined there). `0.0` reads as
   a real, terrible score — indistinguishable from a model that actively

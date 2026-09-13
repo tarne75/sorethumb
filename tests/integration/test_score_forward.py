@@ -167,6 +167,53 @@ def test_score_forward_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert any(g.status == "skipped" for g in b.groups)
 
 
+def test_score_forward_missing_model_is_failed_not_complete_and_is_retried(tmp_path: Path) -> None:
+    """A score-forward group that requests a detector never fitted in the
+    source run must be recorded as failed -- both in the RunResult and the
+    ledger -- and a retry with the same inputs must re-execute it rather than
+    treating it as already complete (P0-1).
+    """
+    ws = tmp_path / "ws"
+    src_csv, new_csv = tmp_path / "train.csv", tmp_path / "new.csv"
+    _planted_csv(src_csv, seed=0)
+    _planted_csv(new_csv, seed=1)
+
+    # Source run only ever fits isolation_forest + kmeans_distance.
+    src = run_detection(_cfg(src_csv, ws), no_report=True)
+    assert src.n_succeeded >= 1
+
+    # Request a detector the source run never persisted a model for.
+    fwd_cfg = Config(
+        source=SourceConfig(uri=str(new_csv), format="csv"),
+        run=RunConfig(workdir=str(ws), seed=42),
+        columns=ColumnsConfig(id_column="id"),
+        detectors=[DetectorConfig(name="one_class_svm")],
+        scoring=ScoringConfig(
+            combination="composite", contamination="auto", weighting="equal", min_records=5
+        ),
+    )
+
+    fwd1 = score_forward(fwd_cfg, src.run_id, no_report=True)
+    assert fwd1.n_failed == 1
+    assert fwd1.n_succeeded == 0
+    g1 = fwd1.groups[0]
+    assert g1.status == "failed"
+    assert "No persisted models" in (g1.error or "")
+
+    with Workspace.open(ws) as w:
+        assert w.store.run_status(fwd1.run_id) == "failed"
+        assert w.store.group_status(fwd1.run_id, g1.group_key) == "failed"
+
+    # Same inputs -> same deterministic run_id; must be retried, not skipped.
+    fwd2 = score_forward(fwd_cfg, src.run_id, no_report=True)
+    assert fwd2.run_id == fwd1.run_id
+    assert fwd2.n_failed == 1
+    assert fwd2.groups[0].status == "failed"
+
+    with Workspace.open(ws) as w:
+        assert w.store.run_status(fwd2.run_id) == "failed"
+
+
 def test_score_forward_rejects_drifted_schema(tmp_path: Path) -> None:
     """New data whose raw schema no longer matches the fitted plan must fail the
     group loudly (PlanError) -- not silently mis-encode a column or leave one

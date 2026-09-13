@@ -463,6 +463,129 @@ def test_resume_skips_completed_group(tmp_path: Path) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# P0-1: a failed group must be persisted as failed, not complete -- a resumed
+# run must retry it, and must never report the run as complete because a
+# failed group was later (wrongly) treated as already done.
+# ---------------------------------------------------------------------------
+
+
+def test_group_with_no_scoring_detectors_is_failed_not_complete(tmp_path: Path) -> None:
+    """A group where no configured detector produces scores must be recorded
+    as failed in both the RunResult and the ledger, and must be retried (not
+    silently skipped as already complete) on the next call with the same
+    inputs.
+    """
+    from sorethumb import Workspace
+
+    csv = tmp_path / "data.csv"
+    _make_planted_csv(csv, n_normal=200, n_anomaly=3, seed=0)
+    workdir = tmp_path / "ws"
+    cfg = _minimal_config(
+        csv, workdir, contamination=0.02, detectors=[DetectorConfig(name="does_not_exist")]
+    )
+
+    r1 = run_detection(cfg, no_report=True)
+    assert r1.n_failed == 1
+    assert r1.n_succeeded == 0
+    g1 = r1.groups[0]
+    assert g1.status == "failed"
+    assert g1.error is not None
+    assert "No detectors produced scores" in g1.error
+
+    with Workspace.open(workdir) as ws:
+        assert ws.store.run_status(r1.run_id) == "failed"
+        assert ws.store.group_status(r1.run_id, g1.group_key) == "failed"
+
+    # Same inputs -> same deterministic run_id. The group must be re-executed,
+    # not treated as already complete, and the run must still report failure.
+    r2 = run_detection(cfg, no_report=True)
+    assert r2.run_id == r1.run_id
+    assert r2.n_failed == 1
+    assert r2.n_succeeded == 0
+    assert r2.groups[0].status == "failed", "a failed group must be retried, not skipped"
+
+    with Workspace.open(workdir) as ws:
+        assert ws.store.run_status(r2.run_id) == "failed"
+
+
+def test_group_ledger_status_survives_detector_fit_failure_and_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A detector.fit() exception must fail the group and the run; once the
+    underlying problem is gone, retrying the same run_id must actually
+    re-execute the group (not report false success from a stale 'complete'
+    ledger row, and not report false failure once it truly works).
+    """
+    from sorethumb import Workspace
+
+    csv = tmp_path / "data.csv"
+    _make_planted_csv(csv, n_normal=200, n_anomaly=3, seed=0)
+    workdir = tmp_path / "ws"
+    cfg = _minimal_config(csv, workdir, contamination=0.02)
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise ValueError("synthetic fit failure")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(IsolationForestDetector, "fit", _boom)
+        r1 = run_detection(cfg, no_report=True)
+
+    assert r1.n_failed == 1
+    assert r1.n_succeeded == 0
+    g1 = r1.groups[0]
+    assert g1.status == "failed"
+    assert "synthetic fit failure" in (g1.error or "")
+
+    with Workspace.open(workdir) as ws:
+        assert ws.store.run_status(r1.run_id) == "failed"
+        assert ws.store.group_status(r1.run_id, g1.group_key) == "failed"
+
+    # fit() is no longer patched -- the retry must actually re-run the group
+    # (the ledger must not have recorded it as already complete) and succeed.
+    r2 = run_detection(cfg, no_report=True)
+    assert r2.run_id == r1.run_id
+    assert r2.n_failed == 0
+    assert r2.n_succeeded == 1
+
+    with Workspace.open(workdir) as ws:
+        assert ws.store.run_status(r2.run_id) == "complete"
+        assert ws.store.group_status(r2.run_id, g1.group_key) == "complete"
+
+
+def test_group_ledger_status_survives_score_samples_failure_and_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same as the fit-failure case, but the exception comes from
+    score_samples (after a successful fit) instead of fit itself.
+    """
+    from sorethumb import Workspace
+
+    csv = tmp_path / "data.csv"
+    _make_planted_csv(csv, n_normal=200, n_anomaly=3, seed=0)
+    workdir = tmp_path / "ws"
+    cfg = _minimal_config(csv, workdir, contamination=0.02)
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise ValueError("synthetic scoring failure")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(IsolationForestDetector, "score_samples", _boom)
+        r1 = run_detection(cfg, no_report=True)
+
+    assert r1.n_failed == 1
+    g1 = r1.groups[0]
+    assert g1.status == "failed"
+
+    with Workspace.open(workdir) as ws:
+        assert ws.store.group_status(r1.run_id, g1.group_key) == "failed"
+
+    r2 = run_detection(cfg, no_report=True)
+    assert r2.run_id == r1.run_id
+    assert r2.n_succeeded == 1
+    assert r2.n_failed == 0
+
+
 def test_repeat_run_does_not_blank_the_report(tmp_path: Path) -> None:
     """A resumed run (every group skipped) must re-render the same report, not an empty one."""
     csv = tmp_path / "data.csv"
