@@ -85,6 +85,34 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- History completion was neither atomic nor scoped to a configuration.
+  `totals` rows preserved `config_hash` (migration 002), but every reader —
+  `last_complete_period_label`, `completed_group_keys`, `groups_seen_for_dataset`,
+  `totals_for_periods`, `periods_missing_groups`, `iter_pending_periods`,
+  `compute_rolling_windows` — ignored it, so two configurations processing the
+  same `period_label` could make each other look done, or have their totals
+  silently summed together in a rolling-window trend. Separately, "is this
+  period done?" was answered by "does the totals table have any row for it?",
+  so a period where only 1 of 3 groups succeeded (2 failed) still read as
+  fully complete and was never retried. A new `period_execution` table
+  (migration 006), keyed on `(dataset_fp, period_label, config_hash)`, is now
+  written atomically alongside that attempt's totals rows
+  (`Store.record_period_completion`, one `BEGIN IMMEDIATE`/`COMMIT`) and is
+  the sole source of truth for completion: `complete=1` only when every group
+  discovered in that run reached a non-failed terminal status. Every history
+  reader now takes an explicit `config_hash` (no default), and `sorethumb
+  backfill` / `sorethumb history` display the config hash they're scoped to.
+  `_record_period_history` also now writes totals for resumed (`skipped`)
+  groups, not just `success`/`too_few_records` — needed so a crash between a
+  group being marked complete in the run ledger and history ever being
+  recorded doesn't permanently lose that group's contribution; the next
+  retry now records it. The dead `calibration_modes_for_periods` lookup
+  (diffed a `calibration_mode` config field removed when self-calibration
+  became the only mode, so it always read as "no break") is replaced by
+  `other_config_hashes_for_periods`: `WindowResult.calibration_break` now
+  fires when a window's span also has totals recorded under a *different*
+  configuration — real provenance that the trend may be an incomplete
+  picture, instead of a check that could never trip.
 - A group that failed without raising (e.g. "no detector produced scores",
   or a score-forward group whose requested detector was never persisted in
   the source run) was written to the `run_group` ledger as `status='complete'`

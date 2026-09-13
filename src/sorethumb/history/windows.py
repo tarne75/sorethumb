@@ -6,9 +6,17 @@ Unknown-population rows (sentinel -1) are excluded from both sides of the ratio.
 
 Every period is self-calibrated independently (there is no reference-calibration
 mode), so a rolling window compares periods that are each on their own [0, 1]
-scale: the trend is a *relative* signal, not an absolute anomaly level. The
-``calibration_break`` flag stays as a guard for a future run-level calibration
-marker; with today's single regime it never trips.
+scale: the trend is a *relative* signal, not an absolute anomaly level.
+
+Aggregation is always scoped to one ``config_hash``: totals for the same
+(dataset_fp, group_key, period_label) recorded under a different configuration
+are separate rows (migration 002) and must never be summed together, or the
+window's counts silently double up. ``calibration_break`` flags when this
+window's span also has totals recorded under *other* config_hashes — real
+provenance that the trend may be comparing an incomplete picture, replacing an
+earlier check that diffed a ``calibration_mode`` config field which no longer
+exists (self-calibration is now the only mode, so that check always read as
+"no break").
 """
 
 from __future__ import annotations
@@ -42,7 +50,7 @@ class WindowResult:
     absolute_change: float | None
     pct_change: float | None
     low_volume: bool
-    calibration_break: bool
+    calibration_break: bool  # some period in this span has totals under a different config_hash
     current_labels: list[str] = field(default_factory=list, compare=False)
     prior_labels: list[str] = field(default_factory=list, compare=False)
 
@@ -50,6 +58,7 @@ class WindowResult:
 def compute_rolling_windows(
     store: Store,
     dataset_fp: str,
+    config_hash: str,
     reference_label: str,
     windows: list[int],
     granularity: PeriodGranularity,
@@ -64,6 +73,10 @@ def compute_rolling_windows(
         Active store for totals queries.
     dataset_fp:
         Dataset fingerprint.
+    config_hash:
+        Configuration whose totals to aggregate. Mandatory: totals recorded
+        under a different configuration for the same dataset/period/group are
+        separate rows and must never be summed into this trend.
     reference_label:
         The period being reported on (end of the "current" window).
     windows:
@@ -97,12 +110,14 @@ def compute_rolling_windows(
         pri_start = step_back(cur_start, granularity, w)
         pri_labels = period_range(pri_start, pri_end, granularity)
 
-        cur = _aggregate(store, dataset_fp, cur_labels, group_keys)
-        pri = _aggregate(store, dataset_fp, pri_labels, group_keys)
+        cur = _aggregate(store, dataset_fp, config_hash, cur_labels, group_keys)
+        pri = _aggregate(store, dataset_fp, config_hash, pri_labels, group_keys)
 
-        # Calibration break: multiple distinct modes across the combined span
+        # Real provenance: does this span also have totals under some *other*
+        # configuration? Those rows are excluded from the sums above, so a
+        # break here means the trend may be comparing an incomplete picture.
         all_labels = pri_labels + cur_labels
-        cal_break = len(store.calibration_modes_for_periods(dataset_fp, all_labels)) > 1
+        cal_break = len(store.other_config_hashes_for_periods(dataset_fp, all_labels, config_hash)) > 0
 
         cur_rate = _safe_rate(cur["anomaly_count"], cur["population"])
         pri_rate = _safe_rate(pri["anomaly_count"], pri["population"])
@@ -146,11 +161,12 @@ def compute_rolling_windows(
 def _aggregate(
     store: Store,
     dataset_fp: str,
+    config_hash: str,
     period_labels: list[str],
     group_keys: list[str] | None,
 ) -> dict[str, int]:
     """Sum anomaly_count and population over period_labels, excluding unknown population."""
-    rows = store.totals_for_periods(dataset_fp, period_labels, group_keys)
+    rows = store.totals_for_periods(dataset_fp, period_labels, config_hash, group_keys)
     anomaly_count = 0
     population = 0
     for row in rows:

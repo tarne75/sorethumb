@@ -725,11 +725,41 @@ def _two_period_parquet(path: Path, *, per_day: int = 100, seed: int = 0) -> dic
     return planted
 
 
-def _period_config(parquet: Path, workdir: Path) -> Config:
+def _period_config(parquet: Path, workdir: Path, *, detectors: list[DetectorConfig] | None = None) -> Config:
     return Config(
         source=SourceConfig(uri=str(parquet), format="parquet"),
         run=RunConfig(workdir=str(workdir), seed=42),
         columns=ColumnsConfig(id_column="id", time_column="ts"),
+        history=HistoryConfig(period_granularity="day", roll_non_business=False),
+        detectors=detectors or [DetectorConfig(name="isolation_forest")],
+        scoring=ScoringConfig(
+            combination="composite", contamination="auto", weighting="equal", min_records=5
+        ),
+    )
+
+
+def _one_day_two_group_parquet(path: Path, *, per_group: int = 60, seed: int = 0) -> None:
+    """One calendar day, two groups ("cat" A/B), each large enough to fit a detector."""
+    rng = np.random.default_rng(seed)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    n = per_group * 2
+    ts = [datetime(2024, 1, 15, 8, tzinfo=UTC) + timedelta(minutes=i) for i in range(n)]
+    pl.DataFrame(
+        {
+            "id": list(range(n)),
+            "ts": pl.Series(ts).dt.cast_time_unit("us"),
+            "cat": ["A"] * per_group + ["B"] * per_group,
+            "num_a": rng.normal(0.0, 1.0, n).tolist(),
+            "num_b": rng.normal(5.0, 2.0, n).tolist(),
+        }
+    ).write_parquet(str(path))
+
+
+def _period_config_with_groups(parquet: Path, workdir: Path) -> Config:
+    return Config(
+        source=SourceConfig(uri=str(parquet), format="parquet"),
+        run=RunConfig(workdir=str(workdir), seed=42),
+        columns=ColumnsConfig(id_column="id", time_column="ts", group_by=["cat"]),
         history=HistoryConfig(period_granularity="day", roll_non_business=False),
         detectors=[DetectorConfig(name="isolation_forest")],
         scoring=ScoringConfig(
@@ -801,7 +831,7 @@ def test_period_run_records_history_ledger(tmp_path: Path) -> None:
         assert (prow["period_from"], prow["period_to"]) == ("2024-01-15", "2024-01-16")
 
         # one totals row per processed group, population == rows that entered the pipeline
-        totals = ws.store.totals_for_periods(dataset_fp, ["2024-01-15"])
+        totals = ws.store.totals_for_periods(dataset_fp, ["2024-01-15"], result.config_hash)
         assert len(totals) == result.n_succeeded == 1
         row = totals[0]
         assert row["population"] == per_day
@@ -809,7 +839,184 @@ def test_period_run_records_history_ledger(tmp_path: Path) -> None:
         assert row["run_id"] == result.run_id
 
         # the label is now complete: backfill would not re-queue it
-        assert iter_pending_periods(ws.store, dataset_fp, ["2024-01-15", "2024-01-16"]) == ["2024-01-16"]
+        assert iter_pending_periods(
+            ws.store, dataset_fp, result.config_hash, ["2024-01-15", "2024-01-16"]
+        ) == ["2024-01-16"]
+
+
+# ---------------------------------------------------------------------------
+# P0-2: history completion is atomic and scoped to (dataset_fp, period_label,
+# config_hash) -- a partial or crashed attempt must be retried, two
+# configurations sharing a period must never blend or block each other, and a
+# clean repeat must be idempotent.
+# ---------------------------------------------------------------------------
+
+
+def test_repeat_period_run_is_idempotent_in_history_ledger(tmp_path: Path) -> None:
+    from sorethumb.store.workspace import Workspace
+
+    parquet = tmp_path / "two_periods.parquet"
+    _two_period_parquet(parquet, per_day=100)
+    workdir = tmp_path / "ws"
+    cfg = _period_config(parquet, workdir)
+
+    r1 = run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+    r2 = run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+    assert r1.run_id == r2.run_id
+
+    with Workspace.open(workdir) as ws:
+        totals = ws.store.totals_for_periods(r1.dataset_fp, ["2024-01-15"], r1.config_hash)
+        assert len(totals) == 1, "a repeat run must not duplicate the totals row"
+        assert ws.store.period_is_complete(r1.dataset_fp, "2024-01-15", r1.config_hash) is True
+
+
+def test_two_configs_on_one_period_do_not_double_count_or_block_each_other(tmp_path: Path) -> None:
+    """Two configurations processing the same period_label must each get
+    their own totals row (scoped by config_hash), and running one must not
+    make the ledger think the other is already done.
+    """
+    from sorethumb.history.ledger import iter_pending_periods
+    from sorethumb.store.workspace import Workspace
+
+    parquet = tmp_path / "two_periods.parquet"
+    _two_period_parquet(parquet, per_day=100)
+    workdir = tmp_path / "ws"
+    cfg_a = _period_config(parquet, workdir, detectors=[DetectorConfig(name="isolation_forest")])
+    cfg_b = _period_config(parquet, workdir, detectors=[DetectorConfig(name="kmeans_distance")])
+    assert cfg_a.config_hash() != cfg_b.config_hash()
+
+    ra = run_detection(cfg_a, period_label_override="2024-01-15", no_report=True)
+    assert ra.n_succeeded == 1
+
+    with Workspace.open(workdir) as ws:
+        # Config B has never run this period -- must still be pending under
+        # its own hash, regardless of config A having just completed it.
+        pending_b = iter_pending_periods(ws.store, ra.dataset_fp, cfg_b.config_hash(), ["2024-01-15"])
+        assert pending_b == ["2024-01-15"]
+
+    rb = run_detection(cfg_b, period_label_override="2024-01-15", no_report=True)
+    assert rb.n_succeeded == 1
+    assert ra.run_id != rb.run_id
+
+    with Workspace.open(workdir) as ws:
+        totals_a = ws.store.totals_for_periods(ra.dataset_fp, ["2024-01-15"], ra.config_hash)
+        totals_b = ws.store.totals_for_periods(rb.dataset_fp, ["2024-01-15"], rb.config_hash)
+        assert len(totals_a) == 1
+        assert len(totals_b) == 1
+        # Each config's own read never includes the other's row.
+        assert {t["config_hash"] for t in totals_a} == {ra.config_hash}
+        assert {t["config_hash"] for t in totals_b} == {rb.config_hash}
+
+        assert ws.store.period_is_complete(ra.dataset_fp, "2024-01-15", ra.config_hash) is True
+        assert ws.store.period_is_complete(rb.dataset_fp, "2024-01-15", rb.config_hash) is True
+
+        # Rolling-window aggregation for A must not pick up B's contribution.
+        other = ws.store.other_config_hashes_for_periods(ra.dataset_fp, ["2024-01-15"], ra.config_hash)
+        assert other == {rb.config_hash}
+
+
+def test_period_with_one_failed_group_is_not_marked_complete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A period where one of several groups fails must not be recorded
+    complete -- only the succeeding group's totals are written -- and a retry
+    with the same inputs must re-execute the failed group and only then
+    complete the period.
+    """
+    from sorethumb.store.workspace import Workspace
+
+    parquet = tmp_path / "grouped.parquet"
+    _one_day_two_group_parquet(parquet)
+    workdir = tmp_path / "ws"
+    cfg = _period_config_with_groups(parquet, workdir)
+
+    calls = {"n": 0}
+    orig_fit = IsolationForestDetector.fit
+
+    def _flaky_fit(self: object, *a: object, **k: object) -> object:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ValueError("synthetic failure for the second group")
+        return orig_fit(self, *a, **k)  # type: ignore[arg-type]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(IsolationForestDetector, "fit", _flaky_fit)
+        r1 = run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+
+    assert r1.n_succeeded == 1
+    assert r1.n_failed == 1
+
+    with Workspace.open(workdir) as ws:
+        assert ws.store.period_is_complete(r1.dataset_fp, "2024-01-15", r1.config_hash) is False
+        totals = ws.store.totals_for_periods(r1.dataset_fp, ["2024-01-15"], r1.config_hash)
+        assert len(totals) == 1, "only the succeeding group's totals are recorded"
+
+    # Retry with the same inputs: the failed group must be re-executed (fit is
+    # no longer patched), and only then does the period become complete.
+    r2 = run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+    assert r2.run_id == r1.run_id
+    assert r2.n_succeeded == 1
+    assert r2.n_skipped == 1
+
+    with Workspace.open(workdir) as ws:
+        assert ws.store.period_is_complete(r2.dataset_fp, "2024-01-15", r2.config_hash) is True
+        totals = ws.store.totals_for_periods(r2.dataset_fp, ["2024-01-15"], r2.config_hash)
+        assert len(totals) == 2
+
+
+def test_interruption_between_groups_recovers_all_totals_on_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash after one group is marked complete in the run ledger but
+    before the next group even starts -- so _record_period_history never
+    runs at all -- must not permanently lose the finished group's totals: a
+    retry must record every group, including the one that was only resumed
+    (skipped) this time, not just the one it (re-)executes.
+    """
+    import sorethumb._pipeline as pipe
+    from sorethumb.store.workspace import Workspace
+
+    parquet = tmp_path / "grouped.parquet"
+    _one_day_two_group_parquet(parquet)
+    workdir = tmp_path / "ws"
+    cfg = _period_config_with_groups(parquet, workdir)
+
+    real_execute_group = pipe._execute_group
+    calls = {"n": 0}
+
+    def _crash_on_second_group(*a: object, **k: object) -> object:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("simulated crash between groups")
+        return real_execute_group(*a, **k)  # type: ignore[arg-type]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pipe, "_execute_group", _crash_on_second_group)
+        with pytest.raises(RuntimeError, match="simulated crash between groups"):
+            run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+
+    with Workspace.open(workdir) as ws:
+        run_row = ws.store.list_runs(limit=1)[0]
+        run_id = str(run_row["run_id"])
+        dataset_fp = str(run_row["dataset_fp"])
+        config_hash = cfg.config_hash()
+
+        # The first group committed to the run ledger before the crash; the
+        # second group was never attempted. Neither has a totals row yet, and
+        # the period is not complete -- _record_period_history never ran.
+        run_groups = ws.store.all_run_groups(run_id)
+        assert len(run_groups) == 1
+        assert run_groups[0]["status"] == "complete"
+        assert ws.store.totals_for_periods(dataset_fp, ["2024-01-15"], config_hash) == []
+        assert ws.store.period_is_complete(dataset_fp, "2024-01-15", config_hash) is False
+
+    r2 = run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+    assert r2.run_id == run_id
+    assert r2.n_skipped == 1, "the first group must be resumed, not re-executed"
+    assert r2.n_succeeded == 1, "the second group runs for the first time"
+
+    with Workspace.open(workdir) as ws:
+        assert ws.store.period_is_complete(r2.dataset_fp, "2024-01-15", r2.config_hash) is True
+        totals = ws.store.totals_for_periods(r2.dataset_fp, ["2024-01-15"], r2.config_hash)
+        assert len(totals) == 2, "the resumed (skipped) group's totals must be recorded too"
 
 
 def _write_days_parquet(path: Path, *, days: list[str], per_day: int = 80, seed: int = 0) -> None:
@@ -864,9 +1071,12 @@ def test_appending_a_snapshot_keeps_dataset_identity_and_history(tmp_path: Path)
     with Workspace.open(workdir) as ws:
         dfp = r2.dataset_fp
         # Both periods' totals live under the one logical dataset — nothing orphaned.
-        labels = {r["period_label"] for r in ws.store.totals_for_periods(dfp, ["2024-01-15", "2024-01-16"])}
+        labels = {
+            r["period_label"]
+            for r in ws.store.totals_for_periods(dfp, ["2024-01-15", "2024-01-16"], r2.config_hash)
+        }
         assert labels == {"2024-01-15", "2024-01-16"}
-        assert iter_pending_periods(ws.store, dfp, ["2024-01-15", "2024-01-16"]) == []
+        assert iter_pending_periods(ws.store, dfp, r2.config_hash, ["2024-01-15", "2024-01-16"]) == []
 
         # Both snapshots are recorded against the same dataset_fp.
         snaps = {s["snapshot_fp"] for s in ws.store.dataset_snapshots(dfp)}

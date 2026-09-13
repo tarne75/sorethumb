@@ -193,7 +193,7 @@ def test_all_bundled_migrations_apply_cleanly(tmp_path):
     """Every shipped migration file applies without error and is recorded."""
     with Store(tmp_path / "m.db") as store:
         versions = {r[0] for r in store._conn.execute("SELECT version FROM schema_migration")}
-    assert versions == {1, 2, 3, 4, 5}
+    assert versions == {1, 2, 3, 4, 5, 6}
 
 
 def test_migration_003_adds_artifact_run_id_column(tmp_path):
@@ -208,6 +208,14 @@ def test_migration_005_adds_snapshot_table_and_column(tmp_path):
         tables = {r[0] for r in store._conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "snapshot_fp" in cols
     assert "dataset_snapshot" in tables
+
+
+def test_migration_006_adds_period_execution_table(tmp_path):
+    with Store(tmp_path / "m.db") as store:
+        tables = {r[0] for r in store._conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        cols = {r[1] for r in store._conn.execute("PRAGMA table_info(period_execution)")}
+    assert "period_execution" in tables
+    assert {"dataset_fp", "period_label", "config_hash", "run_id", "group_count", "failed_count", "complete"} <= cols
 
 
 def test_store_second_open_no_duplicate_migration(tmp_path):
@@ -257,7 +265,7 @@ def test_concurrent_opens_all_succeed_and_migrate_once(tmp_path):
         versions = [
             r[0] for r in store._conn.execute("SELECT version FROM schema_migration ORDER BY version")
         ]
-    assert versions == [1, 2, 3, 4, 5]
+    assert versions == [1, 2, 3, 4, 5, 6]
 
 
 def test_migrations_record_a_checksum(tmp_path):

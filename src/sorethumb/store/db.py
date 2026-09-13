@@ -48,6 +48,19 @@ _BUSY_TIMEOUT_MS = 30_000
 # name" on retry. Matched against each statement in ``_execute_ddl``.
 _ALTER_ADD_COLUMN_RE = re.compile(r"^ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)", re.IGNORECASE)
 
+_UPSERT_TOTAL_SQL = """
+    INSERT INTO totals
+        (dataset_fp, group_key, period_label, config_hash,
+         anomaly_count, population, rate, run_id, computed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(dataset_fp, group_key, period_label, config_hash) DO UPDATE SET
+        anomaly_count = excluded.anomaly_count,
+        population    = excluded.population,
+        rate          = excluded.rate,
+        run_id        = excluded.run_id,
+        computed_at   = excluded.computed_at
+"""
+
 
 def _now_utc() -> str:
     return datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -599,7 +612,7 @@ class Store:
         self._conn.commit()
 
     # ------------------------------------------------------------------
-    # totals
+    # totals + period_execution
     # ------------------------------------------------------------------
 
     def upsert_total(
@@ -614,46 +627,129 @@ class Store:
         config_hash: str = "",
     ) -> None:
         """Insert or replace a totals row on its natural key (dataset, group, period, config)."""
-        now = _now_utc()
         self._conn.execute(
-            """
-            INSERT INTO totals
-                (dataset_fp, group_key, period_label, config_hash,
-                 anomaly_count, population, rate, run_id, computed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(dataset_fp, group_key, period_label, config_hash) DO UPDATE SET
-                anomaly_count = excluded.anomaly_count,
-                population    = excluded.population,
-                rate          = excluded.rate,
-                run_id        = excluded.run_id,
-                computed_at   = excluded.computed_at
-            """,
-            (dataset_fp, group_key, period_label, config_hash, anomaly_count, population, rate, run_id, now),
+            _UPSERT_TOTAL_SQL,
+            (dataset_fp, group_key, period_label, config_hash, anomaly_count, population, rate, run_id, _now_utc()),
         )
         self._conn.commit()
 
-    def last_complete_period_label(self, dataset_fp: str) -> str | None:
-        """Return the most recent period_label that has at least one totals row."""
+    def record_period_completion(
+        self,
+        *,
+        dataset_fp: str,
+        period_label: str,
+        period_from: str,
+        period_to: str,
+        config_hash: str,
+        run_id: str,
+        totals: list[tuple[str, int, int, float | None]],
+        failed_count: int,
+    ) -> None:
+        """Write the period row, every group's totals row, and this attempt's
+        completion record as one atomic transaction.
+
+        ``totals`` is ``(group_key, anomaly_count, population, rate)`` for every
+        group this run has a value for (success, too-few-records, *and* resumed
+        ``skipped`` groups -- re-upserting an already-recorded skipped group is
+        a harmless no-op, and is what lets a period recover if a previous
+        attempt crashed after ``run_group`` marked a group complete but before
+        this method ever ran). ``complete`` is derived from ``failed_count``:
+        a period with any failed group -- or with zero groups discovered -- is
+        not complete and must be retried.
+
+        The whole write is wrapped in ``BEGIN IMMEDIATE``/``COMMIT`` (see
+        ``_apply_one_migration`` for the same pattern) so a crash between the
+        period row and the completion row can never leave one without the
+        other: a reader either sees the previous attempt's state in full, or
+        this one's, never a mix.
+        """
+        complete = failed_count == 0 and len(totals) > 0
+        now = _now_utc()
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._conn.execute(
+                """
+                INSERT INTO period (dataset_fp, period_label, period_from, period_to)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(dataset_fp, period_label) DO UPDATE SET
+                    period_from = excluded.period_from,
+                    period_to   = excluded.period_to
+                """,
+                (dataset_fp, period_label, period_from, period_to),
+            )
+            for group_key, anomaly_count, population, rate in totals:
+                self._conn.execute(
+                    _UPSERT_TOTAL_SQL,
+                    (dataset_fp, group_key, period_label, config_hash, anomaly_count, population, rate, run_id, now),
+                )
+            self._conn.execute(
+                """
+                INSERT INTO period_execution
+                    (dataset_fp, period_label, config_hash, run_id, group_count, failed_count, complete, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(dataset_fp, period_label, config_hash) DO UPDATE SET
+                    run_id       = excluded.run_id,
+                    group_count  = excluded.group_count,
+                    failed_count = excluded.failed_count,
+                    complete     = excluded.complete,
+                    updated_at   = excluded.updated_at
+                """,
+                (dataset_fp, period_label, config_hash, run_id, len(totals), failed_count, int(complete), now),
+            )
+            self._conn.execute("COMMIT")
+        except BaseException:
+            with contextlib.suppress(sqlite3.OperationalError):
+                self._conn.execute("ROLLBACK")
+            raise
+
+    def period_is_complete(self, dataset_fp: str, period_label: str, config_hash: str) -> bool:
+        """True iff a run against *config_hash* has completed this period with no failed groups.
+
+        This is the sole definition of "done" for backfill/resume purposes --
+        a period with only a partial totals row (some groups failed, or the
+        process was interrupted before ``record_period_completion`` ran) is
+        not complete and must be retried.
+        """
         row = self._conn.execute(
-            "SELECT MAX(period_label) AS pl FROM totals WHERE dataset_fp=?",
-            (dataset_fp,),
+            "SELECT complete FROM period_execution WHERE dataset_fp=? AND period_label=? AND config_hash=?",
+            (dataset_fp, period_label, config_hash),
+        ).fetchone()
+        return bool(row is not None and row["complete"])
+
+    def last_complete_period_label(self, dataset_fp: str, config_hash: str) -> str | None:
+        """Return the most recent period_label completed (no failed groups) under *config_hash*."""
+        row = self._conn.execute(
+            "SELECT MAX(period_label) AS pl FROM period_execution "
+            "WHERE dataset_fp=? AND config_hash=? AND complete=1",
+            (dataset_fp, config_hash),
         ).fetchone()
         val = row["pl"] if row else None
         return str(val) if val is not None else None
 
-    def completed_group_keys(self, dataset_fp: str, period_label: str) -> list[str]:
-        """Return group_keys that have a totals row for this (dataset_fp, period_label)."""
+    def completed_group_keys(self, dataset_fp: str, period_label: str, config_hash: str) -> list[str]:
+        """Return group_keys with a totals row for this (dataset_fp, period_label, config_hash).
+
+        Reflects whatever totals exist even for an incomplete period (some
+        groups may have data while others failed) -- use ``period_is_complete``
+        to ask whether the period as a whole is done.
+        """
         rows = self._conn.execute(
-            "SELECT DISTINCT group_key FROM totals WHERE dataset_fp=? AND period_label=?",
-            (dataset_fp, period_label),
+            "SELECT DISTINCT group_key FROM totals WHERE dataset_fp=? AND period_label=? AND config_hash=?",
+            (dataset_fp, period_label, config_hash),
         ).fetchall()
         return [str(r["group_key"]) for r in rows]
 
-    def groups_seen_for_dataset(self, dataset_fp: str) -> set[str]:
-        """Return all group_keys ever seen in totals for a dataset."""
+    def groups_seen_for_dataset(self, dataset_fp: str, config_hash: str) -> set[str]:
+        """Return all group_keys ever seen in totals for a dataset under *config_hash*.
+
+        Scoped per config because different configurations can define
+        entirely different group_by dimensions -- a group_key meaningful under
+        one configuration is not necessarily meaningful, or even comparable,
+        under another.
+        """
         rows = self._conn.execute(
-            "SELECT DISTINCT group_key FROM totals WHERE dataset_fp=?",
-            (dataset_fp,),
+            "SELECT DISTINCT group_key FROM totals WHERE dataset_fp=? AND config_hash=?",
+            (dataset_fp, config_hash),
         ).fetchall()
         return {str(r["group_key"]) for r in rows}
 
@@ -661,41 +757,61 @@ class Store:
         self,
         dataset_fp: str,
         period_labels: list[str],
+        config_hash: str,
         group_keys: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Return totals rows for the given period labels, optionally filtered by group."""
+        """Return totals rows for the given period labels under one config_hash.
+
+        Filtering by config_hash is mandatory: a dataset touched by two
+        different configurations has independent totals rows for the same
+        (dataset_fp, group_key, period_label) triple (see migration 002), and
+        summing across both would double-count.
+        """
         if not period_labels:
             return []
         ph = ",".join("?" * len(period_labels))
-        params: list[Any] = [dataset_fp, *period_labels]
+        params: list[Any] = [dataset_fp, config_hash, *period_labels]
         gk_clause = ""
         if group_keys is not None:
             gk_ph = ",".join("?" * len(group_keys))
             gk_clause = f"AND group_key IN ({gk_ph})"
             params.extend(group_keys)
         rows = self._conn.execute(
-            f"SELECT * FROM totals WHERE dataset_fp=? AND period_label IN ({ph}) {gk_clause}",
+            f"SELECT * FROM totals WHERE dataset_fp=? AND config_hash=? AND period_label IN ({ph}) {gk_clause}",
             params,
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def calibration_modes_for_periods(self, dataset_fp: str, period_labels: list[str]) -> set[str]:
-        """Return distinct calibration_mode values across runs that produced totals in these periods."""
+    def other_config_hashes_for_periods(
+        self, dataset_fp: str, period_labels: list[str], config_hash: str
+    ) -> set[str]:
+        """Return config_hash values (other than *config_hash*) that also have totals here.
+
+        Replaces a dead lookup that diffed a ``calibration_mode`` config field
+        removed when self-calibration became the only supported mode (so it
+        always returned an empty set). This is real provenance instead: a
+        non-empty result means part of this dataset's history in this window
+        was computed under a different configuration and is excluded from the
+        aggregate below -- the trend may be comparing an incomplete picture.
+        """
         if not period_labels:
             return set()
         ph = ",".join("?" * len(period_labels))
-        sql = (
-            "SELECT DISTINCT json_extract(r.config_json, '$.calibration_mode') AS cal_mode"
-            " FROM totals t JOIN run r ON r.run_id = t.run_id"
-            f" WHERE t.dataset_fp = ? AND t.period_label IN ({ph})"
-        )
-        rows = self._conn.execute(sql, [dataset_fp, *period_labels]).fetchall()
-        return {str(r["cal_mode"]) for r in rows if r["cal_mode"] is not None}
+        rows = self._conn.execute(
+            f"SELECT DISTINCT config_hash FROM totals "
+            f"WHERE dataset_fp=? AND period_label IN ({ph}) AND config_hash != ?",
+            [dataset_fp, *period_labels, config_hash],
+        ).fetchall()
+        return {str(r["config_hash"]) for r in rows}
 
-    def delete_totals_for_period(self, dataset_fp: str, period_label: str) -> None:
-        """Remove all totals rows for a (dataset_fp, period_label) to force recomputation."""
+    def delete_totals_for_period(self, dataset_fp: str, period_label: str, config_hash: str) -> None:
+        """Remove totals + the completion record for (dataset_fp, period_label, config_hash)."""
         self._conn.execute(
-            "DELETE FROM totals WHERE dataset_fp=? AND period_label=?",
-            (dataset_fp, period_label),
+            "DELETE FROM totals WHERE dataset_fp=? AND period_label=? AND config_hash=?",
+            (dataset_fp, period_label, config_hash),
+        )
+        self._conn.execute(
+            "DELETE FROM period_execution WHERE dataset_fp=? AND period_label=? AND config_hash=?",
+            (dataset_fp, period_label, config_hash),
         )
         self._conn.commit()

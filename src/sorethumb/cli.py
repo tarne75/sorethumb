@@ -894,6 +894,7 @@ def backfill(
         # run_detection will register -- so backfill's pending-period math does
         # not depend on the current snapshot's content.
         dataset_fp = logical_dataset_id(cfg.source.dataset_id, cfg.source.uri)
+        config_hash = cfg.config_hash()
 
         ref = datetime.now(UTC)
         _, _, ref_label = resolve_period(ref, cfg.history.period_granularity, cfg.history.roll_non_business)
@@ -901,19 +902,22 @@ def backfill(
         backfill_labels = resolve_backfill_range(
             ws.store,
             dataset_fp,
+            config_hash,
             ref_label,
             cfg.history.period_granularity,
             cfg.history.bootstrap_periods,
             cfg.history.lookback_periods,
             max_periods or cfg.history.max_backfill_periods,
         )
-        pending = iter_pending_periods(ws.store, dataset_fp, backfill_labels, force_period or [])
+        pending = iter_pending_periods(ws.store, dataset_fp, config_hash, backfill_labels, force_period or [])
 
         if not pending:
-            console.print("[green]Nothing to backfill — all periods are up to date.[/green]")
+            console.print(
+                f"[green]Nothing to backfill for config {config_hash[:8]} — all periods are up to date.[/green]"
+            )
             raise typer.Exit(0)
 
-        console.print(f"Backfill: {len(pending)} pending periods")
+        console.print(f"Backfill: {len(pending)} pending periods (config {config_hash[:8]})")
         if dry_run:
             for lbl in pending:
                 console.print(f"  [dim]would process:[/dim] {lbl}")
@@ -952,8 +956,11 @@ def history(
         from sorethumb.io.fingerprint import logical_dataset_id  # noqa: PLC0415
 
         # Trends are read straight from the ledger, keyed on the stable logical
-        # dataset id -- no need to touch the source file.
+        # dataset id -- no need to touch the source file. Aggregation is scoped
+        # to this config's hash -- a different configuration's totals for the
+        # same periods are separate rows and are never silently folded in.
         dataset_fp = logical_dataset_id(cfg.source.dataset_id, cfg.source.uri)
+        config_hash = cfg.config_hash()
 
         from datetime import datetime  # noqa: PLC0415
 
@@ -967,6 +974,7 @@ def history(
         window_results = compute_rolling_windows(
             ws.store,
             dataset_fp,
+            config_hash,
             ref_label,
             _windows,
             cfg.history.period_granularity,
@@ -974,10 +982,12 @@ def history(
         )
 
         if not window_results:
-            console.print("[yellow]No history available yet for this dataset.[/yellow]")
+            console.print(
+                f"[yellow]No history available yet for this dataset under config {config_hash[:8]}.[/yellow]"
+            )
             raise typer.Exit(0)
 
-        table = Table(title=f"Rolling windows (ref={ref_label})", show_header=True)
+        table = Table(title=f"Rolling windows (ref={ref_label}, config={config_hash[:8]})", show_header=True)
         table.add_column("Window", style="cyan")
         table.add_column("Cur count", justify="right")
         table.add_column("Cur pop", justify="right")

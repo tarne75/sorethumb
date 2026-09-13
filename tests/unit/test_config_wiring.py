@@ -382,7 +382,7 @@ def test_history_defaults_to_report_rolling_windows(tmp_path: Path, monkeypatch:
 
     seen: dict[str, list[int]] = {}
 
-    def _fake(_store, _dataset_fp, _ref_label, windows, _granularity, **_kw):
+    def _fake(_store, _dataset_fp, _config_hash, _ref_label, windows, _granularity, **_kw):
         seen["windows"] = list(windows)
         return []
 

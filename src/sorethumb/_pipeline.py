@@ -310,7 +310,8 @@ def _record_period_history(
     period_window: tuple[str, str],
     group_results: list[GroupSummary],
 ) -> None:
-    """Write the ``period`` row and one ``totals`` row per processed group.
+    """Write the period row, every group's totals row, and this attempt's
+    completion record for (dataset_fp, period_label, config_hash) atomically.
 
     Built straight from the :class:`GroupSummary` objects: each one already
     carries ``n_records`` (the rows that entered the pipeline for this
@@ -322,25 +323,32 @@ def _record_period_history(
     and raw grouping columns ``compute_totals`` needs, and it has no population.
     The summaries are the right source.
 
-    ``skipped`` groups (ledger already had them) and ``failed`` groups are left
-    out so their existing totals row is not overwritten / a gap stays a gap.
-    ``too_few_records`` groups are recorded with a zero count so the period is
-    not re-queued forever.
+    ``success``, ``too_few_records`` *and* ``skipped`` groups are all written:
+    a resumed (``skipped``) group re-upserts the same values it already has —
+    a harmless no-op — unless the *previous* attempt crashed after marking the
+    group complete in the run_group ledger but before this method ever ran,
+    in which case this is the first time its totals actually land. ``failed``
+    groups are left out so their prior totals row (if any) is not overwritten.
+    The period is recorded complete only when no group failed; a period with
+    any failed group — or with nothing to record at all — must be retried by
+    the next backfill pass (see ``Store.period_is_complete``).
     """
-    ws.store.upsert_period(dataset_fp, period_label, period_window[0], period_window[1])
-    for g in group_results:
-        if g.status not in ("success", "too_few_records"):
-            continue
-        ws.store.upsert_total(
-            dataset_fp=dataset_fp,
-            group_key=g.group_key,
-            period_label=period_label,
-            anomaly_count=g.n_anomalies,
-            population=g.n_records,
-            rate=g.anomaly_rate,
-            run_id=run_id,
-            config_hash=config_hash,
-        )
+    totals: list[tuple[str, int, int, float | None]] = [
+        (g.group_key, g.n_anomalies, g.n_records, g.anomaly_rate)
+        for g in group_results
+        if g.status in ("success", "too_few_records", "skipped")
+    ]
+    failed_count = sum(1 for g in group_results if g.status == "failed")
+    ws.store.record_period_completion(
+        dataset_fp=dataset_fp,
+        period_label=period_label,
+        period_from=period_window[0],
+        period_to=period_window[1],
+        config_hash=config_hash,
+        run_id=run_id,
+        totals=totals,
+        failed_count=failed_count,
+    )
 
 
 def run_detection(
