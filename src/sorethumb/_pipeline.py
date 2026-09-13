@@ -1208,6 +1208,24 @@ def _score_forward_group(
     )
 
 
+def _flagged_idx_by_score_desc(anomaly_flag: np.ndarray, composite_score: np.ndarray) -> np.ndarray:
+    """Row positions where ``anomaly_flag`` is True, ordered by ``composite_score`` descending.
+
+    ``composite_score`` is not necessarily the statistic that determined
+    ``anomaly_flag``: for ``combination="intersection"``/``"union"`` the flag
+    comes from a per-detector threshold vote (AND/OR of independent boundaries),
+    not from ``composite_score`` (min/max across detectors) -- so the globally
+    highest-scoring rows are not guaranteed to be the flagged ones. Deriving
+    ordered "flagged" positions this way (rather than taking the top-k rows by
+    a fresh global sort) is what keeps ``rank`` positive if and only if a row
+    is actually flagged, everywhere it's used (attribution ordering, `rank`).
+    """
+    flagged_idx = np.where(anomaly_flag)[0]
+    if len(flagged_idx) > 0:
+        flagged_idx = flagged_idx[np.argsort(composite_score[flagged_idx])[::-1]]
+    return flagged_idx
+
+
 def _finalize_group(
     *,
     ws: Workspace,
@@ -1248,16 +1266,14 @@ def _finalize_group(
     detector_flag_rates: dict[str, float] = result_dict["per_detector_rates"]
     dropped_detectors: list[str] = result_dict["dropped_members"]
 
-    flagged_idx = np.where(anomaly_flag)[0]
-    n_anomalies = int(anomaly_flag.sum())
-    anomaly_rate = n_anomalies / n_rows if n_rows > 0 else None
-
     # Most-anomalous first. explain.max_rows caps per-row attribution methods
     # (gradient, KernelSHAP); ordering severity-descending before that cap bites
     # means a truncated run still explains the rows that matter most, and the
-    # ones it had to skip are the least anomalous of the flagged set.
-    if n_anomalies > 0:
-        flagged_idx = flagged_idx[np.argsort(composite_score[flagged_idx])[::-1]]
+    # ones it had to skip are the least anomalous of the flagged set. Also the
+    # single source of truth for `rank` below.
+    flagged_idx = _flagged_idx_by_score_desc(anomaly_flag, composite_score)
+    n_anomalies = len(flagged_idx)
+    anomaly_rate = n_anomalies / n_rows if n_rows > 0 else None
 
     # ── Explanations ────────────────────────────────────────────────────────
     top_n = config.explain.top_n
@@ -1277,10 +1293,12 @@ def _finalize_group(
     id_col = config.columns.id_column
     row_ids = df_group[id_col].to_numpy() if id_col and id_col in df_group.columns else group_space.row_ids
 
+    # Dense 1-based rank within the flagged set only, most-anomalous first;
+    # every unflagged row stays 0. Reuses `flagged_idx` (already anomaly_flag=True
+    # rows sorted by composite_score descending) as the one source of truth,
+    # so rank and the attribution ordering above can never disagree.
     rank_arr = np.zeros(n_rows, dtype=int)
-    if n_anomalies > 0:
-        order = np.argsort(composite_score)[::-1]
-        rank_arr[order[:n_anomalies]] = np.arange(1, n_anomalies + 1)
+    rank_arr[flagged_idx] = np.arange(1, n_anomalies + 1)
 
     records: dict[str, Any] = {
         "row_id": row_ids.tolist(),

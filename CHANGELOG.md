@@ -85,6 +85,28 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `combination="intersection"`/`"union"` did not actually require every
+  configured detector's vote. The bad-member guard in `ScoreEnsemble.combine`
+  (which drops a detector whose score ranking is anti-correlated with the
+  ensemble median) ran before the combination strategy was even checked, so a
+  configured three-way intersection could silently become a two-way one — the
+  decision rule changed without any visible config change. The guard now only
+  drops members for `combination="composite"`, where removing an outlier from
+  a weighted average doesn't change the decision rule; for
+  `"intersection"`/`"union"` every configured vote is kept and a new
+  `AntiCorrelatedMemberWarning` is raised instead (promoted to an error under
+  `run.strict`, via the existing `SorethumbWarning` mechanism).
+- `rank` could be assigned to a row `combination="intersection"`/`"union"`
+  never actually flagged, and a genuinely flagged row could be left at rank 0.
+  `_finalize_group` derived `rank` from a fresh global sort of
+  `composite_score` and ranked the top `n_anomalies` rows by that score —
+  but for the set-operation combinations, `anomaly_flag` comes from an
+  independent per-detector threshold vote, not from `composite_score`
+  (`min`/`max` across detectors), so the globally highest-scoring rows are
+  not guaranteed to be the flagged ones. `rank` is now derived from the same
+  flagged-only, score-ordered array already used for attribution ordering
+  (`_flagged_idx_by_score_desc`), so `rank > 0` if and only if a row is
+  flagged, always.
 - History completion was neither atomic nor scoped to a configuration.
   `totals` rows preserved `config_hash` (migration 002), but every reader —
   `last_complete_period_label`, `completed_group_keys`, `groups_seen_for_dataset`,

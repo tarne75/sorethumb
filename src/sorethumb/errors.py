@@ -104,3 +104,13 @@ class CalibrationModeWarning(SorethumbWarning):
 
 class SlowStageWarning(SorethumbWarning):
     """A stage or group exceeded run.slow_stage_seconds."""
+
+
+class AntiCorrelatedMemberWarning(SorethumbWarning):
+    """A detector ranked anti-correlated with the ensemble but was kept anyway.
+
+    Raised for combination="intersection"/"union", where dropping a member
+    would silently change the vote count (a configured three-way intersection
+    quietly becoming two-way). The bad-member guard still drops members for
+    combination="composite", where dropping does not change the decision rule.
+    """

@@ -175,6 +175,55 @@ def test_planted_anomalies_are_detected(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# P0-3: intersection is a genuine three-way vote; rank tracks anomaly_flag
+# ---------------------------------------------------------------------------
+
+
+def test_intersection_rank_is_dense_and_positive_iff_flagged(tmp_path: Path) -> None:
+    """For combination="intersection", anomaly_flag is a per-detector vote
+    (AND of three independent thresholds), not the same statistic as
+    composite_score (min across detectors). `rank` must be positive exactly
+    for flagged rows, dense 1..n_flagged, ordered by composite_score
+    descending -- never assigned to a row the vote did not actually flag.
+    """
+    csv = tmp_path / "data.csv"
+    _make_planted_csv(csv, n_normal=200, n_anomaly=5, seed=0)
+    workdir = tmp_path / "ws"
+    cfg = _minimal_config(
+        csv,
+        workdir,
+        contamination=0.05,
+        combination="intersection",
+        detectors=[
+            DetectorConfig(name="isolation_forest"),
+            DetectorConfig(name="kmeans_distance"),
+            DetectorConfig(name="one_class_svm"),
+        ],
+    )
+
+    result = run_detection(cfg, no_report=True)
+    assert result.n_succeeded == 1
+    group = result.groups[0]
+    assert group.n_anomalies > 0, "test needs at least one flagged row to be meaningful"
+    assert group.results_path is not None
+
+    df = pl.read_parquet(group.results_path)
+    # write_results persists only flagged rows, so every row here has
+    # flagged=True by construction -- the meaningful check is that every one
+    # of them also has a positive, dense rank (the invariant the fix
+    # restores; the pre-fix code could instead assign these ranks to
+    # whichever rows had the globally highest composite_score, flagged or not).
+    assert (df["flagged"]).all()
+    assert (df["rank"] > 0).all()
+    assert sorted(df["rank"].to_list()) == list(range(1, group.n_anomalies + 1))
+
+    # Dense ranks are ordered by composite_score descending.
+    ordered = df.sort("rank")
+    scores = ordered["composite_score"].to_list()
+    assert scores == sorted(scores, reverse=True)
+
+
+# ---------------------------------------------------------------------------
 # Phase 1 → kmeans AUC guard
 # ---------------------------------------------------------------------------
 

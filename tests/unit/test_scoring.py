@@ -1,8 +1,11 @@
 """Unit tests for M3: scoring (calibration and combination)."""
 
+import warnings
+
 import numpy as np
 import pytest
 
+from sorethumb.errors import AntiCorrelatedMemberWarning
 from sorethumb.scoring.calibrate import Calibrator
 from sorethumb.scoring.combine import ScoreEnsemble
 
@@ -299,6 +302,53 @@ def test_union_is_max():
     np.testing.assert_allclose(result["combined_score"], expected)
 
 
+def test_three_way_intersection_requires_all_three_votes():
+    """P0-3: a genuine three-way intersection must be the AND of all three
+    detectors' votes, strictly smaller than every two-way intersection of its
+    members -- proving all three actually matter, not just two of them
+    happening to agree while a third is along for the ride.
+
+    Rows are laid out as the seven regions of a three-set Venn diagram: an
+    "only me" region per detector, an "exactly these two" region per pair,
+    and one "all three" region. Each pairwise intersection then strictly
+    contains the three-way intersection (its own "all three" region plus one
+    "exactly these two" region the third detector never voted for) -- so
+    dropping any one detector's vote would visibly change the result.
+    """
+    idx = np.arange(210)
+    only_a = (idx >= 0) & (idx < 30)
+    only_b = (idx >= 30) & (idx < 60)
+    only_c = (idx >= 60) & (idx < 90)
+    ab_only = (idx >= 90) & (idx < 120)
+    ac_only = (idx >= 120) & (idx < 150)
+    bc_only = (idx >= 150) & (idx < 180)
+    all_three = (idx >= 180) & (idx < 210)
+
+    flag_a = only_a | ab_only | ac_only | all_three
+    flag_b = only_b | ab_only | bc_only | all_three
+    flag_c = only_c | ac_only | bc_only | all_three
+
+    scores = {"a": flag_a.astype(float), "b": flag_b.astype(float), "c": flag_c.astype(float)}
+    flags = {"a": flag_a, "b": flag_b, "c": flag_c}
+
+    ens = ScoreEnsemble(combination="intersection", contamination="auto")
+    result = ens.combine(scores, flags)
+
+    expected_ab = flag_a & flag_b  # ab_only + all_three
+    expected_ac = flag_a & flag_c  # ac_only + all_three
+    expected_bc = flag_b & flag_c  # bc_only + all_three
+
+    np.testing.assert_array_equal(result["anomaly_flag"], all_three)
+    # If any single vote had been dropped, the result would match a two-way
+    # intersection instead -- prove it does not, for every pair.
+    assert not np.array_equal(result["anomaly_flag"], expected_ab)
+    assert not np.array_equal(result["anomaly_flag"], expected_ac)
+    assert not np.array_equal(result["anomaly_flag"], expected_bc)
+    assert int(result["anomaly_flag"].sum()) < int(expected_ab.sum())
+    assert int(result["anomaly_flag"].sum()) < int(expected_ac.sum())
+    assert int(result["anomaly_flag"].sum()) < int(expected_bc.sum())
+
+
 # ---------------------------------------------------------------------------
 # ScoreEnsemble: weighting strategies
 # ---------------------------------------------------------------------------
@@ -398,13 +448,12 @@ def _three_dets(n=300, *, third):
     return {"a": a, "b": b, "c": third(base, rng)}
 
 
-@pytest.mark.parametrize("combination", ["composite", "intersection", "union"])
-def test_guard_drops_member_anticorrelated_with_the_median(combination, caplog):
+def test_guard_drops_member_anticorrelated_with_the_median_in_composite(caplog):
     import logging
 
     scores = _three_dets(third=lambda base, _rng: 1.0 - base)  # c ranks opposite a & b
     flags = {k: v > 0.9 for k, v in scores.items()}
-    ens = ScoreEnsemble(weighting="agreement", combination=combination, contamination=0.1)
+    ens = ScoreEnsemble(weighting="agreement", combination="composite", contamination=0.1)
 
     with caplog.at_level(logging.WARNING, logger="sorethumb.scoring.combine"):
         result = ens.combine(scores, flags)
@@ -413,6 +462,43 @@ def test_guard_drops_member_anticorrelated_with_the_median(combination, caplog):
     assert result["weights"]["c"] == 0.0
     assert set(result["weights"]) == {"a", "b", "c"}  # dropped member still listed
     assert any("consensus median" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("combination", ["intersection", "union"])
+def test_guard_keeps_every_vote_for_set_combinations(combination):
+    """P0-3: dropping a member from a vote silently changes the vote count --
+    a configured three-way intersection/union must stay three-way even when
+    one detector ranks anti-correlated with the others. The guard must warn,
+    not drop.
+    """
+    scores = _three_dets(third=lambda base, _rng: 1.0 - base)  # c ranks opposite a & b
+    flags = {k: v > 0.9 for k, v in scores.items()}
+    ens = ScoreEnsemble(combination=combination, contamination=0.1)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = ens.combine(scores, flags)
+
+    assert result["dropped_members"] == []
+    assert set(result["weights"]) == {"a", "b", "c"}
+    assert any(issubclass(w.category, AntiCorrelatedMemberWarning) for w in caught)
+    assert any("consensus median" in str(w.message) for w in caught)
+
+
+@pytest.mark.parametrize("combination", ["intersection", "union"])
+def test_guard_warning_is_promoted_to_error_under_strict_semantics(combination):
+    """run.strict promotes every SorethumbWarning to an error (see
+    _pipeline._execute_group); AntiCorrelatedMemberWarning must be a real
+    SorethumbWarning so that mechanism catches it too.
+    """
+    scores = _three_dets(third=lambda base, _rng: 1.0 - base)
+    flags = {k: v > 0.9 for k, v in scores.items()}
+    ens = ScoreEnsemble(combination=combination, contamination=0.1)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", AntiCorrelatedMemberWarning)
+        with pytest.raises(AntiCorrelatedMemberWarning):
+            ens.combine(scores, flags)
 
 
 def test_guard_keeps_a_diverse_uncorrelated_member():

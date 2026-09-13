@@ -8,11 +8,22 @@ Bad-member guard
 ----------------
 Before weighting or combining, any detector whose score *ranking* is
 anti-correlated with the ensemble median (Spearman's rho < ``_ANTICORR_DROP``)
-is dropped from the combination — it is fighting the consensus rather than
-adding a diverse-but-consistent view. This runs for every weighting /
-combination strategy and needs at least three members. Dropped detectors are
-listed in the result's ``dropped_members`` and appear in ``weights`` with 0.0;
-their per-detector score columns are still recorded for inspection.
+is a candidate to drop from the combination — it is fighting the consensus
+rather than adding a diverse-but-consistent view. Needs at least three members.
+
+The guard only actually drops members for combination="composite", where
+removing an outlier from a weighted average does not change the decision
+rule. For combination="intersection"/"union" it does **not** drop anyone:
+these modes are a vote, and silently excluding a detector silently changes
+the vote count — a configured three-way intersection would quietly become a
+two-way one with no visible change to `scoring.detectors`. Every configured
+detector's vote is kept; an :class:`~sorethumb.errors.AntiCorrelatedMemberWarning`
+is emitted instead (promoted to an error under ``run.strict``), so the signal
+is surfaced without changing what the user asked for.
+
+Dropped detectors (composite mode only) are listed in the result's
+``dropped_members`` and appear in ``weights`` with 0.0; their per-detector
+score columns are still recorded for inspection.
 
 Weighting strategies
 --------------------
@@ -71,16 +82,20 @@ intersection / union modes:
 from __future__ import annotations
 
 import logging
+import warnings
 from typing import Any
 
 import numpy as np
+
+from sorethumb.errors import AntiCorrelatedMemberWarning
 
 logger = logging.getLogger(__name__)
 
 # Bad-member guard: a detector whose score ranking has Spearman's rho below this
 # against the per-row *median* rank of the other detectors is fighting the
-# consensus (not merely diverse) and is dropped from the combination. Applies
-# for every weighting / combination. Needs >= 3 members.
+# consensus (not merely diverse). Dropped from combination="composite"; kept
+# (with a warning) for "intersection"/"union", where every configured vote is
+# required by definition. Needs >= 3 members.
 _ANTICORR_DROP = -0.15
 
 
@@ -171,7 +186,8 @@ class ScoreEnsemble:
                 applied; not an estimate of true anomaly prevalence
             "weights": dict[str, float] (dropped members appear with weight 0.0)
             "is_auto_contamination": bool
-            "dropped_members": list[str] (detectors excluded by the bad-member guard)
+            "dropped_members": list[str] (detectors excluded by the bad-member guard;
+                always empty for combination="intersection"/"union" -- see module docstring)
             "per_detector_rates": dict[str, float] — realised fraction each
                 detector's own natural boundary flagged, all input detectors
 
@@ -192,11 +208,17 @@ class ScoreEnsemble:
         score_matrix = np.column_stack([scores[d] for d in names])  # shape (n, k)
 
         # ── Bad-member guard ──────────────────────────────────────────────
-        # Drop any detector whose ranking is anti-correlated with the ensemble
-        # median before it can vote / be weighted. Runs regardless of the
-        # weighting or combination strategy.
-        keep_idx, dropped = self._screen_members(names, score_matrix)
-        if dropped:
+        # Detect any detector whose ranking is anti-correlated with the
+        # ensemble median. Only actually dropped for combination="composite",
+        # where excluding an outlier from a weighted average does not change
+        # the decision rule. For "intersection"/"union" every configured vote
+        # is required by definition -- dropping one silently changes the vote
+        # count, so nothing is excluded there; a warning is raised instead
+        # (see module docstring / AntiCorrelatedMemberWarning).
+        keep_idx, candidate_drop = self._screen_members(names, score_matrix)
+        dropped: list[str] = []
+        if candidate_drop and self._combination == "composite":
+            dropped = candidate_drop
             logger.warning(
                 "ensemble guard: %s rank against the consensus median (Spearman rho < %.2f); "
                 "excluded from the combination.",
@@ -206,6 +228,15 @@ class ScoreEnsemble:
             names = [names[i] for i in keep_idx]
             score_matrix = score_matrix[:, keep_idx]
             natural_flags = {d: natural_flags[d] for d in names}
+        elif candidate_drop:
+            warnings.warn(
+                f"ensemble guard: {candidate_drop} rank against the consensus median "
+                f"(Spearman rho < {_ANTICORR_DROP:.2f}), but combination={self._combination!r} "
+                "requires every configured detector's vote -- none excluded. Review "
+                "scoring.detectors, or run under run.strict to fail loudly on this instead.",
+                AntiCorrelatedMemberWarning,
+                stacklevel=2,
+            )
 
         flag_matrix = np.column_stack([natural_flags[d].astype(float) for d in names])  # (n, k)
 
