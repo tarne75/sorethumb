@@ -21,15 +21,25 @@ from pathlib import Path
 
 import polars as pl
 
+# Reserved column name the pipeline stamps onto the raw source frame (before any
+# period filter, group filter, or time sort) to give every row a stable global
+# identity that survives filtering and joins back to the source. It is an
+# internal implementation detail, never a real source column, so every
+# schema-identity function below ignores it -- a plan fitted or applied with or
+# without the stamp must fingerprint identically.
+INTERNAL_ROW_ID_COLUMN = "__sorethumb_row_id__"
+
 
 def schema_fingerprint(df: pl.DataFrame | pl.LazyFrame) -> str:
     """Stable hash of the column names and dtypes in declaration order.
 
     Two frames with identical schemas (regardless of data) produce the same
-    fingerprint. Used to detect schema drift between runs.
+    fingerprint. Used to detect schema drift between runs. Ignores
+    ``INTERNAL_ROW_ID_COLUMN`` so the pipeline's internal row-identity stamp
+    never counts as a schema change.
     """
     schema = df.collect_schema() if isinstance(df, pl.LazyFrame) else df.schema
-    parts = "|".join(f"{name}:{dtype}" for name, dtype in schema.items())
+    parts = "|".join(f"{name}:{dtype}" for name, dtype in schema.items() if name != INTERNAL_ROW_ID_COLUMN)
     return hashlib.sha256(parts.encode()).hexdigest()[:32]
 
 

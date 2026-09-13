@@ -26,6 +26,7 @@ from enum import Enum
 import polars as pl
 
 from sorethumb.config import ColumnsConfig, FeaturesConfig, ProfilingConfig
+from sorethumb.io.fingerprint import INTERNAL_ROW_ID_COLUMN
 from sorethumb.profiling.profile import ColumnProfile
 
 _UUID_RE = re.compile(
@@ -97,7 +98,12 @@ def classify_column(
     """
     col = profile.name
 
-    # 0. Configured id/reference columns are identifiers — excluded from the feature matrix
+    # 0. The pipeline's internal stable-row-identity stamp is never a feature,
+    # regardless of user configuration.
+    if col == INTERNAL_ROW_ID_COLUMN:
+        return ColumnClass.ignored, "internal row-identity column; excluded from features"
+
+    # 0b. Configured id/reference columns are identifiers — excluded from the feature matrix
     _id_ref = {c for c in (columns_config.id_column, columns_config.reference_column) if c}
     if col in _id_ref:
         return ColumnClass.ignored, "configured id_column or reference_column; excluded from features"

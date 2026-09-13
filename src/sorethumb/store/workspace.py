@@ -22,13 +22,34 @@ logger = logging.getLogger(__name__)
 _MARKER_DB = "sorethumb.db"
 
 
-def make_group_key(group_values: dict[str, str]) -> str:
+def group_value_json_default(value: object) -> str:
+    """``json.dumps`` fallback for group values that are not natively JSON-encodable.
+
+    Tags the encoded string with the value's type name (e.g. a ``date`` becomes
+    ``"date:2024-01-15"``) so it can never collide with a plain string that
+    happens to share the same textual form.
+    """
+    if hasattr(value, "isoformat"):
+        return f"{type(value).__name__}:{value.isoformat()}"  # type: ignore[attr-defined]
+    return f"{type(value).__name__}:{value!s}"
+
+
+def make_group_key(group_values: dict[str, object]) -> str:
     """Return a stable 32-character (128-bit) hex digest of the sorted group-values JSON.
 
     The digest is the only value that appears in key positions (filesystem paths,
     SQL primary keys). Raw group values live in the JSON column only.
+
+    *group_values* must carry each column's *typed* value (``None``, ``int``,
+    ``float``, ``str``, ``date``, ...), not a pre-stringified one: ``json.dumps``
+    already renders ``None``, ``""``, and the literal string ``"None"`` as
+    distinct tokens (``null``, ``""``, ``"None"``), which is what keeps those
+    three group identities apart. Stringifying the values before calling this
+    collapses that distinction and produces colliding keys.
     """
-    json_str = json.dumps(group_values, sort_keys=True, ensure_ascii=False)
+    json_str = json.dumps(
+        group_values, sort_keys=True, ensure_ascii=False, default=group_value_json_default
+    )
     return hashlib.sha256(json_str.encode()).hexdigest()[:32]
 
 

@@ -85,6 +85,35 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Null group values were silently dropped instead of processed, and a
+  fallback `row_id` (used whenever no `id_column` is configured) collided
+  across groups. `_slice_group_frame` filtered a group by casting the column
+  to `Utf8` and comparing it to a pre-stringified value; casting a null to
+  `Utf8` stays null, so `== "None"` never matched a genuine null group and
+  every one of its rows was silently excluded from every group's slice. The
+  same premature `str(...)` also meant a null value, the empty string, and
+  the literal string `"None"` all collapsed to the same group key. Both
+  `run_detection` and `score_forward` now keep each group column's *typed*
+  value all the way through (`group_values: dict[str, Any]`); `_slice_group_frame`
+  matches `None` with `.is_null()` and compares every other value against its
+  own dtype instead of a string cast, and `make_group_key`
+  (`store/workspace.py`) hashes the typed JSON encoding directly — `null`,
+  `""`, and `"None"` are distinct tokens there, so the three group identities
+  can no longer collide. Separately, the fallback `row_id` (`FeatureSpace.row_ids`,
+  used when no `id_column` is configured) was `np.arange(len(df))` recomputed
+  fresh inside *each* group's own feature space — every group's flagged rows
+  started back at `row_id=0`, so two different groups' anomalies could carry
+  the same `row_id` and joining results back to the source frame was
+  ambiguous. The raw source frame is now stamped with one stable global row
+  index (`_stamp_source_row_id`, an internal reserved column excluded from
+  profiling/features via `INTERNAL_ROW_ID_COLUMN`) before any period filter,
+  group filter, or time sort in both pipelines; `fit_features` /
+  `apply_feature_plan` read it back as `row_ids` instead of a fresh
+  positional range, so it survives every later slice and reorder and stays
+  unique and joinable across groups. `schema_fingerprint` ignores this
+  reserved column so it never counts as schema drift for dataset identity or
+  score-forward's plan-apply check. An explicit `id_column` remains
+  authoritative whenever configured.
 - `combination="intersection"`/`"union"` did not actually require every
   configured detector's vote. The bad-member guard in `ScoreEnsemble.combine`
   (which drops a detector whose score ranking is anti-correlated with the

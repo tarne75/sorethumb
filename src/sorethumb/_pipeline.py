@@ -43,6 +43,7 @@ from sorethumb.explain.project import aggregate_to_original, top_n_reasons
 from sorethumb.features.build import apply_feature_plan, fit_features
 from sorethumb.features.space import FeatureSpace
 from sorethumb.io.fingerprint import (
+    INTERNAL_ROW_ID_COLUMN,
     content_fingerprint,
     logical_dataset_id,
     schema_fingerprint,
@@ -57,7 +58,7 @@ from sorethumb.scoring.calibrate import Calibrator
 from sorethumb.scoring.combine import ScoreEnsemble
 from sorethumb.store.models import load_model, load_plan, save_model, save_plan, score_with_existing
 from sorethumb.store.results import read_results, results_path, write_results
-from sorethumb.store.workspace import Workspace, make_group_key
+from sorethumb.store.workspace import Workspace, group_value_json_default, make_group_key
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,32 @@ def _strict_warnings(strict: bool) -> Iterator[None]:
     with warnings.catch_warnings():
         warnings.filterwarnings("error", category=SorethumbWarning)
         yield
+
+
+def _stamp_source_row_id(df: pl.DataFrame) -> pl.DataFrame:
+    """Attach a stable global row index before any period filter, group filter, or time sort.
+
+    ``pl.DataFrame.filter``/``sort``/``head`` all carry column values along with
+    their rows, so this 0-based index -- assigned once, in the exact row order
+    the source was loaded in -- survives every later slice and reorder and stays
+    unique across groups. ``_finalize_group`` uses it as the fallback ``row_id``
+    when no ``id_column`` is configured, so anomalies stay joinable back to the
+    original source rows even without one.
+
+    Raises if the source data already has a column with this reserved name --
+    silently colliding with real user data would corrupt row identity instead of
+    fixing it.
+    """
+    if INTERNAL_ROW_ID_COLUMN in df.columns:
+        msg = (
+            f"Source data already has a column named {INTERNAL_ROW_ID_COLUMN!r}, "
+            "which sorethumb reserves internally for stable row identity. "
+            "Rename that column in the source data."
+        )
+        raise SchemaError(msg)
+    return df.with_row_index(INTERNAL_ROW_ID_COLUMN).with_columns(
+        pl.col(INTERNAL_ROW_ID_COLUMN).cast(pl.Int64)
+    )
 
 
 def _apply_row_cap(df: pl.DataFrame, max_rows: int | None) -> pl.DataFrame:
@@ -432,6 +459,10 @@ def run_detection(
             snapshot_fp=snapshot_fp,
         )
 
+        # Stable global row identity -- assigned before any filter/sort below --
+        # is what lets fallback row_id stay unique and joinable across groups.
+        df_raw = _stamp_source_row_id(df_raw)
+
         # ── 2. Period resolution + window filter ────────────────────────
         df_raw, period_label, period_window = _resolve_and_filter_period(
             df_raw, config, period_label_override
@@ -507,7 +538,7 @@ def run_detection(
 
         for ginfo in groups_info:
             n_records: int = ginfo.pop("__n__", 0)
-            group_values = {col: str(ginfo[col]) for col in group_by} if group_by else {}
+            group_values: dict[str, Any] = {col: ginfo[col] for col in group_by} if group_by else {}
             group_key = make_group_key(group_values)
             group_label = _group_label(ginfo, group_by) if group_by else "__all__"
 
@@ -685,6 +716,10 @@ def score_forward(
             snapshot_fp=snapshot_fp,
         )
 
+        # Stable global row identity -- see run_detection for why this must
+        # happen before any filter/sort below.
+        df_raw = _stamp_source_row_id(df_raw)
+
         # ── Period resolution + window filter (same rules as run_detection) ──
         # score-forward does not write history: its numbers come from a reused
         # model, not a period compute.
@@ -714,7 +749,7 @@ def score_forward(
         group_results: list[GroupSummary] = []
         for ginfo in groups_info:
             n_records: int = ginfo.pop("__n__", 0)
-            group_values = {col: str(ginfo[col]) for col in group_by} if group_by else {}
+            group_values: dict[str, Any] = {col: ginfo[col] for col in group_by} if group_by else {}
             group_key = make_group_key(group_values)
             group_label = _group_label(ginfo, group_by) if group_by else "__all__"
 
@@ -803,10 +838,18 @@ def _make_run_id(
 def _slice_group_frame(
     df_raw: pl.DataFrame,
     group_by: list[str],
-    group_values: dict[str, str],
+    group_values: dict[str, Any],
     plan: FeaturePlan,
 ) -> pl.DataFrame:
     """Filter *df_raw* to one group and time-sort it.
+
+    Compares each group column against its *typed* value (not a stringified
+    cast) so floats, dates, and other non-string dtypes match exactly instead
+    of depending on a round-trippable string format. A ``None`` value is
+    matched with ``is_null()`` -- casting a null to Utf8 stays null, not the
+    string ``"None"``, so an equality compare against ``"None"`` would drop
+    every row of a genuine null group; this also keeps a null group distinct
+    from a group whose literal value is the string ``"None"``.
 
     Sorting on the plan's time column keeps raw-value lookups and the feature
     matrix in the same row order.
@@ -814,7 +857,10 @@ def _slice_group_frame(
     if group_by:
         expr = pl.lit(True)
         for col_name, col_val in group_values.items():
-            expr = expr & (pl.col(col_name).cast(pl.Utf8) == col_val)
+            if col_val is None:
+                expr = expr & pl.col(col_name).is_null()
+            else:
+                expr = expr & (pl.col(col_name) == col_val)
         df_group = df_raw.filter(expr)
     else:
         df_group = df_raw
@@ -887,7 +933,7 @@ def _execute_group(
     run_id: str,
     group_key: str,
     group_label: str,
-    group_values: dict[str, str],
+    group_values: dict[str, Any],
     n_records: int,
     *,
     force: bool,
@@ -907,7 +953,7 @@ def _execute_group(
     ``slow_stage_seconds`` (``run.slow_stage_seconds``) emits a
     :class:`SlowStageWarning` when the group runs longer than the threshold.
     """
-    gv_json = json.dumps(group_values)
+    gv_json = json.dumps(group_values, default=group_value_json_default)
 
     if not force and ws.store.group_status(run_id, group_key) == "complete":
         return _completed_group_summary(ws, run_id, group_key, group_label, n_records)
@@ -997,7 +1043,7 @@ def _run_group(
     full_space: FeatureSpace,  # noqa: ARG001 — reserved for future row-selection optimisation
     df_raw: pl.DataFrame,
     group_by: list[str],
-    group_values: dict[str, str],
+    group_values: dict[str, Any],
     group_key: str,
     group_label: str,
     n_records: int,
@@ -1138,7 +1184,7 @@ def _score_forward_group(
     plan: FeaturePlan,
     df_raw: pl.DataFrame,
     group_by: list[str],
-    group_values: dict[str, str],
+    group_values: dict[str, Any],
     group_key: str,
     group_label: str,
     n_records: int,
@@ -1289,7 +1335,9 @@ def _finalize_group(
 
     # ── Build result DataFrame ────────────────────────────────────────────
     # Use actual id_column values when configured (joinable back to source);
-    # fall back to positional index from the FeatureSpace otherwise.
+    # fall back to the FeatureSpace's stable global row-identity stamp
+    # otherwise (see _stamp_source_row_id) -- unique and joinable across
+    # groups even without a configured id_column.
     id_col = config.columns.id_column
     row_ids = df_group[id_col].to_numpy() if id_col and id_col in df_group.columns else group_space.row_ids
 

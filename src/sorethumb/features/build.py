@@ -31,7 +31,7 @@ from sorethumb.features.encode import build_encoding_exprs, compute_demotions
 from sorethumb.features.reduce import apply_pca, fit_pca
 from sorethumb.features.scale import apply_scaler, fit_scaler
 from sorethumb.features.space import FeatureSpace
-from sorethumb.io.fingerprint import schema_fingerprint
+from sorethumb.io.fingerprint import INTERNAL_ROW_ID_COLUMN, schema_fingerprint
 from sorethumb.profiling.plan import FeaturePlan, recompute_output_features
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,20 @@ _DTYPE_MAP: dict[str, type[np.floating]] = {
     "float32": np.float32,
     "float64": np.float64,
 }
+
+
+def _extract_row_ids(df: pl.DataFrame) -> np.ndarray:
+    """Row identity for *df*'s current row order.
+
+    Prefers the pipeline's stable global stamp (``INTERNAL_ROW_ID_COLUMN``,
+    set once on the raw source frame before any period filter, group filter,
+    or time sort) so values stay unique and joinable across groups. Falls
+    back to a plain positional range for direct callers of ``fit_features``/
+    ``apply_feature_plan`` that never stamped one.
+    """
+    if INTERNAL_ROW_ID_COLUMN in df.columns:
+        return df[INTERNAL_ROW_ID_COLUMN].to_numpy().astype(np.int64)
+    return np.arange(len(df), dtype=np.int64)
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +77,7 @@ def fit_features(df: pl.DataFrame, plan: FeaturePlan, config: Config) -> Feature
     if plan.chosen_time_column and plan.chosen_time_column in df.columns:
         df = df.sort(plan.chosen_time_column)
 
-    row_ids = np.arange(len(df), dtype=np.int64)
+    row_ids = _extract_row_ids(df)
 
     # Width demotion — store result in plan so apply_feature_plan uses the same treatment
     demoted = compute_demotions(plan, config.features.max_feature_width)
@@ -178,7 +192,7 @@ def apply_feature_plan(df: pl.DataFrame, plan: FeaturePlan) -> FeatureSpace:
     if plan.chosen_time_column and plan.chosen_time_column in df.columns:
         df = df.sort(plan.chosen_time_column)
 
-    row_ids = np.arange(len(df), dtype=np.int64)
+    row_ids = _extract_row_ids(df)
 
     enc_df = _encode(df, plan, plan.demoted_columns, None)
     if plan.correlation_drop_list:
