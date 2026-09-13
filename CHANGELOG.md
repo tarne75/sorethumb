@@ -71,6 +71,29 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `evaluate_scores` returned `0.0` for ROC-AUC/AP when a population has only
+  one class present (both are mathematically undefined there). `0.0` reads as
+  a real, terrible score — indistinguishable from a model that actively
+  anti-ranks — and silently drags down any mean/std computed over it (as the
+  benchmark harness's new multi-seed aggregation does, see below). Both now
+  return `float("nan")`, which correctly propagates through aggregation
+  instead of masquerading as data.
+- Benchmark harness leaked the labels into their own evaluation. `run_benchmark`
+  set the precision@k / recall@k / F1 operating point to
+  `contamination = y.mean()` (the true label rate), which makes
+  `k = round(n_total * contamination)` equal `n_positives` exactly — precision@k
+  and recall@k then share the same numerator *and* denominator, so all three
+  metrics reduce to one number (`n_true_at_k / n_positives`), which is exactly
+  why every README benchmark row showed identical values in those three
+  columns. Fixed: the harness now evaluates every dataset at one fixed 5%
+  review budget (`_REVIEW_BUDGET` in `evaluate/benchmark.py`), chosen
+  independently of any dataset's true rate. `evaluate_scores` also warns at
+  runtime if it's ever called with a `contamination` that makes `k ==
+  n_positives`, so this can't silently regress. Each (dataset, detector) pair
+  is now run over `n_seeds` seeds (`BenchmarkConfig.n_seeds`, `sorethumb
+  benchmark --seeds`, default 5) and reported as mean ± standard deviation,
+  not a single draw; `BenchmarkRow` gained a `*_std` field per metric plus
+  `n_seeds`.
 - ECOD and HBOS explanations went through finite-difference gradients
   (`explain/gradient.py`), whose default 1%-of-std perturbation routinely
   produced an exact all-zero (or noisy) attribution vector for precisely the

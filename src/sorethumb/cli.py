@@ -1576,6 +1576,16 @@ def workspace_reset(
 @app.command()
 def benchmark(
     log_level: _LOG_LEVEL_OPT = "INFO",
+    seeds: Annotated[
+        int,
+        typer.Option(
+            "--seeds",
+            help=(
+                "Repeat each (dataset, detector) pair over this many seeds and "
+                "report mean ± std, instead of a single lucky/unlucky draw."
+            ),
+        ),
+    ] = 5,
 ) -> None:
     """Run the evaluation harness (requires the [benchmark] extra)."""
     _setup_logging(log_level)
@@ -1595,8 +1605,8 @@ def benchmark(
         write_outputs,
     )
 
-    cfg = BenchmarkConfig()
-    console.print("[bold]Running benchmark harness…[/bold]")
+    cfg = BenchmarkConfig(n_seeds=seeds)
+    console.print(f"[bold]Running benchmark harness ({seeds} seed(s) per pair)…[/bold]")
     rows = run_benchmark(cfg)
 
     readme_path = Path(__file__).parent.parent.parent / "README.md"

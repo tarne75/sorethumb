@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 from pathlib import Path
 
 import numpy as np
@@ -178,20 +179,23 @@ def test_perfect_detector_recall_at_k_is_1():
 # ---------------------------------------------------------------------------
 
 
-def test_all_normal_returns_zero_metrics():
+def test_all_normal_returns_nan_metrics():
+    # ROC-AUC/AP are mathematically undefined with a single class present.
+    # NaN, not 0.0 -- 0.0 reads as "worse than random" (a real, terrible
+    # score) and would silently drag down any mean/std computed over it.
     scores = np.random.default_rng(0).random(100)
     labels = np.zeros(100, dtype=int)
     m = evaluate_scores(scores, labels)
-    assert m.roc_auc == 0.0
-    assert m.average_precision == 0.0
+    assert math.isnan(m.roc_auc)
+    assert math.isnan(m.average_precision)
 
 
-def test_all_anomaly_returns_zero_metrics():
+def test_all_anomaly_returns_nan_metrics():
     scores = np.random.default_rng(0).random(100)
     labels = np.ones(100, dtype=int)
     m = evaluate_scores(scores, labels)
-    assert m.roc_auc == 0.0
-    assert m.average_precision == 0.0
+    assert math.isnan(m.roc_auc)
+    assert math.isnan(m.average_precision)
 
 
 def test_all_same_returns_n_positives_and_n_total():

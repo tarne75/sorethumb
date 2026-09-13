@@ -55,8 +55,13 @@ def evaluate_scores(
     labels:
         1-D array-like of ground-truth labels (1 = anomaly, 0 = normal).
     contamination:
-        Fraction of rows to flag as anomalous for threshold-dependent metrics.
-        Also used as the assumed positive rate for F1.
+        Fraction of rows to flag as anomalous for threshold-dependent metrics
+        (a review-budget operating point). Choose this independently of the
+        labels' true positive rate. Setting it to ``y.mean()`` makes
+        ``k = round(n_total * contamination)`` equal ``n_positives`` exactly,
+        which forces ``precision_at_k == recall_at_k == f1_at_contamination``
+        (all three reduce to ``n_true_at_k / n_positives``) — three names for
+        one number, not three signals.
 
     Returns
     -------
@@ -78,13 +83,13 @@ def evaluate_scores(
     if n_positives in {0, n_total}:
         logger.warning(
             "evaluate_scores: all labels are identical (%d positives / %d total); "
-            "ROC-AUC and AP are undefined — returning 0.0.",
+            "ROC-AUC and AP are undefined — returning NaN.",
             n_positives,
             n_total,
         )
         return Metrics(
-            roc_auc=0.0,
-            average_precision=0.0,
+            roc_auc=float("nan"),
+            average_precision=float("nan"),
             precision_at_k=0.0,
             recall_at_k=0.0,
             f1_at_contamination=0.0,
@@ -98,6 +103,17 @@ def evaluate_scores(
     ap = float(average_precision_score(labels_arr, scores_arr))
 
     k = max(1, round(n_total * contamination))
+    if k == n_positives:
+        logger.warning(
+            "evaluate_scores: k=%d equals n_positives=%d -- precision_at_k, "
+            "recall_at_k, and f1_at_contamination will be the same number by "
+            "construction. contamination=%.4f was likely derived from this "
+            "same label set; pick it independently (e.g. a fixed review "
+            "budget) to get three distinct signals.",
+            k,
+            n_positives,
+            contamination,
+        )
     top_k_idx = np.argsort(scores_arr)[::-1][:k]
     predicted_at_k = np.zeros(n_total, dtype=int)
     predicted_at_k[top_k_idx] = 1

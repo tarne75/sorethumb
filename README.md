@@ -270,6 +270,14 @@ Detector × dataset × metric, measured on a MacBook Pro M3, Python 3.12.
 Average precision (AP) is the headline metric — it accounts for class imbalance
 in a way ROC-AUC does not.
 
+`precision_at_k` / `recall_at_k` / `f1_at_contamination` are evaluated at a
+fixed 5% review budget, the same for every dataset regardless of its true
+anomaly rate. Deriving that budget from the labels being scored instead
+(`k = round(n_total * y.mean())`) makes `k` equal the number of true
+positives, which collapses all three into one number — precision@k and
+recall@k end up with the same numerator *and* denominator. Each cell is the
+mean ± one standard deviation over 5 seeds, not a single run.
+
 <!-- benchmark-results-start -->
 <!-- AUTO-GENERATED — do not edit manually; run `sorethumb benchmark` to regenerate. -->
 
