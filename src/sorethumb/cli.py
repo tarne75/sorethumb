@@ -1605,20 +1605,22 @@ def benchmark(
 
     from sorethumb.evaluate.benchmark import (  # noqa: PLC0415
         BenchmarkConfig,
+        generate_metadata,
         inject_into_readme,
         run_benchmark,
         write_outputs,
     )
 
     cfg = BenchmarkConfig(n_seeds=seeds)
+    metadata = generate_metadata()
     console.print(f"[bold]Running benchmark harness ({seeds} seed(s) per pair)…[/bold]")
     rows = run_benchmark(cfg)
 
     readme_path = Path(__file__).parent.parent.parent / "README.md"
-    if inject_into_readme(rows, readme_path):
+    if inject_into_readme(rows, readme_path, metadata):
         console.print(f"[green]Benchmark table injected into {readme_path}[/green]")
 
-    md_path, csv_path = write_outputs(rows, Path("benchmark_results"))
+    md_path, csv_path = write_outputs(rows, Path("benchmark_results"), metadata)
     console.print(f"Results written to {md_path} and {csv_path}")
     console.print(
         f"\n[bold]Done.[/bold] {len(rows)} result(s) across {len({r.dataset for r in rows})} dataset(s)."

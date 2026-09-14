@@ -26,6 +26,9 @@ Design principles
 - Each (dataset, detector) pair is run over several seeds and reported as
   mean ± standard deviation, so a single lucky/unlucky draw doesn't read as
   a stable result.
+- Every run records ``BenchmarkMetadata`` (timestamp, platform, Python,
+  sorethumb, numpy, scipy, scikit-learn versions) alongside the table, so a
+  published number can be tied to the environment that produced it.
 """
 
 from __future__ import annotations
@@ -33,15 +36,20 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import psutil
 
 logger = logging.getLogger(__name__)
+
+
+def _fmt_or_na(value: float) -> str:
+    """Format a float as fixed-point, or "n/a" when it's NaN (undefined)."""
+    return "n/a" if math.isnan(value) else f"{value:.4f}"
 
 # ---------------------------------------------------------------------------
 # Dataset registry
@@ -196,6 +204,59 @@ DATASETS: list[DatasetEntry] = [
 
 
 # ---------------------------------------------------------------------------
+# Run metadata
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class BenchmarkMetadata:
+    """Environment the benchmark ran in, recorded alongside its results.
+
+    A number like "AP=0.94" is unfalsifiable without knowing when it was
+    produced and against which library versions — those can silently change
+    a detector's behaviour (e.g. a scikit-learn IsolationForest release).
+    """
+
+    generated_at: str  # UTC ISO 8601, e.g. "2026-09-14T12:00:00+00:00"
+    platform: str
+    python_version: str
+    sorethumb_version: str
+    numpy_version: str
+    scipy_version: str
+    scikit_learn_version: str
+
+    def as_markdown(self) -> str:
+        """Render as a one-line Markdown summary preceding the results table."""
+        return (
+            f"Generated {self.generated_at} on {self.platform} — "
+            f"Python {self.python_version}, sorethumb {self.sorethumb_version}, "
+            f"numpy {self.numpy_version}, scipy {self.scipy_version}, "
+            f"scikit-learn {self.scikit_learn_version}."
+        )
+
+
+def generate_metadata() -> BenchmarkMetadata:
+    """Capture the environment a benchmark run is about to execute in."""
+    import platform as _platform  # noqa: PLC0415
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    import scipy  # noqa: PLC0415
+    import sklearn  # noqa: PLC0415
+
+    from sorethumb import __version__ as sorethumb_version  # noqa: PLC0415
+
+    return BenchmarkMetadata(
+        generated_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        platform=_platform.platform(),
+        python_version=_platform.python_version(),
+        sorethumb_version=sorethumb_version,
+        numpy_version=np.__version__,
+        scipy_version=scipy.__version__,
+        scikit_learn_version=sklearn.__version__,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Benchmark result
 # ---------------------------------------------------------------------------
 
@@ -206,7 +267,10 @@ class BenchmarkRow:
 
     ``roc_auc`` through ``f1_at_contamination`` are means over ``n_seeds``
     repeated runs; the matching ``*_std`` field is the sample standard
-    deviation across those seeds (0.0 when ``n_seeds == 1``).
+    deviation across those seeds (0.0 when ``n_seeds == 1``). ``roc_auc``
+    and ``average_precision`` (and their ``*_std``) are NaN if every seed's
+    sample was single-class, where those metrics are mathematically
+    undefined (see ``evaluate_scores``).
     """
 
     dataset: str
@@ -227,7 +291,6 @@ class BenchmarkRow:
     f1_at_contamination_std: float
     fit_seconds: float
     score_seconds: float
-    peak_rss_mb: float
     error: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -236,7 +299,9 @@ class BenchmarkRow:
         Mean and standard deviation are kept as separate columns here so
         downstream tooling can parse them without splitting a "mean ± std"
         string; ``as_display_dict`` is the human-facing, merged version used
-        for the Markdown table.
+        for the Markdown table. ROC-AUC/AP are undefined (NaN) when a seed's
+        sample was single-class — rendered as "n/a", never "nan", so it
+        can't be mistaken for a numeric value in a spreadsheet.
         """
         return {
             "dataset": self.dataset,
@@ -245,10 +310,10 @@ class BenchmarkRow:
             "n_features": str(self.n_features),
             "contamination": f"{self.contamination:.4f}",
             "n_seeds": str(self.n_seeds),
-            "roc_auc": f"{self.roc_auc:.4f}",
-            "roc_auc_std": f"{self.roc_auc_std:.4f}",
-            "average_precision": f"{self.average_precision:.4f}",
-            "average_precision_std": f"{self.average_precision_std:.4f}",
+            "roc_auc": _fmt_or_na(self.roc_auc),
+            "roc_auc_std": _fmt_or_na(self.roc_auc_std),
+            "average_precision": _fmt_or_na(self.average_precision),
+            "average_precision_std": _fmt_or_na(self.average_precision_std),
             "precision_at_k": f"{self.precision_at_k:.4f}",
             "precision_at_k_std": f"{self.precision_at_k_std:.4f}",
             "recall_at_k": f"{self.recall_at_k:.4f}",
@@ -257,12 +322,13 @@ class BenchmarkRow:
             "f1_at_contamination_std": f"{self.f1_at_contamination_std:.4f}",
             "fit_seconds": f"{self.fit_seconds:.3f}",
             "score_seconds": f"{self.score_seconds:.3f}",
-            "peak_rss_mb": f"{self.peak_rss_mb:.1f}",
             "error": self.error or "",
         }
 
     def _fmt(self, mean: float, std: float) -> str:
         """Format a metric as "mean" alone, or "mean ± std" over >1 seed."""
+        if math.isnan(mean):
+            return "n/a"
         if self.n_seeds <= 1:
             return f"{mean:.4f}"
         return f"{mean:.4f} ± {std:.4f}"
@@ -323,13 +389,16 @@ def _run_pair_over_seeds(
     det_cls: type[Any],
     seeds: list[int],
     seed_data: dict[int, tuple[np.ndarray, np.ndarray]],
-    proc: psutil.Process,
-) -> tuple[dict[str, float], float, float, float, str | None]:
+) -> tuple[dict[str, float], float, float, str | None]:
     """Fit/score/evaluate one detector at every seed; return raw per-seed results.
 
-    Returns ``(metrics_kwargs, fit_secs_mean, score_secs_mean, peak_rss_mean, error)``.
+    Returns ``(metrics_kwargs, fit_secs_mean, score_secs_mean, error)``.
     ``metrics_kwargs`` has both the mean and ``*_std`` key for every entry in
     ``_METRIC_KEYS``. On error (or zero completed seeds) everything is 0.0.
+    ``roc_auc``/``average_precision`` are averaged with ``nanmean``/``nanstd``
+    so a single-class seed (mathematically undefined for those two metrics,
+    see ``evaluate_scores``) doesn't poison the mean over the other seeds;
+    if every seed was single-class the result is NaN, not silently 0.0.
     """
     from sorethumb.evaluate.metrics import evaluate_scores  # noqa: PLC0415
     from sorethumb.scoring.calibrate import Calibrator  # noqa: PLC0415
@@ -337,13 +406,11 @@ def _run_pair_over_seeds(
     seed_metrics: dict[str, list[float]] = {key: [] for key in _METRIC_KEYS}
     fit_secs_list: list[float] = []
     score_secs_list: list[float] = []
-    peak_rss_list: list[float] = []
     error: str | None = None
 
     for seed in seeds:
         X_seed, y_seed = seed_data[seed]
         det = det_cls()
-        rss_before = proc.memory_info().rss / 1024 / 1024
 
         try:
             t0 = time.perf_counter()
@@ -369,25 +436,26 @@ def _run_pair_over_seeds(
             seed_metrics[key].append(getattr(metrics, key))
         fit_secs_list.append(fit_secs)
         score_secs_list.append(score_secs)
-        rss_after = proc.memory_info().rss / 1024 / 1024
-        peak_rss_list.append(max(0.0, rss_after - rss_before))
 
     metrics_kwargs: dict[str, float] = {}
     if error is not None or not seed_metrics["roc_auc"]:
         for key in _METRIC_KEYS:
             metrics_kwargs[key] = 0.0
             metrics_kwargs[f"{key}_std"] = 0.0
-        return metrics_kwargs, 0.0, 0.0, 0.0, error
+        return metrics_kwargs, 0.0, 0.0, error
 
     for key in _METRIC_KEYS:
         arr = np.asarray(seed_metrics[key], dtype=float)
-        metrics_kwargs[key] = float(arr.mean())
-        metrics_kwargs[f"{key}_std"] = float(arr.std())
+        if np.all(np.isnan(arr)):
+            metrics_kwargs[key] = float("nan")
+            metrics_kwargs[f"{key}_std"] = float("nan")
+        else:
+            metrics_kwargs[key] = float(np.nanmean(arr))
+            metrics_kwargs[f"{key}_std"] = float(np.nanstd(arr))
     return (
         metrics_kwargs,
         float(np.mean(fit_secs_list)),
         float(np.mean(score_secs_list)),
-        float(np.mean(peak_rss_list)),
         None,
     )
 
@@ -419,7 +487,6 @@ def run_benchmark(cfg: BenchmarkConfig | None = None) -> list[BenchmarkRow]:
     seeds = [cfg.seed + i for i in range(max(1, cfg.n_seeds))]
 
     rows: list[BenchmarkRow] = []
-    proc = psutil.Process()
 
     for ds in selected_datasets:
         logger.info("Loading dataset: %s", ds.name)
@@ -445,8 +512,8 @@ def run_benchmark(cfg: BenchmarkConfig | None = None) -> list[BenchmarkRow]:
         for det_name, det_cls in selected_detectors:
             logger.info("  Detector: %s", det_name)
 
-            metrics_kwargs, fit_secs_mean, score_secs_mean, peak_rss_mean, error = _run_pair_over_seeds(
-                det_cls, seeds, seed_data, proc
+            metrics_kwargs, fit_secs_mean, score_secs_mean, error = _run_pair_over_seeds(
+                det_cls, seeds, seed_data
             )
             n_seeds_run = 0 if error is not None else len(seeds)
 
@@ -460,7 +527,6 @@ def run_benchmark(cfg: BenchmarkConfig | None = None) -> list[BenchmarkRow]:
                     n_seeds=n_seeds_run,
                     fit_seconds=fit_secs_mean,
                     score_seconds=score_secs_mean,
-                    peak_rss_mb=peak_rss_mean,
                     error=error,
                     **metrics_kwargs,
                 )
@@ -486,27 +552,31 @@ _TABLE_COLS = [
     "f1_at_contamination",
     "fit_seconds",
     "score_seconds",
-    "peak_rss_mb",
 ]
 
 
-def to_markdown(rows: list[BenchmarkRow]) -> str:
+def to_markdown(rows: list[BenchmarkRow], metadata: BenchmarkMetadata | None = None) -> str:
     """Render benchmark rows as a GitHub-flavoured Markdown table.
 
     The metric columns show "mean ± std" across the row's seeds (bare mean
-    when only one seed ran); see ``BenchmarkRow.as_display_dict``.
+    when only one seed ran); see ``BenchmarkRow.as_display_dict``. When
+    *metadata* is given, its summary line is prepended so the table carries
+    its own provenance (generation time, platform, library versions).
     """
     if not rows:
-        return "_No benchmark results._\n"
+        table = "_No benchmark results._\n"
+    else:
+        header = "| " + " | ".join(_TABLE_COLS) + " |"
+        sep = "| " + " | ".join("---" for _ in _TABLE_COLS) + " |"
+        body_lines = []
+        for row in rows:
+            d = row.as_display_dict()
+            body_lines.append("| " + " | ".join(d.get(c, "") for c in _TABLE_COLS) + " |")
+        table = "\n".join([header, sep, *body_lines]) + "\n"
 
-    header = "| " + " | ".join(_TABLE_COLS) + " |"
-    sep = "| " + " | ".join("---" for _ in _TABLE_COLS) + " |"
-    body_lines = []
-    for row in rows:
-        d = row.as_display_dict()
-        body_lines.append("| " + " | ".join(d.get(c, "") for c in _TABLE_COLS) + " |")
-
-    return "\n".join([header, sep, *body_lines]) + "\n"
+    if metadata is None:
+        return table
+    return f"{metadata.as_markdown()}\n\n{table}"
 
 
 def to_csv(rows: list[BenchmarkRow]) -> str:
@@ -520,13 +590,26 @@ def to_csv(rows: list[BenchmarkRow]) -> str:
     return buf.getvalue()
 
 
-def write_outputs(rows: list[BenchmarkRow], output_dir: Path) -> tuple[Path, Path]:
-    """Write Markdown and CSV files to *output_dir*. Return (md_path, csv_path)."""
+def write_outputs(
+    rows: list[BenchmarkRow],
+    output_dir: Path,
+    metadata: BenchmarkMetadata | None = None,
+) -> tuple[Path, Path]:
+    """Write Markdown and CSV files (and, if *metadata* is given, a JSON
+    sidecar recording the run's environment) to *output_dir*.
+
+    Returns ``(md_path, csv_path)``.
+    """
+    import json  # noqa: PLC0415
+
     output_dir.mkdir(parents=True, exist_ok=True)
     md_path = output_dir / "benchmark_results.md"
     csv_path = output_dir / "benchmark_results.csv"
-    md_path.write_text(to_markdown(rows), encoding="utf-8")
+    md_path.write_text(to_markdown(rows, metadata), encoding="utf-8")
     csv_path.write_text(to_csv(rows), encoding="utf-8")
+    if metadata is not None:
+        meta_path = output_dir / "benchmark_metadata.json"
+        meta_path.write_text(json.dumps(asdict(metadata), indent=2) + "\n", encoding="utf-8")
     logger.info("Benchmark results written to %s and %s", md_path, csv_path)
     return md_path, csv_path
 
@@ -539,7 +622,11 @@ _RESULTS_MARKER_START = "<!-- benchmark-results-start -->"
 _RESULTS_MARKER_END = "<!-- benchmark-results-end -->"
 
 
-def inject_into_readme(rows: list[BenchmarkRow], readme_path: Path) -> bool:
+def inject_into_readme(
+    rows: list[BenchmarkRow],
+    readme_path: Path,
+    metadata: BenchmarkMetadata | None = None,
+) -> bool:
     """Inject the Markdown table into README.md between marker comments.
 
     Returns True if the file was modified, False if it was unchanged.
@@ -561,7 +648,7 @@ def inject_into_readme(rows: list[BenchmarkRow], readme_path: Path) -> bool:
         return False
 
     auto_gen = "<!-- AUTO-GENERATED — do not edit manually; run `sorethumb benchmark` to regenerate. -->"
-    table_md = f"{_RESULTS_MARKER_START}\n{auto_gen}\n\n{to_markdown(rows)}{_RESULTS_MARKER_END}"
+    table_md = f"{_RESULTS_MARKER_START}\n{auto_gen}\n\n{to_markdown(rows, metadata)}{_RESULTS_MARKER_END}"
 
     before = original[: original.index(_RESULTS_MARKER_START)]
     after = original[original.index(_RESULTS_MARKER_END) + len(_RESULTS_MARKER_END) :]
