@@ -118,3 +118,72 @@ Deliberately deferred, with reasons:
 Verified after: full suite still **872 collected**, CI lane still **850 passed, 22 deselected**,
 plain `pytest` still **559 passed** — byte-for-byte the same test outcomes as the P1-1 baseline
 above, just built through shared factories. ruff/ruff format/mypy/doc-consistency all clean.
+
+## What P1-3 changed
+
+Deleted `tests/unit/test_tier{1,2,3,4}_coverage.py` (141 test functions total) and the four
+`*_reexecuted_under_coverage` tests plus assorted `__all__`/is-not-None filler in
+`test_public_api.py`. Before deleting, read every tier test and, for each one, checked whether
+an equivalent already existed somewhere real (a lot did — these files were bolted on later
+specifically to hit line-coverage numbers, and mostly re-tested things test_detectors.py /
+test_features.py / test_store.py / test_scoring.py / test_explain.py already covered from a
+different angle) before porting the genuinely-new ones:
+
+- `tests/unit/test_config.py` (new): `_default_detectors()`'s 3-detector ensemble, `ScoringConfig`
+  contamination validation, and the three `config_hash()` behavioural contracts (stable,
+  excludes cosmetic fields, changes with result-affecting fields). Every *pure default-echo* test
+  in tier1 (construct with defaults, assert field == the literal already declared in config.py)
+  was dropped, not ported: `docs/generate_config_docs.py` already derives docs/configuration.md
+  from those same Field defaults and Literal enum members, and its drift check
+  (`test_docs_checks.py`, `repo_check`) already catches a silently-changed default or
+  narrowed/widened Literal — a hand-written duplicate of the same literal defended nothing extra.
+- `tests/unit/test_detectors.py`: only 3 of tier3's tests were new (`test_registry_values_are_detector_classes`,
+  `test_detectors_all_list`, a non-callable-method protocol case) — its own `check_protocol`
+  and registry tests already existed and were more complete.
+- `tests/unit/test_features.py`: 13 new (FeatureSpace hash/dataclass/instantiation from tier1;
+  `_sanitize`, empty-df correlate/drop_correlated, unknown time-derivative, the demotion
+  break-path, and all three `build_encoding_exprs` treatment branches from tier4). Several tier4
+  "edge cases" turned out to be exact duplicates of existing tests under different names
+  (`test_array_derive_exprs_string_inner_no_numeric_stats`, `test_apply_pca_shape_mismatch_raises_plan_error`)
+  and were dropped.
+- `tests/unit/test_io.py`: 18 new — the entire TSF reader test matrix (attributes, missing
+  values, padding, comments, malformed rows) plus TSV/JSON/all-string-schema, none of which
+  test_io.py had any coverage of at all.
+- `tests/unit/test_store.py`: 4 new Workspace accessor/prune tests (`features_dir`, `logs_dir`,
+  `tmp_dir`, `db_path()`, `list_prunable()`, a prune-tolerates-an-already-deleted-file case) that
+  were genuinely untested; tier3's open/context-manager/dry-run-prune tests were dropped as exact
+  duplicates of existing tests (same scenario, sometimes the same function name).
+- `tests/unit/test_profiling.py`: 12 new (`_check_identifier`'s aggressive/hex/no-match branches,
+  `_is_ignored`'s pattern matching, the high_null/unsupported `treatment_for` mappings,
+  `FeaturePlan.__post_init__`'s guard, `reference_column` exclusion, non-chosen-temporal-dropped).
+  tier3's classify/JSON-round-trip tests were dropped as duplicates of existing, more thorough
+  versions built from real profiled data rather than a hand-built `ColumnProfile`.
+- `tests/unit/test_scoring.py`: nothing ported — every one of tier3's calibrator tests turned out
+  to be an exact or near-exact duplicate of an existing test (transform-before-fit,
+  empty-transform, constant-distribution, to_dict/from_dict round-trip).
+- `tests/unit/test_explain.py`: 4 new — `kernel_shap_attributions` had zero existing coverage;
+  `permutation_importance`'s row-cap and equal-importance (`rng_v == 0`) branches were untested.
+  tier4's `back_project_pca` mismatch case was dropped as a duplicate.
+- `test_public_api.py` also lost two real duplicates against `test_smoke.py`
+  (`test_error_hierarchy`/`test_warning_hierarchy` checked the exact same 9 error / 10 warning
+  classes as `test_all_sorethumb_errors_are_exceptions`/`test_all_sorethumb_warnings_are_user_warnings`,
+  just without the str()/instantiation checks) and `test_package_version` (identical assertion to
+  `test_smoke.py::test_version_attribute`) — kept the richer contract-file versions, removed the
+  smoke-file duplicates.
+
+**Coverage floor lowered 80 -> 70 in `ci.yml`.** Branch coverage on the CI lane dropped from
+84.30% to **72.89%** — expected, not a loss of real behavioural coverage: `errors.py`,
+`explain/__init__.py`, `scoring/__init__.py`, `store/__init__.py`, and the dataclass/Enum bodies
+in `features/space.py`, `profiling/classify.py`, `profiling/plan.py`, `store/db.py`,
+`store/workspace.py`, and `evaluate/metrics.py` all dropped because their class/exception bodies
+execute exactly once, at true import time during pytest collection, before coverage.py's tracer
+attaches — the *only* thing that ever marked those lines "covered" was the `importlib.reload()`
+calls this phase deleted. This is the exact trade the plan asks for in P1-3 and resolves properly
+in P1-7 ("replace the 80% line-coverage gate that incentivised reload tests with required
+behavioural lanes, informational overall branch coverage, diff coverage for changed lines"); 70%
+is a stopgap floor with headroom below the new honest baseline, not the final policy.
+
+Verified after: **781 collected** (872 - 141 tier tests - 8 public_api trims - 2 smoke trims + 60
+ported/new = 781, and every test now carries exactly one lane marker — the 172 previously-unmarked
+tier-coverage tests are simply gone). CI lane: **759 passed, 22 deselected**. Plain `pytest`:
+**464 passed**. ruff, ruff format, mypy, and the doc-consistency check all clean.

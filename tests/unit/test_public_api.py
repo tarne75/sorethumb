@@ -1,12 +1,9 @@
-"""Coverage tests for modules that are 0% because all their code executes at import
-time (class definitions, re-exports), which happens during pytest collection before
-coverage instruments them.  importlib.reload() forces re-execution during the test
-phase when coverage is fully active.
+"""Contract tests for sorethumb's public API surface: every top-level and
+sub-package __all__, the error/warning hierarchy, and logging configuration.
 """
 
 from __future__ import annotations
 
-import importlib
 import logging
 import warnings
 
@@ -15,12 +12,6 @@ import pytest
 pytestmark = pytest.mark.contract
 
 # ── sorethumb.errors ──────────────────────────────────────────────────────────
-
-
-def test_errors_reexecuted_under_coverage() -> None:
-    import sorethumb.errors as m
-
-    importlib.reload(m)
 
 
 def test_all_sorethumb_errors_are_exceptions() -> None:
@@ -132,60 +123,33 @@ def test_logging_configure_invalid_level_falls_back() -> None:
 # ── sorethumb.scoring.__init__ ────────────────────────────────────────────────
 
 
-def test_scoring_init_reexecuted_under_coverage() -> None:
-    import sorethumb.scoring as m
-
-    importlib.reload(m)
-
-
-def test_scoring_init_exports_calibrator_and_ensemble() -> None:
-    from sorethumb.scoring import Calibrator, ScoreEnsemble
-
-    assert Calibrator is not None
-    assert ScoreEnsemble is not None
-
-
-def test_scoring_calibrator_importable_via_init() -> None:
+def test_scoring_public_api_matches_all_list() -> None:
     import sorethumb.scoring as scoring
+    from sorethumb.scoring import Calibrator, ScoreEnsemble  # proves both names resolve
 
-    assert hasattr(scoring, "Calibrator")
-    assert hasattr(scoring, "ScoreEnsemble")
+    assert scoring.Calibrator is Calibrator
+    assert scoring.ScoreEnsemble is ScoreEnsemble
     assert set(scoring.__all__) == {"Calibrator", "ScoreEnsemble"}
 
 
 # ── sorethumb.store.__init__ ──────────────────────────────────────────────────
 
 
-def test_store_init_reexecuted_under_coverage() -> None:
-    import sorethumb.store as m
-
-    importlib.reload(m)
-
-
-def test_store_init_exports_store_workspace_make_group_key() -> None:
-    from sorethumb.store import Store, Workspace, make_group_key
-
-    assert Store is not None
-    assert Workspace is not None
-    assert callable(make_group_key)
-
-
-def test_store_init_all_list() -> None:
+def test_store_public_api_matches_all_list() -> None:
     import sorethumb.store as store
+    from sorethumb.store import Store, Workspace, make_group_key  # proves all three resolve
 
+    assert store.Store is Store
+    assert store.Workspace is Workspace
+    assert callable(make_group_key)
     assert set(store.__all__) == {"Store", "Workspace", "make_group_key"}
 
 
 # ── sorethumb.explain.__init__ ────────────────────────────────────────────────
 
 
-def test_explain_init_reexecuted_under_coverage() -> None:
-    import sorethumb.explain as m
-
-    importlib.reload(m)
-
-
-def test_explain_init_exports_all_public_functions() -> None:
+def test_explain_public_api_matches_all_list() -> None:
+    import sorethumb.explain as explain
     from sorethumb.explain import (
         aggregate_to_original,
         back_project_pca,
@@ -208,11 +172,6 @@ def test_explain_init_exports_all_public_functions() -> None:
         tree_shap_attributions,
     ):
         assert callable(fn)
-
-
-def test_explain_init_all_list() -> None:
-    import sorethumb.explain as explain
-
     assert set(explain.__all__) == {
         "aggregate_to_original",
         "back_project_pca",
@@ -226,12 +185,6 @@ def test_explain_init_all_list() -> None:
 
 
 # ── sorethumb.__init__ (package public API) ───────────────────────────────────
-
-
-def test_package_version() -> None:
-    import sorethumb
-
-    assert sorethumb.__version__ == "0.1.0"
 
 
 def test_package_all_exports_importable() -> None:

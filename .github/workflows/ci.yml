@@ -42,7 +42,7 @@ jobs:
             -m "not benchmark and not slow and not network" \
             --cov=sorethumb \
             --cov-report=xml \
-            --cov-fail-under=80
+            --cov-fail-under=70
       - uses: codecov/codecov-action@v4
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         with:

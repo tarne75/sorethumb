@@ -206,6 +206,92 @@ def test_identifier_detection_off_skips_uuid() -> None:
     assert col_class != ColumnClass.identifier_like
 
 
+def _make_profile(**overrides: object) -> ColumnProfile:
+    """Build a minimal ColumnProfile with specific fields, independent of
+    whatever a real profile_columns() run would compute -- used to test
+    _check_identifier's pattern-matching in isolation from cardinality math."""
+    defaults: dict[str, object] = {
+        "name": "col",
+        "dtype_str": "String",
+        "null_count": 0,
+        "non_null_count": 100,
+        "null_ratio": 0.0,
+        "n_unique": 50,
+        "cardinality_ratio": 0.5,
+        "is_empty": False,
+        "is_constant": False,
+        "min_val": None,
+        "max_val": None,
+        "mean_val": None,
+        "std_val": None,
+        "mean_length": 10.0,
+        "examples": ["a", "b"],
+    }
+    defaults.update(overrides)
+    return ColumnProfile(**defaults)  # type: ignore[arg-type]
+
+
+def test_check_identifier_aggressive_mode() -> None:
+    """Aggressive identifier detection uses cardinality_ratio only."""
+    from sorethumb.profiling.classify import _check_identifier
+
+    profile = _make_profile(cardinality_ratio=0.99, examples=["abc", "def"])
+    cfg = ProfilingConfig(identifier_detection="aggressive", identifier_cardinality_ratio=0.9)
+    col_class, reason = _check_identifier(profile, cfg)
+    assert col_class == ColumnClass.identifier_like
+    assert "aggressive" in reason
+
+
+def test_check_identifier_hex_pattern() -> None:
+    """Long hex strings at high cardinality -> identifier_like."""
+    from sorethumb.profiling.classify import _check_identifier
+
+    hex_examples = ["deadbeefdeadbeef"] * 50
+    profile = _make_profile(cardinality_ratio=0.99, examples=hex_examples)
+    cfg = ProfilingConfig(identifier_cardinality_ratio=0.9)
+    col_class, reason = _check_identifier(profile, cfg)
+    assert col_class == ColumnClass.identifier_like
+    assert "hex" in reason
+
+
+def test_check_identifier_no_pattern_returns_none() -> None:
+    """Normal strings at high cardinality but no UUID/hex -> (None, '')."""
+    from sorethumb.profiling.classify import _check_identifier
+
+    plain_examples = ["hello world"] * 50
+    profile = _make_profile(cardinality_ratio=0.99, examples=plain_examples)
+    cfg = ProfilingConfig(identifier_cardinality_ratio=0.9)
+    col_class, reason = _check_identifier(profile, cfg)
+    assert col_class is None
+    assert reason == ""
+
+
+# ---------------------------------------------------------------------------
+# Classification: ignore patterns (_is_ignored)
+# ---------------------------------------------------------------------------
+
+
+def test_is_ignored_type_prefix_pattern() -> None:
+    """'type:Int64 secret_*' pattern matches on dtype+name."""
+    from sorethumb.profiling.classify import _is_ignored
+
+    assert _is_ignored("secret_key", "Int64", ["type:Int64 secret_*"], set()) is True
+
+
+def test_is_ignored_type_prefix_no_match() -> None:
+    """A type: pattern with the wrong dtype does not ignore the column."""
+    from sorethumb.profiling.classify import _is_ignored
+
+    assert _is_ignored("secret_key", "String", ["type:Int64 secret_*"], set()) is False
+
+
+def test_is_ignored_protected_col_not_ignored() -> None:
+    """Protected columns are never ignored even if they match a pattern."""
+    from sorethumb.profiling.classify import _is_ignored
+
+    assert _is_ignored("col", "String", ["col"], {"col"}) is False
+
+
 # ---------------------------------------------------------------------------
 # Classification: free text
 # ---------------------------------------------------------------------------
@@ -274,6 +360,15 @@ def test_list_column_classified_array_derived() -> None:
     assert col_class == ColumnClass.array_derived
 
 
+def test_binary_dtype_classified_unsupported() -> None:
+    """Not String, not numeric, not temporal, not list -> unsupported."""
+    df = pl.DataFrame({"b": [f"v{i}".encode() for i in range(5)]})
+    p = profile_columns(df, _default_profiling())[0]
+    col_class, reason = _classify(p)
+    assert col_class == ColumnClass.unsupported
+    assert "unsupported" in reason
+
+
 # ---------------------------------------------------------------------------
 # Treatment mapping
 # ---------------------------------------------------------------------------
@@ -308,6 +403,18 @@ def test_treatment_for_high_card_categorical_is_frequency() -> None:
     features_cfg = FeaturesConfig(one_hot_max_cardinality=20)
     t = treatment_for(ColumnClass.categorical, p, features_cfg)
     assert t == Treatment.frequency
+
+
+def test_treatment_for_high_null_is_indicator_only() -> None:
+    df = pl.DataFrame({"x": [1.0, 2.0, None]})
+    p = profile_columns(df, _default_profiling())[0]
+    assert treatment_for(ColumnClass.high_null, p, _default_features()) == Treatment.indicator_only
+
+
+def test_treatment_for_unsupported_is_drop() -> None:
+    df = pl.DataFrame({"x": [1.0, 2.0, None]})
+    p = profile_columns(df, _default_profiling())[0]
+    assert treatment_for(ColumnClass.unsupported, p, _default_features()) == Treatment.drop
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +517,68 @@ def test_ignored_column_produces_no_output(tmp_path: object) -> None:
     cfg = _build_config(tmp_path, columns=ColumnsConfig(ignore=["internal_*"]))
     plan = build_feature_plan(df, cfg)
     assert not any(f.startswith("internal_col") for f in plan.output_features)
+
+
+# ---------------------------------------------------------------------------
+# FeaturePlan: construction guards and build_feature_plan column handling
+# ---------------------------------------------------------------------------
+
+
+def test_feature_plan_post_init_raises_on_incomplete_derived_to_original() -> None:
+    """FeaturePlan raises PlanError when output_features has an entry missing
+    from derived_to_original -- the invariant test_derived_to_original_complete
+    proves holds for a real plan; this proves the guard actually fires."""
+    with pytest.raises(PlanError, match="derived_to_original"):
+        FeaturePlan(
+            schema_fingerprint="abc",
+            n_rows=10,
+            decisions=[],
+            output_features=["feature_missing"],
+            derived_to_original={},  # empty — feature_missing has no entry
+            one_hot_categories={},
+            frequency_maps={},
+            imputation_medians={},
+            chosen_time_column=None,
+            time_derivatives=[],
+        )
+
+
+def test_build_feature_plan_with_reference_column(tmp_path: object) -> None:
+    """_build_protected includes reference_column when set -- it's excluded
+    from the feature matrix, not just silently encoded like any other column."""
+    df = pl.DataFrame(
+        {
+            "value": [1.0, 2.0, 3.0, 4.0, 5.0] * 10,
+            "ref_col": [0.1, 0.2, 0.3, 0.4, 0.5] * 10,
+        }
+    )
+    cfg = _build_config(tmp_path, columns=ColumnsConfig(reference_column="ref_col"))
+    plan = build_feature_plan(df, cfg)
+    ref_decision = next((d for d in plan.decisions if d.column == "ref_col"), None)
+    assert ref_decision is not None
+    assert ref_decision.col_class == ColumnClass.ignored
+    assert all(not f.startswith("ref_col") for f in plan.output_features)
+
+
+def test_build_feature_plan_non_chosen_temporal_dropped(tmp_path: object) -> None:
+    """When two temporal columns exist and neither is config.time_column, the
+    lower-cardinality one is dropped rather than both being derived."""
+    from datetime import date
+
+    dates_a = [date(2020, 1, 1) + timedelta(days=i) for i in range(50)]
+    dates_b = [date(2021, 1, 1)] * 50  # constant date, 1 unique
+
+    df = pl.DataFrame(
+        {
+            "date_a": dates_a,  # 50 unique values — will be chosen
+            "date_b": dates_b,  # 1 unique value — will be dropped
+            "value": list(range(50)),
+        }
+    )
+    cfg = _build_config(tmp_path)
+    plan = build_feature_plan(df, cfg)
+    dropped = [d for d in plan.decisions if d.column == "date_b" and d.treatment == Treatment.drop]
+    assert dropped, "non-chosen temporal column should be dropped"
 
 
 # ---------------------------------------------------------------------------

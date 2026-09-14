@@ -19,9 +19,10 @@ from sorethumb.errors import (
     FeatureWidthWarning,
     LowVarianceWarning,
     MemoryBudgetError,
+    NonFiniteWarning,
     PlanError,
 )
-from sorethumb.features.build import apply_feature_plan, fit_features
+from sorethumb.features.build import _sanitize, apply_feature_plan, fit_features
 from sorethumb.features.correlate import correlated_pairs, drop_correlated
 from sorethumb.features.encode import (
     _array_derive_exprs,
@@ -29,12 +30,14 @@ from sorethumb.features.encode import (
     _missing_indicator_expr,
     _one_hot_exprs,
     _time_derivative_exprs,
+    build_encoding_exprs,
     compute_demotions,
 )
 from sorethumb.features.reduce import apply_pca, fit_pca
 from sorethumb.features.scale import apply_scaler, fit_scaler
 from sorethumb.features.space import FeatureSpace
-from sorethumb.profiling.plan import build_feature_plan
+from sorethumb.profiling.classify import ColumnClass, Treatment
+from sorethumb.profiling.plan import ColumnDecision, FeaturePlan, build_feature_plan
 
 pytestmark = pytest.mark.unit
 
@@ -161,6 +164,15 @@ def test_array_derive_exprs_string_no_stats():
     assert "arr__mean" not in names
 
 
+def test_time_derivative_exprs_unknown_derivative():
+    """Unknown derivative name triggers logger.warning and is skipped."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        exprs = _time_derivative_exprs("ts_col", ["hour", "no_such_deriv", "month"], "Datetime")
+    # "no_such_deriv" should be skipped — only hour and month produce exprs
+    assert len(exprs) == 2
+
+
 # ---------------------------------------------------------------------------
 # Width control demotion
 # ---------------------------------------------------------------------------
@@ -200,6 +212,137 @@ def test_demotion_is_deterministic():
         d1 = compute_demotions(plan, 10)
         d2 = compute_demotions(plan, 10)
     assert d1 == d2
+
+
+def test_compute_demotions_break_path():
+    """Demotion stops (break) once width fits, without demoting remaining columns."""
+    # 3 one-hot columns with 5, 3, 3 categories each -> width = (5+1) + (3+1) + (3+1) = 14
+    # max_feature_width = 8 -> first demotion (5 cats) brings 14 - 5 = 9, still > 8
+    # second demotion (3 cats) brings 9 - 3 = 6 <= 8 -> break triggered for the third column
+    cats_a = ["a1", "a2", "a3", "a4", "a5"]
+    cats_b = ["b1", "b2", "b3"]
+    cats_c = ["c1", "c2", "c3"]
+
+    decisions = [
+        ColumnDecision(
+            column="col_a",
+            col_class=ColumnClass.categorical,
+            reason="",
+            treatment=Treatment.one_hot,
+            emit_missing_indicator=False,
+        ),
+        ColumnDecision(
+            column="col_b",
+            col_class=ColumnClass.categorical,
+            reason="",
+            treatment=Treatment.one_hot,
+            emit_missing_indicator=False,
+        ),
+        ColumnDecision(
+            column="col_c",
+            col_class=ColumnClass.categorical,
+            reason="",
+            treatment=Treatment.one_hot,
+            emit_missing_indicator=False,
+        ),
+    ]
+
+    output_features = (
+        [f"col_a__{c}" for c in cats_a]
+        + ["col_a____other"]
+        + [f"col_b__{c}" for c in cats_b]
+        + ["col_b____other"]
+        + [f"col_c__{c}" for c in cats_c]
+        + ["col_c____other"]
+    )
+    d2o = dict.fromkeys(output_features[:6], "col_a")
+    d2o.update(dict.fromkeys(output_features[6:10], "col_b"))
+    d2o.update(dict.fromkeys(output_features[10:], "col_c"))
+
+    plan = FeaturePlan(
+        schema_fingerprint="abc",
+        n_rows=100,
+        decisions=decisions,
+        output_features=output_features,
+        derived_to_original=d2o,
+        one_hot_categories={"col_a": cats_a, "col_b": cats_b, "col_c": cats_c},
+        frequency_maps={},
+        imputation_medians={},
+        chosen_time_column=None,
+        time_derivatives=[],
+    )
+
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter("always")
+        demoted = compute_demotions(plan, max_feature_width=8)
+
+    # col_a and col_b demoted (needed to get under 8); col_c kept (break triggers)
+    assert "col_a" in demoted
+    assert "col_b" in demoted
+    assert "col_c" not in demoted
+
+
+# ---------------------------------------------------------------------------
+# Encoding: build_encoding_exprs by treatment
+# ---------------------------------------------------------------------------
+
+
+def _make_single_column_plan(
+    column: str, col_class: ColumnClass, treatment: Treatment, *, emit_missing_indicator: bool
+) -> FeaturePlan:
+    output_feature = f"{column}__is_missing" if emit_missing_indicator else column
+    return FeaturePlan(
+        schema_fingerprint="x",
+        n_rows=10,
+        decisions=[
+            ColumnDecision(
+                column=column,
+                col_class=col_class,
+                reason="",
+                treatment=treatment,
+                emit_missing_indicator=emit_missing_indicator,
+            ),
+        ],
+        output_features=[output_feature],
+        derived_to_original={output_feature: column},
+        one_hot_categories={},
+        frequency_maps={},
+        imputation_medians={},
+        chosen_time_column=None,
+        time_derivatives=[],
+    )
+
+
+def test_build_encoding_exprs_passthrough_treatment():
+    """Treatment.passthrough emits a simple col alias expression."""
+    plan = _make_single_column_plan(
+        "val", ColumnClass.numeric, Treatment.passthrough, emit_missing_indicator=False
+    )
+    schema = pl.Schema({"val": pl.Float64})
+    exprs = build_encoding_exprs(schema, plan, set(), None)
+    assert len(exprs) == 1
+
+
+def test_build_encoding_exprs_indicator_only_with_emit():
+    """Treatment.indicator_only with emit_missing_indicator=True emits __is_missing."""
+    plan = _make_single_column_plan(
+        "sparse", ColumnClass.high_null, Treatment.indicator_only, emit_missing_indicator=True
+    )
+    schema = pl.Schema({"sparse": pl.Float64})
+    exprs = build_encoding_exprs(schema, plan, set(), None)
+    assert len(exprs) == 1
+    assert "__is_missing" in str(exprs[0])
+
+
+def test_build_encoding_exprs_drop_with_emit():
+    """Treatment.drop with emit_missing_indicator=True emits __is_missing."""
+    plan = _make_single_column_plan(
+        "id_col", ColumnClass.identifier_like, Treatment.drop, emit_missing_indicator=True
+    )
+    schema = pl.Schema({"id_col": pl.String})
+    exprs = build_encoding_exprs(schema, plan, set(), None)
+    assert len(exprs) == 1
+    assert "__is_missing" in str(exprs[0])
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +479,19 @@ def test_correlated_pairs_empty_below_threshold():
     assert len(pairs) == 0
 
 
+def test_drop_correlated_empty_df():
+    """An empty frame has no sampleable matrix -> drop_correlated returns it as-is."""
+    df = pl.DataFrame({"a": pl.Series([], dtype=pl.Float64), "b": pl.Series([], dtype=pl.Float64)})
+    _, dropped = drop_correlated(df, threshold=0.95)
+    assert dropped == []
+
+
+def test_correlated_pairs_empty_df():
+    df = pl.DataFrame({"a": pl.Series([], dtype=pl.Float64), "b": pl.Series([], dtype=pl.Float64)})
+    result = correlated_pairs(df, threshold=0.95)
+    assert len(result) == 0
+
+
 # ---------------------------------------------------------------------------
 # PCA tests
 # ---------------------------------------------------------------------------
@@ -371,6 +527,14 @@ def test_fit_pca_low_variance_warns():
         fit_pca(matrix, config)
 
 
+def test_fit_pca_nan_input_raises_plan_error():
+    """fit_pca wraps sklearn's ValueError (NaN input) as PlanError."""
+    matrix = np.array([[1.0, float("nan"), 3.0], [4.0, 5.0, 6.0]], dtype=np.float64)
+    config = FeaturesConfig(pca=True, pca_max_components=1)
+    with pytest.raises(PlanError, match="PCA failed"):
+        fit_pca(matrix, config, seed=0)
+
+
 def test_apply_pca_shape_mismatch_raises():
     components = np.eye(3)  # (3, 3)
     mean = np.zeros(3)
@@ -387,6 +551,22 @@ def test_apply_pca_roundtrip():
     components, mean, _ = fit_pca(matrix, config)
     projected = apply_pca(matrix, components, mean, n_features=10, n_components=5)
     assert projected.shape == (100, 5)
+
+
+# ---------------------------------------------------------------------------
+# _sanitize
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_replaces_nan_with_zero():
+    """_sanitize emits NonFiniteWarning and zeros out NaN/Inf values."""
+    matrix = np.array([[1.0, float("nan"), float("inf")]], dtype=np.float32)
+    with pytest.warns(NonFiniteWarning, match="non-finite"):
+        result = _sanitize(matrix, "float32")
+    assert np.all(np.isfinite(result))
+    assert result[0, 0] == pytest.approx(1.0)
+    assert result[0, 1] == pytest.approx(0.0)
+    assert result[0, 2] == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -726,6 +906,47 @@ def test_feature_space_hash_changes_with_different_features():
     h3 = FeatureSpace.make_hash(["a", "c", "b"])  # reordered
     assert h1 != h2
     assert h1 != h3
+
+
+def test_feature_space_make_hash_deterministic():
+    names = ["amount", "country__US", "country__GB", "hour_of_day"]
+    h1 = FeatureSpace.make_hash(names)
+    h2 = FeatureSpace.make_hash(names)
+    assert h1 == h2
+    assert len(h1) == 32
+
+
+def test_feature_space_make_hash_empty():
+    h = FeatureSpace.make_hash([])
+    assert isinstance(h, str)
+    assert len(h) == 32
+
+
+def test_feature_space_is_dataclass():
+    import dataclasses
+
+    assert dataclasses.is_dataclass(FeatureSpace)
+    fields = {f.name for f in dataclasses.fields(FeatureSpace)}
+    assert fields == {"matrix", "feature_names", "row_ids", "plan", "feature_schema_hash"}
+
+
+def test_feature_space_instantiation():
+    from unittest.mock import MagicMock
+
+    matrix = np.zeros((10, 3), dtype=np.float32)
+    row_ids = np.arange(10)
+    plan = MagicMock()
+    names = ["f0", "f1", "f2"]
+    fs = FeatureSpace(
+        matrix=matrix,
+        feature_names=names,
+        row_ids=row_ids,
+        plan=plan,
+        feature_schema_hash=FeatureSpace.make_hash(names),
+    )
+    assert fs.matrix.shape == (10, 3)
+    assert fs.feature_names == names
+    assert len(fs.feature_schema_hash) == 32
 
 
 def test_plan_json_roundtrip_after_fit():

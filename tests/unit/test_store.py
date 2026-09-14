@@ -161,6 +161,41 @@ def test_workspace_context_manager(tmp_path):
         assert ws.root.is_dir()
 
 
+def test_workspace_property_accessors(tmp_path):
+    with _open_ws(tmp_path) as ws:
+        assert ws.root == (tmp_path / "ws").resolve()
+        assert ws.store is not None
+        assert ws.db_path().name == "sorethumb.db"
+
+
+def test_workspace_directory_methods(tmp_path):
+    with _open_ws(tmp_path) as ws:
+        assert ws.models_dir("run1", "grp1").is_dir()
+        assert ws.features_dir("run1", "grp1").is_dir()
+        assert ws.logs_dir().is_dir()
+        assert ws.tmp_dir().is_dir()
+
+
+def test_workspace_list_prunable(tmp_path):
+    with _open_ws(tmp_path) as ws:
+        prunable = ws.list_prunable(retention_days=0)
+        assert isinstance(prunable, list)
+
+
+def test_workspace_prune_deletes_missing_file(tmp_path):
+    """prune() must tolerate a regenerable artifact whose file is already gone."""
+    with _open_ws(tmp_path) as ws:
+        ghost_path = str(tmp_path / "ws" / "ghost.parquet")
+        ws.store._conn.execute(
+            "INSERT INTO artifact (artifact_id, path, kind, byte_size, regenerable, created_at) "
+            "VALUES (?, ?, ?, ?, ?, datetime('now', '-400 days'))",
+            ("ghost_art", ghost_path, "results", 0, 1),
+        )
+        ws.store._conn.commit()
+        deleted = ws.prune(retention_days=1, dry_run=False)
+        assert ghost_path in deleted
+
+
 # ---------------------------------------------------------------------------
 # Store: migrations and basic ops
 # ---------------------------------------------------------------------------
@@ -434,6 +469,7 @@ def test_write_read_results_roundtrip(tmp_path):
         ws.store.insert_run("run1", "fp1", "{}", 0)
         path = write_results(ws, "run1", "gk01", df)
         assert path.exists()
+        assert path.name == "anomalies.parquet"
         df2 = read_results(ws, "run1", "gk01")
         assert df2 is not None
         assert len(df2) == 3

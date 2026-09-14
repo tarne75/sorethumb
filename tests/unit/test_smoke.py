@@ -9,29 +9,7 @@ from typer.testing import CliRunner
 
 import sorethumb
 from sorethumb.cli import app
-from sorethumb.errors import (
-    CalibrationModeWarning,
-    ColumnDroppedWarning,
-    ConfigError,
-    DetectorError,
-    ExplainError,
-    FallbackAttributionWarning,
-    FeatureWidthWarning,
-    LowVarianceWarning,
-    MemoryBudgetError,
-    ModelSchemaDriftError,
-    ModelSchemaDriftWarning,
-    NonFiniteWarning,
-    PlanError,
-    PopulationMismatchWarning,
-    SampleTruncatedWarning,
-    SchemaError,
-    SlowStageWarning,
-    SorethumbError,
-    SorethumbWarning,
-    SourceError,
-    StoreError,
-)
+from sorethumb.errors import ColumnDroppedWarning
 from tests.synth import make_frame
 
 pytestmark = pytest.mark.unit
@@ -46,39 +24,6 @@ def test_cli_version() -> None:
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert "sorethumb 0.1.0" in result.output
-
-
-def test_error_hierarchy() -> None:
-    for cls in (
-        ConfigError,
-        SourceError,
-        SchemaError,
-        PlanError,
-        DetectorError,
-        ExplainError,
-        StoreError,
-        MemoryBudgetError,
-        ModelSchemaDriftError,
-    ):
-        assert issubclass(cls, SorethumbError)
-        assert issubclass(cls, Exception)
-
-
-def test_warning_hierarchy() -> None:
-    for cls in (
-        ColumnDroppedWarning,
-        FeatureWidthWarning,
-        NonFiniteWarning,
-        LowVarianceWarning,
-        SampleTruncatedWarning,
-        FallbackAttributionWarning,
-        ModelSchemaDriftWarning,
-        PopulationMismatchWarning,
-        CalibrationModeWarning,
-        SlowStageWarning,
-    ):
-        assert issubclass(cls, SorethumbWarning)
-        assert issubclass(cls, UserWarning)
 
 
 def test_strict_mode_warning_becomes_error() -> None:

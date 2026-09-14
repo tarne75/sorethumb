@@ -109,6 +109,29 @@ def test_check_protocol_raises_missing_method():
         check_protocol(_MissingMethod)
 
 
+class _NonCallableFit:
+    name = "bad"
+    supports_tree_shap = False
+    default_train_row_cap = 1000
+    fit = "not_a_function"  # non-callable
+
+    def score_samples(self, X):
+        return np.zeros(len(X))
+
+    def natural_flag(self, scores):
+        return scores < 0
+
+    def get_params(self):
+        return {}
+
+
+def test_check_protocol_raises_non_callable_method():
+    """A method *present* but overridden with a non-callable is a distinct
+    failure from a missing method entirely (test_check_protocol_raises_missing_method)."""
+    with pytest.raises(DetectorError, match="fit"):
+        check_protocol(_NonCallableFit)
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -118,6 +141,12 @@ def test_registry_contains_builtins():
     assert "isolation_forest" in registry
     assert "kmeans_distance" in registry
     assert "one_class_svm" in registry
+
+
+def test_registry_values_are_detector_classes():
+    assert registry["isolation_forest"] is IsolationForestDetector
+    assert registry["kmeans_distance"] is KMeansDetector
+    assert registry["one_class_svm"] is OneClassSVMDetector
 
 
 def test_registry_register_valid():
@@ -132,6 +161,24 @@ def test_registry_register_invalid_raises():
 
     with pytest.raises(DetectorError):
         register(_MissingName)
+
+
+def test_detectors_all_list():
+    """__all__ is the plugin surface: adding a detector means exporting it here."""
+    import sorethumb.detectors as det
+
+    expected = {
+        "Detector",
+        "ECODDetector",
+        "HBOSDetector",
+        "IsolationForestDetector",
+        "KMeansDetector",
+        "LOFDetector",
+        "OneClassSVMDetector",
+        "register",
+        "registry",
+    }
+    assert set(det.__all__) == expected
 
 
 # ---------------------------------------------------------------------------

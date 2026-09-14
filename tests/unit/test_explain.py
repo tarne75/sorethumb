@@ -118,6 +118,28 @@ def test_gradient_consistent_sign_convention():
 
 
 # ---------------------------------------------------------------------------
+# kernel_shap_attributions
+# ---------------------------------------------------------------------------
+
+
+def test_kernel_shap_attributions_shape():
+    from sorethumb.explain.gradient import kernel_shap_attributions
+
+    det, X = _fit_if(n=30, d=4, seed=0)
+    attrs, tag = kernel_shap_attributions(det, X, background_k=5, max_rows=5000)
+    assert attrs.shape == X.shape
+    assert tag == "heuristic"
+
+
+def test_kernel_shap_attributions_row_cap():
+    from sorethumb.explain.gradient import kernel_shap_attributions
+
+    det, X = _fit_if(n=30, d=3, seed=0)
+    attrs, _ = kernel_shap_attributions(det, X, background_k=3, max_rows=10)
+    assert attrs.shape[0] == 10
+
+
+# ---------------------------------------------------------------------------
 # centroid_attributions
 # ---------------------------------------------------------------------------
 
@@ -509,3 +531,26 @@ def test_permutation_importance_consistent_across_detectors():
     r_b = permutation_importance(det_b, X, feature_names, d2o, n_repeats=2, max_rows=100)
     for k in r_a:
         assert r_a[k] == pytest.approx(r_b[k], abs=1e-6)
+
+
+def test_permutation_importance_row_cap():
+    """permutation_importance caps X to max_rows when the input is larger."""
+    det, X = _fit_if(n=200, d=4)
+    feature_names = [f"f{i}" for i in range(4)]
+    d2o = {f: f for f in feature_names}
+    result = permutation_importance(det, X, feature_names, d2o, n_repeats=1, max_rows=50, seed=0)
+    assert len(result) == 4
+
+
+def test_permutation_importance_equal_importance_returns_half():
+    """When every feature has equal importance, each gets 0.5 (the rng_v == 0 branch)."""
+
+    class _ConstantDetector:
+        def score_samples(self, X: np.ndarray) -> np.ndarray:
+            return np.ones(len(X), dtype=np.float64)
+
+    X = np.ones((20, 3), dtype=np.float64)
+    feature_names = ["a", "b", "c"]
+    d2o = {f: f for f in feature_names}
+    result = permutation_importance(_ConstantDetector(), X, feature_names, d2o, n_repeats=1, max_rows=1000)
+    assert all(v == pytest.approx(0.5) for v in result.values())

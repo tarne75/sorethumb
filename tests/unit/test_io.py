@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import warnings
 from pathlib import Path
 
@@ -19,6 +20,8 @@ from sorethumb.io.nested import derive_array_features, unnest_all
 from sorethumb.io.readers import read_frame
 from sorethumb.io.source import resolve_source
 from tests.synth import make_frame
+
+pytestmark = pytest.mark.unit
 
 # ---------------------------------------------------------------------------
 # Fingerprints
@@ -178,6 +181,267 @@ def test_read_explicit_format_overrides_extension(tmp_path: Path) -> None:
     cfg = SourceConfig(uri=str(p), format="csv")
     result = read_frame(p, cfg).collect()
     assert result.shape[0] == 5
+
+
+def test_read_tsv_injects_tab_separator(tmp_path: Path) -> None:
+    """TSV format injects separator='\\t' when the caller didn't set one."""
+    from sorethumb.config import SourceConfig
+
+    p = tmp_path / "data.tsv"
+    p.write_text("col_a\tcol_b\tcol_c\n1\t2\t3\n4\t5\t6\n")
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result.shape == (2, 3)
+    assert "col_a" in result.columns
+
+
+def test_read_tsv_explicit_separator_not_overridden(tmp_path: Path) -> None:
+    """TSV does NOT inject a separator if the caller already provided one."""
+    from sorethumb.config import SourceConfig
+
+    p = tmp_path / "data.tsv"
+    p.write_text("col_a\tcol_b\tcol_c\n1\t2\t3\n4\t5\t6\n")
+
+    cfg = SourceConfig(uri=str(p), read_options={"separator": "\t"})
+    result = read_frame(p, cfg).collect()
+    assert result.shape[0] == 2
+
+
+def test_read_json(tmp_path: Path) -> None:
+    from sorethumb.config import SourceConfig
+
+    p = tmp_path / "data.json"
+    rows = [{"x": float(i), "y": float(i * 2), "z": float(i + 1)} for i in range(5)]
+    p.write_text(json.dumps(rows))
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result.shape == (5, 3)
+    assert "x" in result.columns
+
+
+def test_read_all_string_schema_raises(tmp_path: Path) -> None:
+    """A schema where every column is String (no numeric signal at all) raises."""
+    from sorethumb.config import SourceConfig
+
+    p = tmp_path / "strings.csv"
+    p.write_text("col_a,col_b,col_c\nfoo,bar,baz\nhello,world,test\n")
+
+    cfg = SourceConfig(uri=str(p))
+    with pytest.raises(SchemaError, match="String"):
+        read_frame(p, cfg).collect()
+
+
+# ---------------------------------------------------------------------------
+# TSF reader
+# ---------------------------------------------------------------------------
+
+
+def test_read_tsf_basic(tmp_path: Path) -> None:
+    """Basic TSF file: one series, no attributes, single data row."""
+    from sorethumb.config import SourceConfig
+
+    content = "@data\n1.0,2.0,3.0\n"
+    p = tmp_path / "basic.tsf"
+    p.write_text(content)
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result.shape == (1, 3)
+    assert result["value_0"][0] == pytest.approx(1.0)
+    assert result["value_2"][0] == pytest.approx(3.0)
+
+
+def test_read_tsf_with_numeric_attribute(tmp_path: Path) -> None:
+    """A numeric @attribute column is parsed as int/float."""
+    from sorethumb.config import SourceConfig
+
+    content = "@attribute series_id numeric\n@data\n42:10.0,20.0,30.0\n7:1.5,2.5,3.5\n"
+    p = tmp_path / "attrs.tsf"
+    p.write_text(content)
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result.shape == (2, 4)
+    assert result["series_id"].to_list() == [42, 7]
+    assert result["value_0"].to_list() == pytest.approx([10.0, 1.5])
+
+
+def test_read_tsf_with_float_numeric_attribute(tmp_path: Path) -> None:
+    """A numeric attribute containing a decimal point parses as float."""
+    from sorethumb.config import SourceConfig
+
+    content = "@attribute score numeric\n@data\n1.5:10.0,20.0,30.0\n"
+    p = tmp_path / "float_attr.tsf"
+    p.write_text(content)
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result["score"][0] == pytest.approx(1.5)
+
+
+def test_read_tsf_with_string_attribute(tmp_path: Path) -> None:
+    """A string @attribute keeps its value as-is."""
+    from sorethumb.config import SourceConfig
+
+    content = "@attribute category string\n@data\ntrain:1.0,2.0,3.0\ntest:4.0,5.0,6.0\n"
+    p = tmp_path / "str_attr.tsf"
+    p.write_text(content)
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result.shape == (2, 4)
+    assert result["category"].to_list() == ["train", "test"]
+
+
+def test_read_tsf_with_date_attribute(tmp_path: Path) -> None:
+    """A date @attribute is treated as a plain string (kept as-is)."""
+    from sorethumb.config import SourceConfig
+
+    content = "@attribute start_timestamp date\n@data\n2020-01-01:1.0,2.0\n2020-01-02:3.0,4.0\n"
+    p = tmp_path / "date_attr.tsf"
+    p.write_text(content)
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result["start_timestamp"].to_list() == ["2020-01-01", "2020-01-02"]
+
+
+def test_read_tsf_missing_values(tmp_path: Path) -> None:
+    """'?' tokens and empty tokens both become None."""
+    from sorethumb.config import SourceConfig
+
+    content = "@data\n1.0,?,3.0\n"
+    p = tmp_path / "missing.tsf"
+    p.write_text(content)
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result["value_0"][0] == pytest.approx(1.0)
+    assert result["value_1"][0] is None
+    assert result["value_2"][0] == pytest.approx(3.0)
+
+
+def test_read_tsf_variable_length_series_padded(tmp_path: Path) -> None:
+    """Shorter series are padded to the max length with None."""
+    from sorethumb.config import SourceConfig
+
+    content = "@data\n1.0,2.0,3.0\n4.0,5.0\n"
+    p = tmp_path / "varlen.tsf"
+    p.write_text(content)
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result.shape == (2, 3)
+    assert result["value_2"][0] == pytest.approx(3.0)
+    assert result["value_2"][1] is None
+
+
+def test_read_tsf_comment_lines_skipped(tmp_path: Path) -> None:
+    """Lines starting with # are silently skipped."""
+    from sorethumb.config import SourceConfig
+
+    content = "# this is a comment\n@data\n# another comment\n1.0,2.0,3.0\n"
+    p = tmp_path / "comments.tsf"
+    p.write_text(content)
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result.shape[0] == 1
+
+
+def test_read_tsf_unknown_at_directives_skipped(tmp_path: Path) -> None:
+    """Unknown @ directives (not @attribute / @data) are skipped."""
+    from sorethumb.config import SourceConfig
+
+    content = "@frequency yearly\n@horizon 10\n@data\n1.0,2.0,3.0\n"
+    p = tmp_path / "directives.tsf"
+    p.write_text(content)
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result.shape[0] == 1
+
+
+def test_read_tsf_lines_before_data_skipped(tmp_path: Path) -> None:
+    """Non-@ lines before @data are ignored (data hasn't started yet)."""
+    from sorethumb.config import SourceConfig
+
+    content = "stray line\n@data\n1.0,2.0,3.0\n"
+    p = tmp_path / "stray.tsf"
+    p.write_text(content)
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result.shape[0] == 1
+
+
+def test_read_tsf_malformed_row_too_few_fields_skipped(tmp_path: Path) -> None:
+    """Malformed rows (too few colon-separated fields) are silently skipped."""
+    from sorethumb.config import SourceConfig
+
+    content = (
+        "@attribute id numeric\n"
+        "@data\n"
+        "1:10.0,20.0\n"
+        "BADROW\n"  # no colon → fewer fields than attributes + 1
+        "2:30.0,40.0\n"
+    )
+    p = tmp_path / "malformed.tsf"
+    p.write_text(content)
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result.shape[0] == 2  # only 2 valid rows
+
+
+def test_read_tsf_numeric_attribute_bad_value_gives_none(tmp_path: Path) -> None:
+    """A non-numeric value in a numeric @attribute field becomes None."""
+    from sorethumb.config import SourceConfig
+
+    content = "@attribute id numeric\n@data\nnotanumber:1.0,2.0,3.0\n"
+    p = tmp_path / "badnum.tsf"
+    p.write_text(content)
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result["id"][0] is None
+
+
+def test_read_tsf_empty_no_data_rows(tmp_path: Path) -> None:
+    """A file with @attribute but no data rows returns an empty LazyFrame
+    with the declared schema."""
+    from sorethumb.io.readers import _read_tsf
+
+    content = "@attribute id numeric\n@attribute label string\n@data\n"
+    p = tmp_path / "empty.tsf"
+    p.write_text(content)
+
+    result = _read_tsf(p).collect()
+    assert result.shape[0] == 0
+    assert set(result.columns) == {"id", "label"}
+
+
+def test_read_tsf_multiple_rows_multiple_attrs(tmp_path: Path) -> None:
+    """Multi-row, multi-attribute TSF file integrates end-to-end correctly."""
+    from sorethumb.config import SourceConfig
+
+    content = (
+        "@attribute series_id numeric\n"
+        "@attribute split string\n"
+        "@data\n"
+        "1:train:10.0,20.0,30.0\n"
+        "2:test:40.0,50.0\n"
+    )
+    p = tmp_path / "multi.tsf"
+    p.write_text(content)
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result.shape == (2, 5)  # series_id, split, value_0, value_1, value_2
+    assert result["split"].to_list() == ["train", "test"]
+    assert result["value_2"][1] is None  # second row is shorter
 
 
 # ---------------------------------------------------------------------------
