@@ -62,3 +62,59 @@ only `integration`/`benchmark` markers declared, neither applied to any test mod
   `run_benchmark` calls in `evaluate/benchmark.py` are no longer exercised by the default/CI
   lane, only by the explicit/scheduled `benchmark` lane). Still clears the `--cov-fail-under=80`
   gate.
+
+## What P1-2 changed
+
+Added `tests/factories/` (frames, configs, detectors, workspaces, runs, benchmark_rows) and
+rewired the duplicated builders the plan named onto it — no test bodies' assertions changed,
+only how each test's fixtures/config/data get built:
+
+- `frames.py`: `write_planted_csv` (unifies end-to-end's `_make_planted_csv` and
+  score-forward's `_planted_csv` — same logic, different defaults, so score-forward keeps a
+  one-line wrapper preserving its own `n_normal=200, n_anomaly=6`), `write_leading_anomaly_csv`
+  (config-wiring's `_write_csv`), `write_grouped_csv` (CLI's `_write_csv` — same name, different
+  shape, now disambiguated), `write_time_sorted_parquet` and `write_two_period_parquet`
+  (end-to-end's two Parquet builders, including the "two-period builder" the plan named).
+- `configs.py`: `make_config`, defaulting to `combination="intersection"` per the plan. Every
+  existing caller either has just one detector (where intersection == that detector's own flag,
+  so behaviour is unchanged) or passes its own `combination=` explicitly — audited call by call,
+  zero behavioural changes. End-to-end's `_minimal_config`, `_period_config`,
+  `_period_config_with_groups` and score-forward's `_cfg` (2 detectors + composite) now delegate
+  to it instead of building `Config(...)` by hand.
+- `detectors.py`: `detector_auc` centralises the higher-is-more-normal sign flip
+  (`roc_auc_score(y_true, -scores)`) that `test_kmeans_auc_above_half` computed inline;
+  `ban_all_fitting` promotes score-forward's `_ban_all_fitting`/`_FitAttempted`.
+- `workspaces.py`: a `workspace` pytest fixture (`yield` + `ws.close()`) and a plain
+  `open_workspace()` helper for tests needing more than one instance. `test_history.py`'s local
+  `ws` fixture (which never closed its Workspace) now resolves to the shared one via
+  `tests/unit/conftest.py` — a bare `from ... import workspace as ws` inside `test_history.py`
+  itself works at runtime but trips ruff's F811 (parameter shadowing an imported name), so the
+  import lives in conftest.py instead, where pytest's plugin-based fixture discovery picks it up
+  with no import needed in the consuming test module. `test_store.py`'s `_open_ws` is now an
+  alias for `open_workspace` (kept un-closed there deliberately: several of its tests construct
+  more than one `Workspace` per test — double-init, reopen — so a single auto-closing fixture
+  doesn't fit).
+- `runs.py`: `run_planted_detection` returns a `PlantedRun` dataclass (`result`, `csv_path`,
+  `workdir`, `anomaly_indices`) instead of a positional tuple, collapsing the
+  write-csv/build-config/run_detection sequence; wired into
+  `test_planted_anomalies_are_detected`, which also dropped a recomputed
+  `n_total`/`n_anomaly`/`planted_positions` in favour of the returned `anomaly_indices`.
+- `benchmark_rows.py`: `make_benchmark_row` promotes `test_evaluate.py`'s local `_make_row`.
+
+Deliberately deferred, with reasons:
+- **`CliRunner` fixture**: added (`workspaces.py`), but the existing module-level
+  `runner = CliRunner()` globals in `test_cli.py`/`test_config_wiring.py` were left as-is —
+  CliRunner is stateless (no real cleanup need, unlike `Workspace`), and converting ~60 existing
+  test signatures to take it as a fixture parameter was a large mechanical diff for no behaviour
+  change. Left for whoever does the P1-4 file-split to adopt where it's a natural fit.
+- **`assertions.py`**: not created. Went looking for the shared-assertion duplication the plan
+  named (e.g. the dense-rank invariant) and found it checked twice at two different levels
+  (`test_ranking.py`'s pure `_dense_ranks` mirror vs. `test_end_to_end.py`'s dataframe-level
+  check) but not actually duplicated in a way that has one obvious shared shape yet — forcing a
+  helper into existence for a single dataframe-level call site would be the premature
+  abstraction the project's own conventions warn against. Revisit once P1-5's CLI/report output
+  consolidation actually produces repeated assertions to extract.
+
+Verified after: full suite still **872 collected**, CI lane still **850 passed, 22 deselected**,
+plain `pytest` still **559 passed** — byte-for-byte the same test outcomes as the P1-1 baseline
+above, just built through shared factories. ruff/ruff format/mypy/doc-consistency all clean.

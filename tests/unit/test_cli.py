@@ -21,6 +21,7 @@ import pytest
 from typer.testing import CliRunner
 
 from sorethumb.cli import app
+from tests.factories.frames import write_grouped_csv as _write_csv
 
 pytestmark = pytest.mark.integration
 
@@ -30,24 +31,6 @@ runner = CliRunner()
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-def _write_csv(path: Path, n_rows: int = 300, n_groups: int = 2, seed: int = 0) -> Path:
-    """Write a synthetic multi-group CSV to *path* and return it."""
-    rng = np.random.default_rng(seed)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    groups = [f"G{i}" for i in range(n_groups)]
-    df = pl.DataFrame(
-        {
-            "id": list(range(n_rows)),
-            "group": [groups[i % n_groups] for i in range(n_rows)],
-            "value_a": rng.normal(0, 1, n_rows).tolist(),
-            "value_b": rng.normal(5, 2, n_rows).tolist(),
-            "cat": (["A"] * (n_rows // 2) + ["B"] * (n_rows - n_rows // 2)),
-        }
-    )
-    df.write_csv(str(path))
-    return path
 
 
 def _write_toml(path: Path, csv_path: Path, workdir: Path, group_by: list[str] | None = None) -> Path:

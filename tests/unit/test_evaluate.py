@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from sorethumb.evaluate.metrics import Metrics, evaluate_scores
+from tests.factories.benchmark_rows import make_benchmark_row
 
 pytestmark = pytest.mark.unit
 
@@ -300,41 +301,14 @@ def test_dataset_entry_has_licence():
 # ---------------------------------------------------------------------------
 
 
-def _make_row(**overrides):
-    from sorethumb.evaluate.benchmark import BenchmarkRow
-
-    defaults: dict = {
-        "dataset": "d",
-        "detector": "det",
-        "n_rows": 100,
-        "n_features": 4,
-        "contamination": 0.05,
-        "n_seeds": 3,
-        "roc_auc": 0.9,
-        "roc_auc_std": 0.01,
-        "average_precision": 0.8,
-        "average_precision_std": 0.02,
-        "precision_at_k": 0.5,
-        "precision_at_k_std": 0.0,
-        "recall_at_k": 0.5,
-        "recall_at_k_std": 0.0,
-        "f1_at_contamination": 0.5,
-        "f1_at_contamination_std": 0.0,
-        "fit_seconds": 0.1,
-        "score_seconds": 0.01,
-    }
-    defaults.update(overrides)
-    return BenchmarkRow(**defaults)
-
-
 def test_benchmark_row_nan_roc_auc_renders_na_in_display_dict():
-    row = _make_row(roc_auc=float("nan"), roc_auc_std=float("nan"))
+    row = make_benchmark_row(roc_auc=float("nan"), roc_auc_std=float("nan"))
     d = row.as_display_dict()
     assert d["roc_auc"] == "n/a"
 
 
 def test_benchmark_row_nan_average_precision_renders_na_in_csv_dict():
-    row = _make_row(average_precision=float("nan"), average_precision_std=float("nan"))
+    row = make_benchmark_row(average_precision=float("nan"), average_precision_std=float("nan"))
     d = row.as_dict()
     assert d["average_precision"] == "n/a"
     assert d["average_precision_std"] == "n/a"
@@ -343,7 +317,7 @@ def test_benchmark_row_nan_average_precision_renders_na_in_csv_dict():
 def test_benchmark_row_nan_does_not_render_as_literal_nan_string():
     from sorethumb.evaluate.benchmark import to_markdown
 
-    row = _make_row(roc_auc=float("nan"), roc_auc_std=float("nan"))
+    row = make_benchmark_row(roc_auc=float("nan"), roc_auc_std=float("nan"))
     md = to_markdown([row])
     assert "nan" not in md.lower().replace("n/a", "")
 
@@ -391,7 +365,7 @@ def test_generate_metadata_matches_installed_versions():
 def test_to_markdown_with_metadata_includes_summary_line():
     from sorethumb.evaluate.benchmark import generate_metadata, to_markdown
 
-    row = _make_row()
+    row = make_benchmark_row()
     meta = generate_metadata()
     md = to_markdown([row], meta)
     assert meta.sorethumb_version in md
@@ -401,7 +375,7 @@ def test_to_markdown_with_metadata_includes_summary_line():
 def test_to_markdown_without_metadata_omits_summary_line():
     from sorethumb.evaluate.benchmark import to_markdown
 
-    row = _make_row()
+    row = make_benchmark_row()
     md = to_markdown([row])
     assert "Generated" not in md
 
@@ -419,7 +393,7 @@ def test_inject_into_readme_with_metadata(tmp_path: Path):
         f"# My project\n\n{_RESULTS_MARKER_START}\n{_RESULTS_MARKER_END}\n",
         encoding="utf-8",
     )
-    row = _make_row()
+    row = make_benchmark_row()
     meta = generate_metadata()
     result = inject_into_readme([row], readme, meta)
     assert result is True
@@ -432,7 +406,7 @@ def test_write_outputs_with_metadata_creates_json(tmp_path: Path):
 
     from sorethumb.evaluate.benchmark import generate_metadata, write_outputs
 
-    row = _make_row()
+    row = make_benchmark_row()
     meta = generate_metadata()
     write_outputs([row], tmp_path, meta)
     meta_path = tmp_path / "benchmark_metadata.json"
@@ -444,6 +418,6 @@ def test_write_outputs_with_metadata_creates_json(tmp_path: Path):
 def test_write_outputs_without_metadata_skips_json(tmp_path: Path):
     from sorethumb.evaluate.benchmark import write_outputs
 
-    row = _make_row()
+    row = make_benchmark_row()
     write_outputs([row], tmp_path)
     assert not (tmp_path / "benchmark_metadata.json").exists()

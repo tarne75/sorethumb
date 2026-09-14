@@ -15,79 +15,30 @@ import pytest
 
 from sorethumb import Config, score_forward
 from sorethumb._pipeline import run_detection
-from sorethumb.config import (
-    ColumnsConfig,
-    DetectorConfig,
-    RunConfig,
-    ScoringConfig,
-    SourceConfig,
-)
-from sorethumb.detectors.isolation_forest import IsolationForestDetector
-from sorethumb.detectors.kmeans_distance import KMeansDetector
-from sorethumb.detectors.one_class_svm import OneClassSVMDetector
+from sorethumb.config import DetectorConfig
 from sorethumb.errors import StoreError
 from sorethumb.store.workspace import Workspace
+from tests.factories.configs import make_config
+from tests.factories.detectors import ban_all_fitting as _ban_all_fitting
+from tests.factories.frames import write_planted_csv
 
 pytestmark = pytest.mark.integration
 
 
-class _FitAttempted(BaseException):
-    """Raised if any fitting path runs. A BaseException so the per-group
-    ``except Exception`` handler cannot swallow it — it must reach the test."""
-
-
 def _planted_csv(path: Path, *, n_normal: int = 200, n_anomaly: int = 6, seed: int = 0) -> list[int]:
-    rng = np.random.default_rng(seed)
-    n = n_normal + n_anomaly
-    num_a = rng.normal(0.0, 1.0, n).tolist()
-    for i in range(n_normal, n):
-        num_a[i] = 999.0  # far outside ~N(0, 1)
-    pl.DataFrame(
-        {
-            "id": list(range(n)),
-            "num_a": num_a,
-            "num_b": rng.normal(5.0, 2.0, n).tolist(),
-            "cat": ["A" if i % 3 else "B" for i in range(n)],
-        }
-    ).write_csv(str(path))
-    return list(range(n_normal, n))
+    return write_planted_csv(path, n_normal=n_normal, n_anomaly=n_anomaly, seed=seed)
 
 
 def _cfg(csv: Path, ws: Path) -> Config:
-    return Config(
-        source=SourceConfig(uri=str(csv), format="csv"),
-        run=RunConfig(workdir=str(ws), seed=42),
-        columns=ColumnsConfig(id_column="id"),
+    return make_config(
+        csv,
+        ws,
+        combination="composite",
         detectors=[
             DetectorConfig(name="isolation_forest"),
             DetectorConfig(name="kmeans_distance"),
         ],
-        scoring=ScoringConfig(
-            combination="composite", contamination="auto", weighting="equal", min_records=5
-        ),
     )
-
-
-def _ban_all_fitting(monkeypatch: pytest.MonkeyPatch) -> None:
-    import sorethumb._pipeline as pipe
-
-    def _boom(*_a: object, **_k: object) -> None:
-        raise _FitAttempted
-
-    # Pipeline-level fitting entry points.
-    monkeypatch.setattr(pipe, "fit_features", _boom)
-    monkeypatch.setattr(pipe, "build_feature_plan", _boom)
-    monkeypatch.setattr(pipe, "save_model", _boom)
-    # Every detector wrapper's fit …
-    for cls in (IsolationForestDetector, KMeansDetector, OneClassSVMDetector):
-        monkeypatch.setattr(cls, "fit", _boom)
-    # … and the underlying sklearn estimators, in case a wrapper is bypassed.
-    from sklearn.cluster import KMeans
-    from sklearn.ensemble import IsolationForest
-    from sklearn.svm import OneClassSVM
-
-    for cls in (IsolationForest, KMeans, OneClassSVM):
-        monkeypatch.setattr(cls, "fit", _boom)
 
 
 def test_score_forward_does_not_refit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -186,14 +137,8 @@ def test_score_forward_missing_model_is_failed_not_complete_and_is_retried(tmp_p
     assert src.n_succeeded >= 1
 
     # Request a detector the source run never persisted a model for.
-    fwd_cfg = Config(
-        source=SourceConfig(uri=str(new_csv), format="csv"),
-        run=RunConfig(workdir=str(ws), seed=42),
-        columns=ColumnsConfig(id_column="id"),
-        detectors=[DetectorConfig(name="one_class_svm")],
-        scoring=ScoringConfig(
-            combination="composite", contamination="auto", weighting="equal", min_records=5
-        ),
+    fwd_cfg = make_config(
+        new_csv, ws, combination="composite", detectors=[DetectorConfig(name="one_class_svm")]
     )
 
     fwd1 = score_forward(fwd_cfg, src.run_id, no_report=True)

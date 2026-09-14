@@ -12,23 +12,16 @@ import warnings
 from pathlib import Path
 
 import numpy as np
-import polars as pl
 import pytest
 from typer.testing import CliRunner
 
 from sorethumb import _pipeline
 from sorethumb._pipeline import _group_summary, run_detection
 from sorethumb.cli import app
-from sorethumb.config import (
-    Config,
-    DetectorConfig,
-    ExplainConfig,
-    ReportConfig,
-    RunConfig,
-    ScoringConfig,
-    SourceConfig,
-)
+from sorethumb.config import Config, DetectorConfig, SourceConfig
 from sorethumb.errors import NonFiniteWarning, SampleTruncatedWarning, SlowStageWarning
+from tests.factories.configs import make_config
+from tests.factories.frames import write_leading_anomaly_csv as _write_csv
 
 pytestmark = pytest.mark.integration
 
@@ -40,21 +33,6 @@ runner = CliRunner()
 # ---------------------------------------------------------------------------
 
 
-def _write_csv(path: Path, n_rows: int = 120, seed: int = 0) -> Path:
-    rng = np.random.default_rng(seed)
-    num_a = rng.normal(0.0, 1.0, n_rows)
-    num_a[:3] = 999.0  # planted anomalies so a report section has real rows
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pl.DataFrame(
-        {
-            "id": list(range(n_rows)),
-            "num_a": num_a.tolist(),
-            "num_b": rng.normal(5.0, 2.0, n_rows).tolist(),
-        }
-    ).write_csv(str(path))
-    return path
-
-
 def _cfg(
     csv: Path,
     workdir: Path,
@@ -64,14 +42,15 @@ def _cfg(
     explain_kwargs: dict | None = None,
     report_kwargs: dict | None = None,
 ) -> Config:
-    return Config(
-        source=SourceConfig(uri=str(csv), format="csv"),
-        run=RunConfig(workdir=str(workdir), seed=42, **(run_kwargs or {})),
-        columns={"id_column": "id"},
-        detectors=detectors or [DetectorConfig(name="isolation_forest")],
-        scoring=ScoringConfig(contamination=0.05, combination="composite", min_records=5),
-        explain=ExplainConfig(**(explain_kwargs or {})),
-        report=ReportConfig(**(report_kwargs or {})),
+    return make_config(
+        csv,
+        workdir,
+        contamination=0.05,
+        combination="composite",
+        detectors=detectors,
+        run_kwargs=run_kwargs,
+        explain_kwargs=explain_kwargs,
+        report_kwargs=report_kwargs,
     )
 
 

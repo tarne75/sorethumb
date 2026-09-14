@@ -27,7 +27,6 @@ from sorethumb.config import (
     DetectorConfig,
     ExplainConfig,
     FeaturesConfig,
-    HistoryConfig,
     RunConfig,
     ScoringConfig,
     SourceConfig,
@@ -37,74 +36,18 @@ from sorethumb.detectors.kmeans_distance import KMeansDetector
 from sorethumb.detectors.one_class_svm import OneClassSVMDetector
 from sorethumb.features.build import apply_feature_plan, fit_features
 from sorethumb.profiling.plan import build_feature_plan
+from tests.factories.configs import make_config
+from tests.factories.detectors import detector_auc
+from tests.factories.frames import write_planted_csv as _make_planted_csv
+from tests.factories.frames import write_time_sorted_parquet as _make_time_sorted_parquet
+from tests.factories.frames import write_two_period_parquet as _two_period_parquet
+from tests.factories.runs import run_planted_detection
 
 pytestmark = pytest.mark.integration
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_planted_csv(path: Path, *, n_normal: int = 280, n_anomaly: int = 5, seed: int = 0) -> list[int]:
-    """Write a CSV with planted anomalies and return their 0-based row indices.
-
-    Anomalies have num_a=999 (far outside the normal range of ~N(0,1)).
-    The dataset includes:
-      - ``id``: integer row identifier (joinable back to source)
-      - ``num_a``, ``num_b``: numeric features
-      - ``cat``: low-cardinality string
-    """
-    rng = np.random.default_rng(seed)
-    n_total = n_normal + n_anomaly
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    num_a = rng.normal(0.0, 1.0, n_total).tolist()
-    anomaly_indices = list(range(n_normal, n_total))  # last rows are anomalies
-    for i in anomaly_indices:
-        num_a[i] = 999.0
-
-    df = pl.DataFrame(
-        {
-            "id": list(range(n_total)),
-            "num_a": num_a,
-            "num_b": rng.normal(5.0, 2.0, n_total).tolist(),
-            "cat": ["A" if i % 3 != 0 else "B" for i in range(n_total)],
-        }
-    )
-    df.write_csv(str(path))
-    return anomaly_indices
-
-
-def _make_time_sorted_parquet(path: Path, *, n: int = 20, anomaly_orig_idx: int = 0, seed: int = 0) -> None:
-    """Write a Parquet file where sorting by ``ts`` reorders rows.
-
-    Row at ``anomaly_orig_idx`` has num_a=999. The timestamp is DESCENDING in
-    file order, so ascending time-sort moves row 0 (ts=latest) to the end.
-    The sort mismatch bug surfaces when the pipeline looks up the raw value at
-    the wrong original-frame position.
-
-    Written as Parquet (not CSV) so that the ``ts`` column is preserved as a
-    proper Datetime type — Polars CSV inference may not parse date strings,
-    which would prevent the time-sort from firing.
-    """
-    rng = np.random.default_rng(seed)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    base = datetime(2024, 1, 1, tzinfo=UTC)
-    # Timestamps in descending order so ascending sort moves row 0 to the end
-    timestamps = [base + timedelta(days=n - 1 - i) for i in range(n)]
-    num_a = rng.normal(0.0, 1.0, n).tolist()
-    num_a[anomaly_orig_idx] = 999.0
-
-    df = pl.DataFrame(
-        {
-            "id": list(range(n)),
-            "ts": pl.Series(timestamps).dt.cast_time_unit("us"),  # proper Datetime dtype
-            "num_a": num_a,
-            "num_b": rng.normal(5.0, 2.0, n).tolist(),
-        }
-    )
-    df.write_parquet(str(path))
 
 
 def _minimal_config(
@@ -116,20 +59,12 @@ def _minimal_config(
     detectors: list[DetectorConfig] | None = None,
 ) -> Config:
     """Build a minimal Config suitable for fast integration tests."""
-    if detectors is None:
-        # Default: isolation_forest only, avoiding kmeans contamination of composite score
-        detectors = [DetectorConfig(name="isolation_forest")]
-    return Config(
-        source=SourceConfig(uri=str(csv_path), format="csv"),
-        run=RunConfig(workdir=str(workdir), seed=42),
-        columns=ColumnsConfig(id_column="id"),
+    return make_config(
+        csv_path,
+        workdir,
+        contamination=contamination,
+        combination=combination,
         detectors=detectors,
-        scoring=ScoringConfig(
-            combination=combination,
-            contamination=contamination,
-            weighting="equal",
-            min_records=5,
-        ),
     )
 
 
@@ -145,15 +80,13 @@ def test_planted_anomalies_are_detected(tmp_path: Path) -> None:
     isolation_forest (reliable) and explicit contamination so the
     threshold is not data-driven.
     """
-    csv = tmp_path / "data.csv"
-    anomaly_idx = _make_planted_csv(csv, n_normal=280, n_anomaly=5)
-
-    cfg = _minimal_config(
-        csv,
-        tmp_path / "ws",
+    planted = run_planted_detection(
+        tmp_path,
+        n_normal=280,
+        n_anomaly=5,
         contamination=0.03,  # ~5% leaves room; 5/285 ≈ 1.75%
     )
-    result = run_detection(cfg, no_report=True)
+    result = planted.result
 
     assert result.n_succeeded == 1, f"Expected 1 successful group; got {result.groups}"
     assert result.n_anomalies > 0, "No anomalies found at all — pipeline may be broken"
@@ -165,10 +98,8 @@ def test_planted_anomalies_are_detected(tmp_path: Path) -> None:
     flagged_ids = set(df_anomalies["row_id"].to_list())
 
     # row_id is the actual id column value (id = positional index in this CSV,
-    # so 0-based). Planted anomalies are at the last n_anomaly rows (ids 280-284).
-    n_total = 285
-    n_anomaly = 5
-    planted_positions = set(range(n_total - n_anomaly, n_total))
+    # so 0-based, matching planted.anomaly_indices).
+    planted_positions = set(planted.anomaly_indices)
     overlap = flagged_ids & planted_positions
     assert len(overlap) > 0, (
         f"None of the planted anomaly rows ({planted_positions}) appeared in "
@@ -237,8 +168,6 @@ def test_kmeans_auc_above_half() -> None:
     Any detector that cannot score those rows higher than inliers has
     directional failure (random baseline = 0.5).
     """
-    from sklearn.metrics import roc_auc_score
-
     rng = np.random.default_rng(42)
     n_inliers = 270
     n_anomalies = 30
@@ -256,13 +185,7 @@ def test_kmeans_auc_above_half() -> None:
     ]
 
     for name, det in detectors:
-        det.fit(X, seed=42)  # type: ignore[union-attr]
-        scores = det.score_samples(X)  # type: ignore[union-attr]
-        # Calibrated: higher = more anomalous. Negate because protocol says higher = more NORMAL.
-        # After calibration the direction flips; here we work with raw scores directly.
-        # The protocol says score_samples returns higher=more_normal, so anomalies = lower scores.
-        # AUC is computed with anomaly=1 meaning we need lower scores → invert for roc_auc_score.
-        auc = float(roc_auc_score(y_true, -scores))
+        auc = detector_auc(det, X, y_true, seed=42)  # type: ignore[arg-type]
         assert auc > 0.5, (
             f"Detector '{name}' AUC={auc:.4f} on planted anomaly cluster — "
             f"should exceed 0.5 (random baseline). "
@@ -734,52 +657,15 @@ def test_fit_apply_schema_is_stable(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _two_period_parquet(path: Path, *, per_day: int = 100, seed: int = 0) -> dict[str, list[int]]:
-    """Two calendar days of data with distinct planted anomalies per day.
-
-    Day 2024-01-15: ids [n_a0..] have num_a = +999.
-    Day 2024-01-16: a *different* set of ids have num_a = -999.
-    Returns {"2024-01-15": [ids...], "2024-01-16": [ids...]}.
-    """
-    rng = np.random.default_rng(seed)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    n = per_day * 2
-    ids = list(range(n))
-    ts = [datetime(2024, 1, 15, 8, tzinfo=UTC) + timedelta(minutes=i) for i in range(per_day)]
-    ts += [datetime(2024, 1, 16, 8, tzinfo=UTC) + timedelta(minutes=i) for i in range(per_day)]
-    num_a = rng.normal(0.0, 1.0, n).tolist()
-
-    planted = {
-        "2024-01-15": [3, 17, 42],
-        "2024-01-16": [per_day + 5, per_day + 8, per_day + 60, per_day + 91],
-    }
-    for i in planted["2024-01-15"]:
-        num_a[i] = 999.0
-    for i in planted["2024-01-16"]:
-        num_a[i] = -999.0
-
-    pl.DataFrame(
-        {
-            "id": ids,
-            "ts": pl.Series(ts).dt.cast_time_unit("us"),
-            "num_a": num_a,
-            "num_b": rng.normal(5.0, 2.0, n).tolist(),
-        }
-    ).write_parquet(str(path))
-    return planted
-
-
 def _period_config(parquet: Path, workdir: Path, *, detectors: list[DetectorConfig] | None = None) -> Config:
-    return Config(
-        source=SourceConfig(uri=str(parquet), format="parquet"),
-        run=RunConfig(workdir=str(workdir), seed=42),
-        columns=ColumnsConfig(id_column="id", time_column="ts"),
-        history=HistoryConfig(period_granularity="day", roll_non_business=False),
-        detectors=detectors or [DetectorConfig(name="isolation_forest")],
-        scoring=ScoringConfig(
-            combination="composite", contamination="auto", weighting="equal", min_records=5
-        ),
+    return make_config(
+        parquet,
+        workdir,
+        source_format="parquet",
+        combination="composite",
+        detectors=detectors,
+        time_column="ts",
+        history_kwargs={"period_granularity": "day", "roll_non_business": False},
     )
 
 
@@ -801,15 +687,14 @@ def _one_day_two_group_parquet(path: Path, *, per_group: int = 60, seed: int = 0
 
 
 def _period_config_with_groups(parquet: Path, workdir: Path) -> Config:
-    return Config(
-        source=SourceConfig(uri=str(parquet), format="parquet"),
-        run=RunConfig(workdir=str(workdir), seed=42),
-        columns=ColumnsConfig(id_column="id", time_column="ts", group_by=["cat"]),
-        history=HistoryConfig(period_granularity="day", roll_non_business=False),
-        detectors=[DetectorConfig(name="isolation_forest")],
-        scoring=ScoringConfig(
-            combination="composite", contamination="auto", weighting="equal", min_records=5
-        ),
+    return make_config(
+        parquet,
+        workdir,
+        source_format="parquet",
+        combination="composite",
+        time_column="ts",
+        group_by=["cat"],
+        history_kwargs={"period_granularity": "day", "roll_non_business": False},
     )
 
 

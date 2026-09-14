@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import warnings
 from datetime import UTC, datetime
-from pathlib import Path
 
 import polars as pl
 import pytest
@@ -30,15 +29,6 @@ from sorethumb.history.windows import WindowResult, compute_rolling_windows
 from sorethumb.store.workspace import Workspace, make_group_key
 
 pytestmark = pytest.mark.integration
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def ws(tmp_path: Path) -> Workspace:
-    return Workspace.init(tmp_path / "ws")
 
 
 def _seed_totals(

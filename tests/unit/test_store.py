@@ -21,16 +21,9 @@ from sorethumb.store.identifiers import validate_identifier
 from sorethumb.store.models import load_model, plan_digest, save_model, score_with_existing
 from sorethumb.store.results import read_results, write_results
 from sorethumb.store.workspace import Workspace, make_group_key
+from tests.factories.workspaces import open_workspace as _open_ws
 
 pytestmark = pytest.mark.integration
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _open_ws(tmp_path: Path) -> Workspace:
-    return Workspace.init(tmp_path / "ws")
 
 
 def _fit_detector(n: int = 100, d: int = 4, seed: int = 0):
