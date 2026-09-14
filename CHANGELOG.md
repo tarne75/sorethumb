@@ -85,6 +85,18 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `sorethumb run --detectors` silently rewrote `sorethumb.toml`. When an
+  existing config file was overridden with `--detectors`/`-d`, `run()` called
+  `_write_minimal_toml`, which regenerates a full starter TOML from the
+  live `Config` object and writes only `source.uri`, `run.workdir` and
+  `detectors` back in — every other section (`columns`, `profiling`,
+  `features`, `scoring`, `explain`, `history`, `report`, comments, and any
+  nested `params`/`extra_params`) was silently discarded and replaced with
+  defaults. `--detectors` now only replaces `cfg.detectors` for the current
+  invocation in memory; it never writes to the config file. The one
+  remaining auto-write path (prompting to save a starter config when `run`
+  is invoked with a data-file argument and no `sorethumb.toml` exists yet)
+  is unaffected, since there is no existing file for it to destroy.
 - Score-forward artifact loading did not fail closed. `sorethumb score
   --from-run` accepted a source run of any status (`running`, `failed`, or
   even another score-forward run) as long as its row existed;

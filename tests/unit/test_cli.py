@@ -348,6 +348,100 @@ def test_run_json_output(workspace):
     assert g["dropped_detectors"] == []
 
 
+# ---------------------------------------------------------------------------
+# sorethumb run --detectors must not rewrite sorethumb.toml (P0-6)
+# ---------------------------------------------------------------------------
+
+
+def _write_full_toml(path: Path, csv_path: Path, workdir: Path) -> str:
+    """Write a sorethumb.toml exercising every section, nested detector params,
+    quoted strings and a Windows-style path, and return its exact text.
+    """
+    toml = f"""\
+# a leading comment that must survive untouched
+[source]
+uri = {json.dumps(str(csv_path))}
+format = "csv"
+
+[columns]
+id_column = "id"
+group_by = []
+ignore = ["it's \\"quoted\\"", "C:\\\\Users\\\\Test Data\\\\input.csv"]
+
+[profiling]
+null_ratio_drop = 0.9
+null_ratio_flag = 0.5
+
+[features]
+one_hot_max_cardinality = 20
+scaler = "robust"
+correlation_threshold = 0.95
+
+# detectors run as an ensemble
+[[detectors]]
+name = "isolation_forest"
+enabled = true
+
+[detectors.params]
+n_estimators = 50
+
+[detectors.params.extra_params]
+max_features = 0.5
+
+[[detectors]]
+name = "kmeans_distance"
+enabled = false
+
+[scoring]
+contamination = 0.1
+combination = "composite"
+weighting = "equal"
+min_records = 10
+
+[explain]
+enabled = false
+top_n = 3
+max_rows = 100
+
+[run]
+workdir = {json.dumps(str(workdir))}
+seed = 0
+
+[history]
+period_granularity = "day"
+
+[report]
+formats = ["html"]
+# a trailing comment that must survive untouched
+"""
+    path.write_text(toml, encoding="utf-8")
+    return toml
+
+
+def test_run_detectors_override_does_not_rewrite_config(tmp_path: Path):
+    csv_path = tmp_path / "data" / "test.csv"
+    _write_csv(csv_path, n_rows=300)
+    workdir = tmp_path / "ws"
+    toml_path = tmp_path / "sorethumb.toml"
+    original_text = _write_full_toml(toml_path, csv_path, workdir)
+    original_bytes = toml_path.read_bytes()
+
+    result = runner.invoke(
+        app,
+        ["run", "--config", str(toml_path), "--detectors", "ecod", "--no-report", "--json"],
+    )
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+
+    # The config file on disk must be byte-identical to what was written before the run.
+    assert toml_path.read_bytes() == original_bytes
+    assert toml_path.read_text(encoding="utf-8") == original_text
+
+    # The override must still take effect for the run itself.
+    data = json.loads(result.stdout)
+    g = data["groups"][0]
+    assert set(g["detector_flag_rates"]) == {"ecod"}
+
+
 def test_run_summary_frames_flagged_count_as_a_review_shortlist(workspace):
     _, toml_path, _ = workspace
     result = runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])

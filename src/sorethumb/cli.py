@@ -656,11 +656,11 @@ def run(
             "--detectors",
             "-d",
             help=(
-                "Comma-separated detector aliases to use, replacing the config list. "
+                "Comma-separated detector aliases to use, replacing the config list "
+                "for this invocation only — the config file is never modified. "
                 "Aliases: if=isolation_forest  km=kmeans_distance  oc=one_class_svm  "
                 "ecod  lof  hbos. "
-                "Full names are also accepted. "
-                "The config file is updated automatically when this flag is used."
+                "Full names are also accepted."
             ),
         ),
     ] = None,
@@ -696,11 +696,6 @@ def run(
         if typer.confirm("Save settings to sorethumb.toml for future runs?", default=False):
             _write_minimal_toml(config_path, cfg)
             console.print(f"[green]Saved {config_path}[/green]")
-    elif detectors_override is not None and config_existed:
-        # Silently update the config with the new detector selection
-        _write_minimal_toml(config_path, cfg)
-        names = ", ".join(d["name"] for d in detectors_override)
-        console.print(f"[dim]Updated {config_path}: detectors = {names}[/dim]")
 
     # Validate group-filter regex up front so an invalid pattern fails before any work
     if group_filter:

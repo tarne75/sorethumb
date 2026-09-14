@@ -155,7 +155,7 @@ Groups that are already marked complete in the ledger are skipped unless
 | `--group-filter REGEX` | — | Run only groups whose label matches this regex. |
 | `--period YYYY-MM-DD` | — | Force a specific period label (for time-series datasets). |
 | `--limit-groups INT` | — | Cap the number of groups processed (reserved for future use). |
-| `--detectors STR`, `-d` | — | Comma-separated detector aliases, replacing the config list. Aliases: `if`=isolation_forest · `km`=kmeans_distance · `oc`=one_class_svm · `ecod` · `lof` · `hbos`. Full names also accepted. Automatically updates `sorethumb.toml`. |
+| `--detectors STR`, `-d` | — | Comma-separated detector aliases, replacing the config list for this invocation only. Aliases: `if`=isolation_forest · `km`=kmeans_distance · `oc`=one_class_svm · `ecod` · `lof` · `hbos`. Full names also accepted. Never modifies `sorethumb.toml`. |
 | `--json` | off | Machine-readable JSON summary on stdout. |
 | `--dry-run` | off | Resolve the plan and register the run, but fit no models. Still writes the workspace + schema migrations, the `dataset` / `dataset_snapshot` rows, and the `run` row (left in status `running`). Skips the feature plan, detector models, per-group results, history rows and the report. |
 
