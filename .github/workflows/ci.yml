@@ -39,7 +39,7 @@ jobs:
         run: uv pip install "shap>=0.45"
       - run: |
           uv run pytest \
-            -m "not integration and not benchmark" \
+            -m "not benchmark and not slow and not network" \
             --cov=sorethumb \
             --cov-report=xml \
             --cov-fail-under=80

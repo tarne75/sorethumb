@@ -34,6 +34,8 @@ from sorethumb.errors import (
 )
 from tests.synth import make_frame
 
+pytestmark = pytest.mark.unit
+
 
 def test_version_attribute() -> None:
     assert sorethumb.__version__ == "0.1.0"

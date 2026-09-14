@@ -19,6 +19,8 @@ from sorethumb._pipeline import _slice_group_frame
 from sorethumb.profiling.plan import FeaturePlan
 from sorethumb.store.workspace import make_group_key
 
+pytestmark = pytest.mark.unit
+
 
 def _make_plan(*, chosen_time_column: str | None = None) -> FeaturePlan:
     return FeaturePlan(

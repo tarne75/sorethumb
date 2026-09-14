@@ -22,6 +22,8 @@ from sorethumb.store.models import load_model, plan_digest, save_model, score_wi
 from sorethumb.store.results import read_results, write_results
 from sorethumb.store.workspace import Workspace, make_group_key
 
+pytestmark = pytest.mark.integration
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

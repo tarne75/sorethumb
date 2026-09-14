@@ -12,6 +12,8 @@ import warnings
 
 import pytest
 
+pytestmark = pytest.mark.contract
+
 # ── sorethumb.errors ──────────────────────────────────────────────────────────
 
 

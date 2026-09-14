@@ -38,6 +38,8 @@ from sorethumb.detectors.one_class_svm import OneClassSVMDetector
 from sorethumb.features.build import apply_feature_plan, fit_features
 from sorethumb.profiling.plan import build_feature_plan
 
+pytestmark = pytest.mark.integration
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

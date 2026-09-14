@@ -19,6 +19,8 @@ from sorethumb.detectors.lof import LOFDetector
 from sorethumb.detectors.one_class_svm import OneClassSVMDetector
 from sorethumb.errors import ConfigError, DetectorError, SlowStageWarning
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

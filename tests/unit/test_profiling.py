@@ -22,6 +22,8 @@ from sorethumb.profiling.plan import FeaturePlan, build_feature_plan
 from sorethumb.profiling.profile import ColumnProfile, profile_columns
 from tests.synth import make_frame
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

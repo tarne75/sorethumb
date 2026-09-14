@@ -16,6 +16,8 @@ from sorethumb.config import ColumnsConfig, ProfilingConfig
 from sorethumb.profiling.classify import ColumnClass, classify_column
 from sorethumb.profiling.profile import profile_columns
 
+pytestmark = pytest.mark.property
+
 
 def _classify_float_col(
     values: list[float | None],

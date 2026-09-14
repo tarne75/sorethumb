@@ -13,8 +13,11 @@ row at 0.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from sorethumb._pipeline import _flagged_idx_by_score_desc
+
+pytestmark = pytest.mark.unit
 
 
 def _dense_ranks(anomaly_flag: np.ndarray, composite_score: np.ndarray) -> np.ndarray:

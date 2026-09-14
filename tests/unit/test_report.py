@@ -15,6 +15,8 @@ from sorethumb.report.charts import render_trend_chart
 from sorethumb.report.csv import write_group_csv
 from sorethumb.report.html import GroupSection, RunMeta, render_report
 
+pytestmark = pytest.mark.integration
+
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------

@@ -18,6 +18,8 @@ from sorethumb.explain.project import (
 )
 from sorethumb.explain.shap_tree import tree_shap_attributions
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

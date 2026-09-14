@@ -36,6 +36,8 @@ from sorethumb.features.scale import apply_scaler, fit_scaler
 from sorethumb.features.space import FeatureSpace
 from sorethumb.profiling.plan import build_feature_plan
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -30,6 +30,8 @@ from sorethumb.config import (
 )
 from sorethumb.errors import NonFiniteWarning, SampleTruncatedWarning, SlowStageWarning
 
+pytestmark = pytest.mark.integration
+
 runner = CliRunner()
 
 

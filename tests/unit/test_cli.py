@@ -22,6 +22,8 @@ from typer.testing import CliRunner
 
 from sorethumb.cli import app
 
+pytestmark = pytest.mark.integration
+
 runner = CliRunner()
 
 

@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
+import pytest
 
 from sorethumb._pipeline import run_detection
 from sorethumb.config import (
@@ -31,6 +32,8 @@ from sorethumb.config import (
     SourceConfig,
 )
 from sorethumb.store.workspace import make_group_key
+
+pytestmark = pytest.mark.integration
 
 # ---------------------------------------------------------------------------
 # Helpers

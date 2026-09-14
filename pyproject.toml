@@ -189,10 +189,23 @@ warn_return_any = false
 # ── Pytest ───────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["--strict-markers", "--tb=short"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--tb=short",
+    "--durations=15",
+    "-m",
+    "not integration and not property and not benchmark and not slow and not network and not repo_check",
+]
 markers = [
-    "integration: tests that may touch the network (deselected by default)",
-    "benchmark: opt-in accuracy measurement (deselected by default)",
+    "unit: fast, deterministic, network-free tests with no real filesystem, SQLite, subprocess or model-serialisation I/O (the default lane)",
+    "contract: tests that pin a public or persisted contract (public API surface, CLI exit codes/JSON, database schema, model manifests, FeaturePlan compatibility) without exercising a full workflow",
+    "integration: tests that exercise a real workspace, SQLite store, CLI process, full pipeline run, model (de)serialisation, or report rendering",
+    "property: Hypothesis-driven property tests",
+    "slow: tests that are otherwise in-lane but too slow to run on every plain-pytest invocation (deselected by default)",
+    "benchmark: opt-in accuracy measurement against real or synthetic datasets, including detector fitting (deselected by default)",
+    "network: tests that require network access to fetch external datasets or resources (deselected by default)",
+    "repo_check: tests that validate repository-level consistency (generated docs, README snippets, config schema) rather than library behaviour",
 ]
 filterwarnings = [
     "error::sorethumb.errors.SorethumbWarning",

@@ -28,6 +28,8 @@ from sorethumb.detectors.one_class_svm import OneClassSVMDetector
 from sorethumb.errors import StoreError
 from sorethumb.store.workspace import Workspace
 
+pytestmark = pytest.mark.integration
+
 
 class _FitAttempted(BaseException):
     """Raised if any fitting path runs. A BaseException so the per-group

@@ -29,6 +29,8 @@ from sorethumb.history.totals import compute_totals
 from sorethumb.history.windows import WindowResult, compute_rolling_windows
 from sorethumb.store.workspace import Workspace, make_group_key
 
+pytestmark = pytest.mark.integration
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

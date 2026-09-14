@@ -9,6 +9,8 @@ from sorethumb.errors import AntiCorrelatedMemberWarning
 from sorethumb.scoring.calibrate import Calibrator
 from sorethumb.scoring.combine import ScoreEnsemble
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
