@@ -439,6 +439,19 @@ Versioning: [Semantic Versioning](https://semver.org/).
   `benchmark_metadata.json` and prepended to the Markdown table, so a
   published number can be tied to the environment that produced it.
 
+### Security
+
+- Documented the persisted-model trust boundary. A workspace's fitted
+  estimators and calibrators are `joblib`/pickle files; `sorethumb score
+  --from-run` and `run.reuse_models` unpickle them with no sandboxing, which
+  is arbitrary code execution, not safe data loading. The SHA-256 file
+  digests checked on load (see `load_model`) are an integrity check — they
+  catch corruption or a swapped file — not a security boundary: a
+  deliberately malicious file carries its own matching digest. New README
+  "Honest limitations" entry and `SECURITY.md` section spell this out; the
+  `score --from-run` CLI help/docstring and `docs/cli_reference.md` no
+  longer imply the digest check makes a third-party workspace safe to load.
+
 ### Changed
 
 - TreeSHAP's `attribution_kind` is `model_specific`, not `exact`. TreeSHAP runs

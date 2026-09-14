@@ -170,6 +170,12 @@ across runs. Schema drift and library-version drift are detected per group
 (`--strict` promotes both to errors). A new, distinct run is written
 (`score_…` id) that records the source run.
 
+Loading the source run unpickles its persisted estimator and calibrator
+files (`joblib`), which is code execution with no sandboxing — not safe
+data loading. The SHA-256 file digests checked on load catch corruption or
+a swapped file, not a deliberately malicious one. Only run this against a
+workspace you created yourself or fully trust. See [SECURITY.md](../SECURITY.md).
+
 ```bash
 sorethumb score --from-run abc12345
 ```

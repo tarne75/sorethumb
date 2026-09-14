@@ -266,6 +266,11 @@ def load_model(
     The fit-time library versions recorded in the manifest are compared against
     the current environment: a mismatch raises ModelVersionMismatchError when
     *strict*, otherwise emits ModelVersionMismatchWarning.
+
+    The digest checks above are integrity checks, not a security boundary: the
+    estimator file is unpickled via ``joblib.load``, which executes arbitrary
+    code, and a maliciously crafted file carries its own matching digest. Only
+    call this against a workspace you created yourself or fully trust.
     """
     out_dir = workspace.models_dir(run_id, group_key)
 

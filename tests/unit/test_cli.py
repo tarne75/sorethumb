@@ -853,3 +853,34 @@ def test_cli_only_imports_public_api():
         f"CLI imports private library modules at top level: {forbidden}\n"
         "The CLI must import only from 'sorethumb' (the public API)."
     )
+
+
+# ---------------------------------------------------------------------------
+# score --from-run help must not imply sandboxing or safe loading of
+# third-party workspaces (P0-8)
+# ---------------------------------------------------------------------------
+
+
+def test_score_help_documents_pickle_trust_boundary():
+    result = runner.invoke(app, ["score", "--help"])
+    assert result.exit_code == 0
+    help_text = result.output.lower()
+    assert "unpickle" in help_text or "pickle" in help_text
+    assert "not sandboxed" in help_text or "no sandboxing" in help_text
+    assert "trust" in help_text
+
+
+def test_score_help_does_not_overstate_digest_safety():
+    result = runner.invoke(app, ["score", "--help"])
+    assert result.exit_code == 0
+    help_text = result.output.lower()
+    # A digest match must never be presented as proof a workspace is safe.
+    forbidden_claims = [
+        "digests ensure",
+        "digests guarantee",
+        "safe to load",
+        "safely load",
+        "sandboxed environment",
+    ]
+    for claim in forbidden_claims:
+        assert claim not in help_text, f"score --help overstates safety with: {claim!r}"

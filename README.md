@@ -420,6 +420,16 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
   fixed scale, reuse a fitted run: `sorethumb score --from-run RUN_ID`.
 - Unsupervised anomaly ≠ the thing you care about. The library ranks statistical oddity;
   whether an odd record is *interesting* is a domain judgement it cannot make.
+- **A workspace is executable, not just data.** Persisted runs store fitted
+  estimators and calibrators as `joblib`/pickle files, which execute arbitrary
+  code on load. `sorethumb score --from-run` (and `run.reuse_models`, which
+  reloads a persisted model within the same run) unpickle those files with no
+  sandboxing. SHA-256 file digests catch accidental corruption or a
+  misplaced/swapped file — they do **not** make an untrusted pickle safe,
+  since a deliberately crafted malicious file carries its own matching
+  digest. Only load a workspace you created yourself or that came from a
+  source you fully trust; never point these at a workspace received from
+  someone else without inspecting it first. See [SECURITY.md](SECURITY.md).
 
 ---
 

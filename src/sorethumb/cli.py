@@ -763,6 +763,12 @@ def score(
     comparable across runs. Schema and library-version drift are detected per
     group (``--strict`` makes them errors). A new, distinct run is written that
     records the source run.
+
+    Loading a run unpickles its persisted estimator and calibrator files
+    (joblib), which is code execution, not sandboxed data loading. File
+    digests only catch corruption or a swapped file, not a deliberately
+    malicious one. Only use --from-run against a workspace you created
+    yourself or fully trust — see SECURITY.md.
     """
     _setup_logging(log_level)
     cfg = _load_config(config, workdir=workdir, seed=seed, strict=strict, log_level=log_level)
