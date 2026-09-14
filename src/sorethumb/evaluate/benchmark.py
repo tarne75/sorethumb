@@ -51,6 +51,7 @@ def _fmt_or_na(value: float) -> str:
     """Format a float as fixed-point, or "n/a" when it's NaN (undefined)."""
     return "n/a" if math.isnan(value) else f"{value:.4f}"
 
+
 # ---------------------------------------------------------------------------
 # Dataset registry
 # ---------------------------------------------------------------------------
@@ -595,10 +596,9 @@ def write_outputs(
     output_dir: Path,
     metadata: BenchmarkMetadata | None = None,
 ) -> tuple[Path, Path]:
-    """Write Markdown and CSV files (and, if *metadata* is given, a JSON
-    sidecar recording the run's environment) to *output_dir*.
+    """Write Markdown and CSV files (and, if *metadata* is given, a JSON sidecar) to *output_dir*.
 
-    Returns ``(md_path, csv_path)``.
+    The JSON sidecar records the run's environment. Returns ``(md_path, csv_path)``.
     """
     import json  # noqa: PLC0415
 

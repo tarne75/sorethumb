@@ -530,9 +530,7 @@ def test_group_with_no_scoring_detectors_is_failed_not_complete(tmp_path: Path) 
     csv = tmp_path / "data.csv"
     _make_planted_csv(csv, n_normal=200, n_anomaly=3, seed=0)
     workdir = tmp_path / "ws"
-    cfg = _minimal_config(
-        csv, workdir, contamination=0.02, detectors=[DetectorConfig(name="does_not_exist")]
-    )
+    cfg = _minimal_config(csv, workdir, contamination=0.02, detectors=[DetectorConfig(name="does_not_exist")])
 
     r1 = run_detection(cfg, no_report=True)
     assert r1.n_failed == 1
@@ -558,9 +556,7 @@ def test_group_with_no_scoring_detectors_is_failed_not_complete(tmp_path: Path) 
         assert ws.store.run_status(r2.run_id) == "failed"
 
 
-def test_group_ledger_status_survives_detector_fit_failure_and_retry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_group_ledger_status_survives_detector_fit_failure_and_retry(tmp_path: Path) -> None:
     """A detector.fit() exception must fail the group and the run; once the
     underlying problem is gone, retrying the same run_id must actually
     re-execute the group (not report false success from a stale 'complete'
@@ -602,9 +598,7 @@ def test_group_ledger_status_survives_detector_fit_failure_and_retry(
         assert ws.store.group_status(r2.run_id, g1.group_key) == "complete"
 
 
-def test_group_ledger_status_survives_score_samples_failure_and_retry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_group_ledger_status_survives_score_samples_failure_and_retry(tmp_path: Path) -> None:
     """Same as the fit-failure case, but the exception comes from
     score_samples (after a successful fit) instead of fit itself.
     """
@@ -964,7 +958,7 @@ def test_two_configs_on_one_period_do_not_double_count_or_block_each_other(tmp_p
         assert other == {rb.config_hash}
 
 
-def test_period_with_one_failed_group_is_not_marked_complete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_period_with_one_failed_group_is_not_marked_complete(tmp_path: Path) -> None:
     """A period where one of several groups fails must not be recorded
     complete -- only the succeeding group's totals are written -- and a retry
     with the same inputs must re-execute the failed group and only then
@@ -1011,9 +1005,7 @@ def test_period_with_one_failed_group_is_not_marked_complete(tmp_path: Path, mon
         assert len(totals) == 2
 
 
-def test_interruption_between_groups_recovers_all_totals_on_retry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_interruption_between_groups_recovers_all_totals_on_retry(tmp_path: Path) -> None:
     """A crash after one group is marked complete in the run ledger but
     before the next group even starts -- so _record_period_history never
     runs at all -- must not permanently lose the finished group's totals: a

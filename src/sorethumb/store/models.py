@@ -288,7 +288,9 @@ def load_model(
     identity = {"run_id": run_id, "group_key": group_key, "detector_name": detector_name}
     mismatched = {k: (v, manifest.get(k)) for k, v in identity.items() if manifest.get(k) != v}
     if mismatched:
-        detail = ", ".join(f"{k}: expected={want!r} manifest={got!r}" for k, (want, got) in mismatched.items())
+        detail = ", ".join(
+            f"{k}: expected={want!r} manifest={got!r}" for k, (want, got) in mismatched.items()
+        )
         msg = f"Manifest identity mismatch at {manifest_path} ({detail}); refusing to load a swapped model."
         raise ModelIntegrityError(msg)
 
@@ -386,6 +388,7 @@ def score_with_existing(
     rest. A detector whose persisted files exist but fail an integrity check
     (swapped manifest, wrong plan, corrupt file) raises ModelIntegrityError
     instead -- that is never treated as "just missing".
+
     """
     scores: dict[str, np.ndarray] = {}
     calibrated: dict[str, np.ndarray] = {}

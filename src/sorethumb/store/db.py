@@ -629,7 +629,17 @@ class Store:
         """Insert or replace a totals row on its natural key (dataset, group, period, config)."""
         self._conn.execute(
             _UPSERT_TOTAL_SQL,
-            (dataset_fp, group_key, period_label, config_hash, anomaly_count, population, rate, run_id, _now_utc()),
+            (
+                dataset_fp,
+                group_key,
+                period_label,
+                config_hash,
+                anomaly_count,
+                population,
+                rate,
+                run_id,
+                _now_utc(),
+            ),
         )
         self._conn.commit()
 
@@ -645,8 +655,7 @@ class Store:
         totals: list[tuple[str, int, int, float | None]],
         failed_count: int,
     ) -> None:
-        """Write the period row, every group's totals row, and this attempt's
-        completion record as one atomic transaction.
+        """Write the period row, every group's totals row, and this attempt's completion record atomically.
 
         ``totals`` is ``(group_key, anomaly_count, population, rate)`` for every
         group this run has a value for (success, too-few-records, *and* resumed
@@ -680,7 +689,17 @@ class Store:
             for group_key, anomaly_count, population, rate in totals:
                 self._conn.execute(
                     _UPSERT_TOTAL_SQL,
-                    (dataset_fp, group_key, period_label, config_hash, anomaly_count, population, rate, run_id, now),
+                    (
+                        dataset_fp,
+                        group_key,
+                        period_label,
+                        config_hash,
+                        anomaly_count,
+                        population,
+                        rate,
+                        run_id,
+                        now,
+                    ),
                 )
             self._conn.execute(
                 """
@@ -694,7 +713,16 @@ class Store:
                     complete     = excluded.complete,
                     updated_at   = excluded.updated_at
                 """,
-                (dataset_fp, period_label, config_hash, run_id, len(totals), failed_count, int(complete), now),
+                (
+                    dataset_fp,
+                    period_label,
+                    config_hash,
+                    run_id,
+                    len(totals),
+                    failed_count,
+                    int(complete),
+                    now,
+                ),
             )
             self._conn.execute("COMMIT")
         except BaseException:
@@ -703,7 +731,7 @@ class Store:
             raise
 
     def period_is_complete(self, dataset_fp: str, period_label: str, config_hash: str) -> bool:
-        """True iff a run against *config_hash* has completed this period with no failed groups.
+        """Check whether a run against *config_hash* has completed this period with no failed groups.
 
         This is the sole definition of "done" for backfill/resume purposes --
         a period with only a partial totals row (some groups failed, or the

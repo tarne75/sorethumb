@@ -30,7 +30,7 @@ def group_value_json_default(value: object) -> str:
     happens to share the same textual form.
     """
     if hasattr(value, "isoformat"):
-        return f"{type(value).__name__}:{value.isoformat()}"  # type: ignore[attr-defined]
+        return f"{type(value).__name__}:{value.isoformat()}"
     return f"{type(value).__name__}:{value!s}"
 
 
@@ -47,9 +47,7 @@ def make_group_key(group_values: dict[str, object]) -> str:
     three group identities apart. Stringifying the values before calling this
     collapses that distinction and produces colliding keys.
     """
-    json_str = json.dumps(
-        group_values, sort_keys=True, ensure_ascii=False, default=group_value_json_default
-    )
+    json_str = json.dumps(group_values, sort_keys=True, ensure_ascii=False, default=group_value_json_default)
     return hashlib.sha256(json_str.encode()).hexdigest()[:32]
 
 

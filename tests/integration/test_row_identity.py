@@ -164,9 +164,7 @@ def test_fallback_row_id_survives_internal_time_sort(tmp_path: Path) -> None:
         run=RunConfig(workdir=str(tmp_path / "ws"), seed=42),
         columns=ColumnsConfig(),  # no id_column, no declared time_column -> exercises fallback
         detectors=[DetectorConfig(name="isolation_forest")],
-        scoring=ScoringConfig(
-            combination="composite", contamination=0.07, weighting="equal", min_records=5
-        ),
+        scoring=ScoringConfig(combination="composite", contamination=0.07, weighting="equal", min_records=5),
     )
     result = run_detection(cfg, no_report=True)
 

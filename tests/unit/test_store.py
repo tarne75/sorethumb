@@ -216,7 +216,15 @@ def test_migration_006_adds_period_execution_table(tmp_path):
         tables = {r[0] for r in store._conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         cols = {r[1] for r in store._conn.execute("PRAGMA table_info(period_execution)")}
     assert "period_execution" in tables
-    assert {"dataset_fp", "period_label", "config_hash", "run_id", "group_count", "failed_count", "complete"} <= cols
+    assert {
+        "dataset_fp",
+        "period_label",
+        "config_hash",
+        "run_id",
+        "group_count",
+        "failed_count",
+        "complete",
+    } <= cols
 
 
 def test_store_second_open_no_duplicate_migration(tmp_path):

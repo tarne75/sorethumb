@@ -344,11 +344,10 @@ def _record_period_history(
     period_window: tuple[str, str],
     group_results: list[GroupSummary],
 ) -> None:
-    """Write the period row, every group's totals row, and this attempt's
-    completion record for (dataset_fp, period_label, config_hash) atomically.
+    """Atomically write the period row, every group's totals row, and this attempt's completion record.
 
-    Built straight from the :class:`GroupSummary` objects: each one already
-    carries ``n_records`` (the rows that entered the pipeline for this
+    Covers (dataset_fp, period_label, config_hash). Built straight from the :class:`GroupSummary`
+    objects: each one already carries ``n_records`` (the rows that entered the pipeline for this
     group × period — i.e. the population) and ``n_anomalies`` (the count).
 
     We deliberately do **not** feed the persisted results frame to
@@ -1288,9 +1287,10 @@ def _flagged_idx_by_score_desc(anomaly_flag: np.ndarray, composite_score: np.nda
     a fresh global sort) is what keeps ``rank`` positive if and only if a row
     is actually flagged, everywhere it's used (attribution ordering, `rank`).
     """
-    flagged_idx = np.where(anomaly_flag)[0]
+    flagged_idx: np.ndarray = np.where(anomaly_flag)[0]
     if len(flagged_idx) > 0:
-        flagged_idx = flagged_idx[np.argsort(composite_score[flagged_idx])[::-1]]
+        order: np.ndarray = np.argsort(composite_score[flagged_idx])[::-1]
+        flagged_idx = flagged_idx[order]
     return flagged_idx
 
 

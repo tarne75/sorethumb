@@ -79,8 +79,7 @@ def periods_missing_groups(
     lookback_periods: int,
     reference_label: str,
 ) -> list[str]:
-    """Return periods (under *config_hash*) that have some totals but are
-    missing one or more requested groups.
+    """Return periods (under *config_hash*) that have some totals but are missing requested groups.
 
     Bounds the requested list to groups this configuration has actually
     produced before, so a group that never occurs never re-queues the same

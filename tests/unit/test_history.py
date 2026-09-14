@@ -371,7 +371,9 @@ class TestLedgerHelpers:
 
     def test_zero_anomaly_period_is_complete(self, ws):
         with ws:
-            _seed_totals(ws, self.DS, "r1", "2026-09-01", "gk1", 0, 100, config_hash=self.CFG)  # zero anomalies
+            _seed_totals(
+                ws, self.DS, "r1", "2026-09-01", "gk1", 0, 100, config_hash=self.CFG
+            )  # zero anomalies
             pending = iter_pending_periods(ws.store, self.DS, self.CFG, ["2026-09-01"])
         # zero anomalies is still complete — must be skipped
         assert pending == []
@@ -443,8 +445,12 @@ class TestLedgerHelpers:
             # Under cfgB: only gk_a has ever been seen -- gk_b is unbound here.
             ws.store.upsert_total(self.DS, gk_a, "2026-09-01", 7, 100, 0.07, "r1", "cfgB")
 
-            missing_a = periods_missing_groups(ws.store, self.DS, "cfgA", [gk_a, gk_b], "day", 28, "2026-09-03")
-            missing_b = periods_missing_groups(ws.store, self.DS, "cfgB", [gk_a, gk_b], "day", 28, "2026-09-03")
+            missing_a = periods_missing_groups(
+                ws.store, self.DS, "cfgA", [gk_a, gk_b], "day", 28, "2026-09-03"
+            )
+            missing_b = periods_missing_groups(
+                ws.store, self.DS, "cfgB", [gk_a, gk_b], "day", 28, "2026-09-03"
+            )
 
         assert "2026-09-01" in missing_a
         assert missing_b == [], "gk_b was never seen under cfgB, so cfgA's widening must not apply to it"

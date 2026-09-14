@@ -575,7 +575,7 @@ def test_generate_metadata_fields_populated():
 
 
 def test_generate_metadata_matches_installed_versions():
-    import numpy
+    import numpy as np
     import scipy
     import sklearn
 
@@ -584,7 +584,7 @@ def test_generate_metadata_matches_installed_versions():
 
     meta = generate_metadata()
     assert meta.sorethumb_version == sorethumb_version
-    assert meta.numpy_version == numpy.__version__
+    assert meta.numpy_version == np.__version__
     assert meta.scipy_version == scipy.__version__
     assert meta.scikit_learn_version == sklearn.__version__
 
