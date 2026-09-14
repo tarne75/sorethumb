@@ -947,18 +947,3 @@ def test_feature_space_instantiation():
     assert fs.matrix.shape == (10, 3)
     assert fs.feature_names == names
     assert len(fs.feature_schema_hash) == 32
-
-
-def test_plan_json_roundtrip_after_fit():
-    """FeaturePlan round-trips through JSON after M2 fields are populated."""
-    df = _make_cat_df()
-    config = _make_config(pca=False)
-    plan = build_feature_plan(df, config)
-    fit_features(df, plan, config)
-
-    json_str = plan.to_json()
-    restored = type(plan).from_json(json_str)
-    assert restored.scaler_type == plan.scaler_type
-    assert restored.output_dtype == plan.output_dtype
-    assert set(restored.scaler_params.keys()) == set(plan.scaler_params.keys())
-    assert restored.correlation_drop_list == plan.correlation_drop_list

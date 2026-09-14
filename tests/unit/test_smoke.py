@@ -1,14 +1,15 @@
-"""M0 smoke tests — verify the package installs, imports, and CLI works."""
+"""M0 smoke tests — verify the package installs and imports.
+
+See tests/contract/test_cli.py::test_version for the CLI --version contract.
+"""
 
 import importlib
 import warnings
 
 import polars as pl
 import pytest
-from typer.testing import CliRunner
 
 import sorethumb
-from sorethumb.cli import app
 from sorethumb.errors import ColumnDroppedWarning
 from tests.synth import make_frame
 
@@ -17,13 +18,6 @@ pytestmark = pytest.mark.unit
 
 def test_version_attribute() -> None:
     assert sorethumb.__version__ == "0.1.0"
-
-
-def test_cli_version() -> None:
-    runner = CliRunner()
-    result = runner.invoke(app, ["--version"])
-    assert result.exit_code == 0
-    assert "sorethumb 0.1.0" in result.output
 
 
 def test_strict_mode_warning_becomes_error() -> None:

@@ -1,13 +1,23 @@
-"""Unit tests for M6: period resolution, ledger, totals, rolling windows."""
+"""Integration tests for sorethumb.history: ledger, totals, rolling windows
+against a real Workspace/SQLite store.
+
+See tests/unit/history/test_periods.py for the pure period-label/window math
+(no store involved).
+"""
 
 from __future__ import annotations
 
 import warnings
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
+import numpy as np
 import polars as pl
 import pytest
 
+from sorethumb import Config
+from sorethumb._pipeline import run_detection
+from sorethumb.config import DetectorConfig
 from sorethumb.errors import PopulationMismatchWarning
 from sorethumb.history.ledger import (
     clear_period,
@@ -17,16 +27,12 @@ from sorethumb.history.ledger import (
     periods_missing_groups,
     resolve_backfill_range,
 )
-from sorethumb.history.periods import (
-    period_bounds,
-    period_range,
-    resolve_period,
-    step_back,
-    step_forward,
-)
+from sorethumb.history.periods import step_back, step_forward
 from sorethumb.history.totals import compute_totals
 from sorethumb.history.windows import WindowResult, compute_rolling_windows
 from sorethumb.store.workspace import Workspace, make_group_key
+from tests.factories.configs import make_config
+from tests.factories.frames import write_two_period_parquet
 
 pytestmark = pytest.mark.integration
 
@@ -75,126 +81,6 @@ def _seed_totals(
         (dataset_fp, period_label, config_hash, run_id),
     )
     ws.store._conn.commit()
-
-
-# ---------------------------------------------------------------------------
-# periods.py — resolve_period
-# ---------------------------------------------------------------------------
-
-
-class TestResolvePeriod:
-    def test_day_label_equals_period_from(self):
-        ref = datetime(2026, 9, 3, 14, 30, tzinfo=UTC)
-        frm, to, label = resolve_period(ref, "day", False)
-        assert label == frm == "2026-09-03"
-        assert to == "2026-09-04"
-
-    def test_day_roll_weekend_saturday(self):
-        sat = datetime(2026, 9, 5, 10, 0, tzinfo=UTC)  # Saturday
-        frm, _, label = resolve_period(sat, "day", True)
-        assert label == "2026-09-04"  # Friday
-
-    def test_day_roll_weekend_sunday(self):
-        sun = datetime(2026, 9, 6, 10, 0, tzinfo=UTC)  # Sunday
-        frm, _, label = resolve_period(sun, "day", True)
-        assert label == "2026-09-04"  # Friday
-
-    def test_day_no_roll_weekday(self):
-        wed = datetime(2026, 9, 2, 0, 0, tzinfo=UTC)  # Wednesday
-        frm, _, label = resolve_period(wed, "day", True)
-        assert label == "2026-09-02"
-
-    def test_day_window_half_open(self):
-        ref = datetime(2026, 9, 3, tzinfo=UTC)
-        frm, to, _ = resolve_period(ref, "day", False)
-        assert frm == "2026-09-03"
-        assert to == "2026-09-04"
-
-    def test_week_label_is_monday(self):
-        wed = datetime(2026, 9, 2, tzinfo=UTC)  # Wednesday
-        frm, to, label = resolve_period(wed, "week", False)
-        assert label == frm == "2026-08-31"  # Monday
-        assert to == "2026-09-07"
-
-    def test_month_label_is_first(self):
-        ref = datetime(2026, 9, 15, tzinfo=UTC)
-        frm, to, label = resolve_period(ref, "month", False)
-        assert label == frm == "2026-09-01"
-        assert to == "2026-10-01"
-
-    def test_month_december_wraps(self):
-        ref = datetime(2026, 12, 20, tzinfo=UTC)
-        frm, to, label = resolve_period(ref, "month", False)
-        assert label == "2026-12-01"
-        assert to == "2027-01-01"
-
-    def test_hour_label_and_window(self):
-        ref = datetime(2026, 9, 3, 14, 45, tzinfo=UTC)
-        frm, to, label = resolve_period(ref, "hour", False)
-        assert label == frm == "2026-09-03T14"
-        assert to == "2026-09-03T15"
-
-
-class TestPeriodBounds:
-    """period_bounds(label, g) must reproduce the window resolve_period built."""
-
-    @pytest.mark.parametrize(
-        ("ref", "granularity"),
-        [
-            (datetime(2026, 9, 3, 14, 30, tzinfo=UTC), "day"),
-            (datetime(2026, 9, 2, tzinfo=UTC), "week"),
-            (datetime(2026, 12, 20, tzinfo=UTC), "month"),
-            (datetime(2026, 9, 3, 14, 45, tzinfo=UTC), "hour"),
-        ],
-    )
-    def test_round_trips_resolve_period(self, ref, granularity):
-        frm, to, label = resolve_period(ref, granularity, roll_non_business=False)
-        assert period_bounds(label, granularity) == (frm, to)
-
-
-# ---------------------------------------------------------------------------
-# periods.py — step_back / step_forward / period_range
-# ---------------------------------------------------------------------------
-
-
-class TestStepNavigation:
-    def test_step_back_day(self):
-        assert step_back("2026-09-03", "day", 3) == "2026-08-31"
-
-    def test_step_forward_day(self):
-        assert step_forward("2026-09-03", "day", 1) == "2026-09-04"
-
-    def test_step_back_week(self):
-        assert step_back("2026-09-07", "week", 1) == "2026-08-31"
-
-    def test_step_forward_week(self):
-        assert step_forward("2026-08-31", "week", 1) == "2026-09-07"
-
-    def test_step_back_month_crosses_year(self):
-        assert step_back("2026-01-01", "month", 1) == "2025-12-01"
-
-    def test_step_forward_month_crosses_year(self):
-        assert step_forward("2025-12-01", "month", 1) == "2026-01-01"
-
-    def test_step_back_hour(self):
-        assert step_back("2026-09-03T14", "hour", 2) == "2026-09-03T12"
-
-    def test_step_forward_hour(self):
-        assert step_forward("2026-09-03T23", "hour", 1) == "2026-09-04T00"
-
-    def test_period_range_inclusive(self):
-        labels = period_range("2026-09-01", "2026-09-03", "day")
-        assert labels == ["2026-09-01", "2026-09-02", "2026-09-03"]
-
-    def test_period_range_single(self):
-        assert period_range("2026-09-01", "2026-09-01", "day") == ["2026-09-01"]
-
-    def test_period_range_empty_when_start_after_end(self):
-        assert period_range("2026-09-04", "2026-09-01", "day") == []
-
-    def test_period_range_month_four_periods(self):
-        labels = period_range("2026-01-01", "2026-04-01", "month")
-        assert labels == ["2026-01-01", "2026-02-01", "2026-03-01", "2026-04-01"]
 
 
 # ---------------------------------------------------------------------------
@@ -879,3 +765,342 @@ class TestRollingWindows:
         r = results[0]
         assert r.current_anomaly_count == 10
         assert r.current_population == 1000
+
+
+# ---------------------------------------------------------------------------
+# Full pipeline: period-label overrides and history-ledger recording (P0-2)
+# ---------------------------------------------------------------------------
+
+
+def _period_config(parquet: Path, workdir: Path, *, detectors: list[DetectorConfig] | None = None) -> Config:
+    return make_config(
+        parquet,
+        workdir,
+        source_format="parquet",
+        combination="composite",
+        detectors=detectors,
+        time_column="ts",
+        history_kwargs={"period_granularity": "day", "roll_non_business": False},
+    )
+
+
+def _one_day_two_group_parquet(path: Path, *, per_group: int = 60, seed: int = 0) -> None:
+    """One calendar day, two groups ("cat" A/B), each large enough to fit a detector."""
+    rng = np.random.default_rng(seed)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    n = per_group * 2
+    ts = [datetime(2024, 1, 15, 8, tzinfo=UTC) + timedelta(minutes=i) for i in range(n)]
+    pl.DataFrame(
+        {
+            "id": list(range(n)),
+            "ts": pl.Series(ts).dt.cast_time_unit("us"),
+            "cat": ["A"] * per_group + ["B"] * per_group,
+            "num_a": rng.normal(0.0, 1.0, n).tolist(),
+            "num_b": rng.normal(5.0, 2.0, n).tolist(),
+        }
+    ).write_parquet(str(path))
+
+
+def _period_config_with_groups(parquet: Path, workdir: Path) -> Config:
+    return make_config(
+        parquet,
+        workdir,
+        source_format="parquet",
+        combination="composite",
+        time_column="ts",
+        group_by=["cat"],
+        history_kwargs={"period_granularity": "day", "roll_non_business": False},
+    )
+
+
+@pytest.mark.parametrize("label", ["2024-01-15", "2024-01-16"])
+def test_period_override_filters_to_that_window(tmp_path: Path, label: str) -> None:
+    parquet = tmp_path / "two_periods.parquet"
+    per_day = 100
+    planted = write_two_period_parquet(parquet, per_day=per_day)
+    cfg = _period_config(parquet, tmp_path / "ws")
+
+    result = run_detection(cfg, period_label_override=label, no_report=True)
+
+    assert result.period_label == label
+    assert result.n_succeeded == 1
+    group = result.groups[0]
+    # Only that day's rows entered the pipeline — not the whole 200-row dataset.
+    assert group.n_records == per_day
+
+    flagged = set(pl.read_parquet(group.results_path)["row_id"].to_list())
+    this_day = set(planted[label])
+    other_day = set(planted["2024-01-16" if label == "2024-01-15" else "2024-01-15"])
+
+    # This period's planted anomalies are caught; the other period's ids are
+    # absent entirely (they were never in the filtered frame).
+    assert this_day <= flagged, f"missed planted anomalies {this_day - flagged}"
+    assert not (flagged & other_day)
+    assert all(rid < per_day for rid in flagged) == (label == "2024-01-15")
+
+
+def test_period_overrides_produce_distinct_runs(tmp_path: Path) -> None:
+    parquet = tmp_path / "two_periods.parquet"
+    write_two_period_parquet(parquet)
+    cfg = _period_config(parquet, tmp_path / "ws")
+
+    r15 = run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+    r16 = run_detection(cfg, period_label_override="2024-01-16", no_report=True)
+
+    assert r15.run_id != r16.run_id
+    assert r15.n_anomalies > 0
+    assert r16.n_anomalies > 0
+
+
+def test_period_run_records_history_ledger(tmp_path: Path) -> None:
+    """run_detection writes the period row + per-group totals so backfill is idempotent."""
+    parquet = tmp_path / "two_periods.parquet"
+    per_day = 100
+    write_two_period_parquet(parquet, per_day=per_day)
+    workdir = tmp_path / "ws"
+    cfg = _period_config(parquet, workdir)
+
+    result = run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+    dataset_fp = result.dataset_fp
+
+    with Workspace.open(workdir) as ws:
+        # period row carries the [from, to) window for the label
+        prow = ws.store._conn.execute(
+            "SELECT period_from, period_to FROM period WHERE dataset_fp=? AND period_label=?",
+            (dataset_fp, "2024-01-15"),
+        ).fetchone()
+        assert prow is not None
+        assert (prow["period_from"], prow["period_to"]) == ("2024-01-15", "2024-01-16")
+
+        # one totals row per processed group, population == rows that entered the pipeline
+        totals = ws.store.totals_for_periods(dataset_fp, ["2024-01-15"], result.config_hash)
+        assert len(totals) == result.n_succeeded == 1
+        row = totals[0]
+        assert row["population"] == per_day
+        assert row["anomaly_count"] == result.groups[0].n_anomalies
+        assert row["run_id"] == result.run_id
+
+        # the label is now complete: backfill would not re-queue it
+        assert iter_pending_periods(
+            ws.store, dataset_fp, result.config_hash, ["2024-01-15", "2024-01-16"]
+        ) == ["2024-01-16"]
+
+
+def test_repeat_period_run_is_idempotent_in_history_ledger(tmp_path: Path) -> None:
+    parquet = tmp_path / "two_periods.parquet"
+    write_two_period_parquet(parquet, per_day=100)
+    workdir = tmp_path / "ws"
+    cfg = _period_config(parquet, workdir)
+
+    r1 = run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+    r2 = run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+    assert r1.run_id == r2.run_id
+
+    with Workspace.open(workdir) as ws:
+        totals = ws.store.totals_for_periods(r1.dataset_fp, ["2024-01-15"], r1.config_hash)
+        assert len(totals) == 1, "a repeat run must not duplicate the totals row"
+        assert ws.store.period_is_complete(r1.dataset_fp, "2024-01-15", r1.config_hash) is True
+
+
+def test_two_configs_on_one_period_do_not_double_count_or_block_each_other(tmp_path: Path) -> None:
+    """Two configurations processing the same period_label must each get
+    their own totals row (scoped by config_hash), and running one must not
+    make the ledger think the other is already done.
+    """
+    parquet = tmp_path / "two_periods.parquet"
+    write_two_period_parquet(parquet, per_day=100)
+    workdir = tmp_path / "ws"
+    cfg_a = _period_config(parquet, workdir, detectors=[DetectorConfig(name="isolation_forest")])
+    cfg_b = _period_config(parquet, workdir, detectors=[DetectorConfig(name="kmeans_distance")])
+    assert cfg_a.config_hash() != cfg_b.config_hash()
+
+    ra = run_detection(cfg_a, period_label_override="2024-01-15", no_report=True)
+    assert ra.n_succeeded == 1
+
+    with Workspace.open(workdir) as ws:
+        # Config B has never run this period -- must still be pending under
+        # its own hash, regardless of config A having just completed it.
+        pending_b = iter_pending_periods(ws.store, ra.dataset_fp, cfg_b.config_hash(), ["2024-01-15"])
+        assert pending_b == ["2024-01-15"]
+
+    rb = run_detection(cfg_b, period_label_override="2024-01-15", no_report=True)
+    assert rb.n_succeeded == 1
+    assert ra.run_id != rb.run_id
+
+    with Workspace.open(workdir) as ws:
+        totals_a = ws.store.totals_for_periods(ra.dataset_fp, ["2024-01-15"], ra.config_hash)
+        totals_b = ws.store.totals_for_periods(rb.dataset_fp, ["2024-01-15"], rb.config_hash)
+        assert len(totals_a) == 1
+        assert len(totals_b) == 1
+        # Each config's own read never includes the other's row.
+        assert {t["config_hash"] for t in totals_a} == {ra.config_hash}
+        assert {t["config_hash"] for t in totals_b} == {rb.config_hash}
+
+        assert ws.store.period_is_complete(ra.dataset_fp, "2024-01-15", ra.config_hash) is True
+        assert ws.store.period_is_complete(rb.dataset_fp, "2024-01-15", rb.config_hash) is True
+
+        # Rolling-window aggregation for A must not pick up B's contribution.
+        other = ws.store.other_config_hashes_for_periods(ra.dataset_fp, ["2024-01-15"], ra.config_hash)
+        assert other == {rb.config_hash}
+
+
+def test_period_with_one_failed_group_is_not_marked_complete(tmp_path: Path) -> None:
+    """A period where one of several groups fails must not be recorded
+    complete -- only the succeeding group's totals are written -- and a retry
+    with the same inputs must re-execute the failed group and only then
+    complete the period.
+    """
+    from sorethumb.detectors.isolation_forest import IsolationForestDetector
+
+    parquet = tmp_path / "grouped.parquet"
+    _one_day_two_group_parquet(parquet)
+    workdir = tmp_path / "ws"
+    cfg = _period_config_with_groups(parquet, workdir)
+
+    calls = {"n": 0}
+    orig_fit = IsolationForestDetector.fit
+
+    def _flaky_fit(self: object, *a: object, **k: object) -> object:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ValueError("synthetic failure for the second group")
+        return orig_fit(self, *a, **k)  # type: ignore[arg-type]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(IsolationForestDetector, "fit", _flaky_fit)
+        r1 = run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+
+    assert r1.n_succeeded == 1
+    assert r1.n_failed == 1
+
+    with Workspace.open(workdir) as ws:
+        assert ws.store.period_is_complete(r1.dataset_fp, "2024-01-15", r1.config_hash) is False
+        totals = ws.store.totals_for_periods(r1.dataset_fp, ["2024-01-15"], r1.config_hash)
+        assert len(totals) == 1, "only the succeeding group's totals are recorded"
+
+    # Retry with the same inputs: the failed group must be re-executed (fit is
+    # no longer patched), and only then does the period become complete.
+    r2 = run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+    assert r2.run_id == r1.run_id
+    assert r2.n_succeeded == 1
+    assert r2.n_skipped == 1
+
+    with Workspace.open(workdir) as ws:
+        assert ws.store.period_is_complete(r2.dataset_fp, "2024-01-15", r2.config_hash) is True
+        totals = ws.store.totals_for_periods(r2.dataset_fp, ["2024-01-15"], r2.config_hash)
+        assert len(totals) == 2
+
+
+def test_interruption_between_groups_recovers_all_totals_on_retry(tmp_path: Path) -> None:
+    """A crash after one group is marked complete in the run ledger but
+    before the next group even starts -- so _record_period_history never
+    runs at all -- must not permanently lose the finished group's totals: a
+    retry must record every group, including the one that was only resumed
+    (skipped) this time, not just the one it (re-)executes.
+    """
+    import sorethumb._pipeline as pipe
+
+    parquet = tmp_path / "grouped.parquet"
+    _one_day_two_group_parquet(parquet)
+    workdir = tmp_path / "ws"
+    cfg = _period_config_with_groups(parquet, workdir)
+
+    real_execute_group = pipe._execute_group
+    calls = {"n": 0}
+
+    def _crash_on_second_group(*a: object, **k: object) -> object:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("simulated crash between groups")
+        return real_execute_group(*a, **k)  # type: ignore[arg-type]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pipe, "_execute_group", _crash_on_second_group)
+        with pytest.raises(RuntimeError, match="simulated crash between groups"):
+            run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+
+    with Workspace.open(workdir) as ws:
+        run_row = ws.store.list_runs(limit=1)[0]
+        run_id = str(run_row["run_id"])
+        dataset_fp = str(run_row["dataset_fp"])
+        config_hash = cfg.config_hash()
+
+        # The first group committed to the run ledger before the crash; the
+        # second group was never attempted. Neither has a totals row yet, and
+        # the period is not complete -- _record_period_history never ran.
+        run_groups = ws.store.all_run_groups(run_id)
+        assert len(run_groups) == 1
+        assert run_groups[0]["status"] == "complete"
+        assert ws.store.totals_for_periods(dataset_fp, ["2024-01-15"], config_hash) == []
+        assert ws.store.period_is_complete(dataset_fp, "2024-01-15", config_hash) is False
+
+    r2 = run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+    assert r2.run_id == run_id
+    assert r2.n_skipped == 1, "the first group must be resumed, not re-executed"
+    assert r2.n_succeeded == 1, "the second group runs for the first time"
+
+    with Workspace.open(workdir) as ws:
+        assert ws.store.period_is_complete(r2.dataset_fp, "2024-01-15", r2.config_hash) is True
+        totals = ws.store.totals_for_periods(r2.dataset_fp, ["2024-01-15"], r2.config_hash)
+        assert len(totals) == 2, "the resumed (skipped) group's totals must be recorded too"
+
+
+def _write_days_parquet(path: Path, *, days: list[str], per_day: int = 80, seed: int = 0) -> None:
+    """Write ``per_day`` rows for each ISO day in *days*; row 3 of each day is a +999 anomaly."""
+    rng = np.random.default_rng(seed)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ids: list[int] = []
+    ts: list[datetime] = []
+    num_a: list[float] = []
+    for d, day in enumerate(days):
+        base = datetime.fromisoformat(day).replace(tzinfo=UTC) + timedelta(hours=8)
+        col = rng.normal(0.0, 1.0, per_day).tolist()
+        col[3] = 999.0
+        for r in range(per_day):
+            ids.append(d * per_day + r)
+            ts.append(base + timedelta(minutes=r))
+            num_a.append(col[r])
+    pl.DataFrame(
+        {
+            "id": ids,
+            "ts": pl.Series(ts).dt.cast_time_unit("us"),
+            "num_a": num_a,
+            "num_b": rng.normal(5.0, 2.0, len(ids)).tolist(),
+        }
+    ).write_parquet(str(path))
+
+
+def test_appending_a_snapshot_keeps_dataset_identity_and_history(tmp_path: Path) -> None:
+    """Appending a day of rows must not orphan the previous period's history."""
+    parquet = tmp_path / "growing.parquet"
+    workdir = tmp_path / "ws"
+    cfg = _period_config(parquet, workdir)
+
+    # Snapshot 1: only 2024-01-15 exists. Process that period.
+    _write_days_parquet(parquet, days=["2024-01-15"])
+    r1 = run_detection(cfg, period_label_override="2024-01-15", no_report=True)
+
+    # Snapshot 2: 2024-01-16 appended. Process the new period.
+    _write_days_parquet(parquet, days=["2024-01-15", "2024-01-16"])
+    r2 = run_detection(cfg, period_label_override="2024-01-16", no_report=True)
+
+    # Logical identity is unchanged; the snapshot fingerprint moved.
+    assert r1.dataset_fp == r2.dataset_fp
+    assert r1.snapshot_fp
+    assert r2.snapshot_fp
+    assert r1.snapshot_fp != r2.snapshot_fp
+    assert r1.run_id != r2.run_id  # snapshot_fp is part of the run id
+
+    with Workspace.open(workdir) as ws:
+        dfp = r2.dataset_fp
+        # Both periods' totals live under the one logical dataset — nothing orphaned.
+        labels = {
+            r["period_label"]
+            for r in ws.store.totals_for_periods(dfp, ["2024-01-15", "2024-01-16"], r2.config_hash)
+        }
+        assert labels == {"2024-01-15", "2024-01-16"}
+        assert iter_pending_periods(ws.store, dfp, r2.config_hash, ["2024-01-15", "2024-01-16"]) == []
+
+        # Both snapshots are recorded against the same dataset_fp.
+        snaps = {s["snapshot_fp"] for s in ws.store.dataset_snapshots(dfp)}
+        assert snaps == {r1.snapshot_fp, r2.snapshot_fp}

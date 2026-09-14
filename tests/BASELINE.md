@@ -187,3 +187,67 @@ Verified after: **781 collected** (872 - 141 tier tests - 8 public_api trims - 2
 ported/new = 781, and every test now carries exactly one lane marker — the 172 previously-unmarked
 tier-coverage tests are simply gone). CI lane: **759 passed, 22 deselected**. Plain `pytest`:
 **464 passed**. ruff, ruff format, mypy, and the doc-consistency check all clean.
+
+## What P1-4 changed
+
+Reorganised the whole tree by behavioural ownership and split every monolith the plan named
+(`test_detectors.py`, `test_cli.py`, `test_end_to_end.py`, `test_store.py`, `test_features.py`,
+`test_history.py`) by seam. No test body's assertions changed in this phase — every move/split
+was verified to reproduce the exact same pass count before moving on to the next file.
+
+- **`tests/unit/` subpackages**: `config/`, `profiling/`, `features/`, `scoring/`, `explain/`,
+  `io/`, `evaluation/` (the plan's named seven) plus three more real ones discovered while
+  splitting: `detectors/` (per-detector fit/score behaviour), `history/` (pure period-label math,
+  split out of `test_history.py` -- `TestResolvePeriod`/`TestPeriodBounds`/`TestStepNavigation`
+  touch no Workspace at all), and `store/` (`make_group_key`/`validate_identifier`, equally pure).
+- **`tests/contract/`** (new top-level directory): `test_public_api.py` (moved as-is),
+  `test_cli.py` (JSON/exit-code/--help contract -- real `run` invocations only where unavoidable
+  as setup, e.g. `config show <run_id>` needs a run_id to exist), `test_detector_plugins.py`
+  (the `Detector` protocol, the registry, `available_extra_params()` -- the shape every plugin
+  must have, split out of `test_detectors.py`), `test_database_schema.py` (Workspace.init/open,
+  every migration, busy_timeout/checksums/schema-ceiling hardening, dataset/run/group CRUD,
+  write_results/read_results), `test_model_manifests.py` (save_model/load_model, library-version
+  recording, the P0-5 fails-closed cases), `test_feature_plan_compat.py` (FeaturePlan's
+  to_json/from_json contract -- consolidated from three tests in `test_profiling.py` plus one in
+  `test_features.py`, since a persisted plan is read back by score-forward and by a resumed run
+  released later, making it one contract regardless of which module happens to build the plan).
+- **`tests/integration/`**: added `test_pipeline_detection.py`, `test_pipeline_explain.py`,
+  `test_pipeline_resume.py` (split from `test_end_to_end.py` by seam: core detection/ranking/
+  schema-stability, attribution correctness, and run-identity/resume/failed-group semantics),
+  `test_store_workflows.py` (interrupted-run recovery, score_with_existing, retention/pruning --
+  the `test_store.py` content that's a multi-step workflow rather than one persistence contract),
+  and `test_cli.py` (the CLI tests that assert on workflow correctness -- idempotency, dry-run
+  isolation, config-byte-preservation -- rather than output shape). `test_end_to_end.py`'s report-
+  regeneration and history/period-override tests were merged into the existing
+  `tests/integration/test_report.py` and `test_history.py` respectively, since "report" and
+  "history" are the plan's own named integration seams and CLI-driven history/report tests belong
+  with the rest of that seam's tests, not scattered across a separate "pipeline" grouping.
+- **`tests/repo_check/`** (new top-level directory): `test_docs_checks.py` (moved as-is).
+- **`tests/conftest.py`**: replaced the two fixtures that had zero real callers
+  (`simple_frame`/`frame_with_anomalies` -- checked with a repo-wide grep before removing) with a
+  single re-export of the `workspace` fixture from `tests/factories/workspaces.py`, now needed
+  repo-wide since Workspace-backed tests live in `unit/`, `contract/`, and `integration/`.
+  `tests/unit/conftest.py` (P1-2's home for this same re-export) is gone -- one fixture, one home.
+- **Found and fixed while auditing "no CLI process may stay labelled unit"**: `test_smoke.py`
+  had its own `test_cli_version` invoking `runner.invoke(app, ["--version"])` -- a real CliRunner
+  call, and an exact duplicate of `test_cli.py::test_version`'s assertions (already contract from
+  this phase's split). Deleted the smoke-file copy.
+
+Verified after every split (not just at the end): **780 collected** (781 - 1 for the
+`test_cli_version` duplicate just found; every other move/split reproduced the prior file's exact
+pass count). CI lane: **758 passed, 22 deselected**, **~43s** (branch coverage still 72.89% --
+identical to before this phase, confirming it's a pure reorganisation). Plain `pytest`: **583
+passed** (up from 464 -- the default lane now also runs the populated `contract` lane, which
+didn't have real content until this phase; still ~10s). Per-marker collection: `unit` 462,
+`contract` 122, `integration` 159, `property` 5, `benchmark` 22, `repo_check` 10 -- sums to 780,
+every test carries exactly one marker. ruff, ruff format, mypy, and the doc-consistency check all
+clean.
+
+**Known wart, left alone**: `tests/contract/test_cli.py` and `tests/integration/test_cli.py`
+each define their own local `workspace` fixture returning `(csv_path, toml_path, workdir)` --
+same name, different type, as the shared root-conftest `workspace` fixture (a `Workspace`
+object). Pytest's per-module fixture resolution means there's no actual runtime conflict (the
+local definition always wins in its own file), but it's a naming trap for anyone skimming both
+files side by side. Renaming it (e.g. to `cli_workspace`) would touch every one of the ~50 CLI
+test signatures for a cosmetic win; left as a note rather than done under this phase's already
+large diff.

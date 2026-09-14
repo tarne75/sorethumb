@@ -1,19 +1,7 @@
-"""Shared pytest fixtures."""
+"""Shared pytest fixtures, available to every test in the tree."""
 
-import polars as pl
-import pytest
+from __future__ import annotations
 
-from tests.synth import make_frame
+from tests.factories.workspaces import workspace as ws
 
-
-@pytest.fixture
-def simple_frame() -> pl.DataFrame:
-    """A plain numeric frame with no special columns."""
-    df, _ = make_frame(n_rows=300, seed=0)
-    return df
-
-
-@pytest.fixture
-def frame_with_anomalies() -> tuple[pl.DataFrame, list[int]]:
-    """Frame with 10 injected point anomalies; returns (df, anomaly_row_indices)."""
-    return make_frame(n_rows=300, seed=1, n_anomalies=10)
+__all__ = ["ws"]
