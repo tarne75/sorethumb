@@ -126,3 +126,16 @@ class AntiCorrelatedMemberWarning(SorethumbWarning):
     quietly becoming two-way). The bad-member guard still drops members for
     combination="composite", where dropping does not change the decision rule.
     """
+
+
+class ZeroAnomalyWarning(SorethumbWarning):
+    """A successful group's configured intersection flagged zero rows.
+
+    Every configured detector's vote is required by definition for
+    combination="intersection" (see AntiCorrelatedMemberWarning); when their
+    top-scoring sets never overlap, the intersection is legitimately empty.
+    This does not change the default automatically -- it surfaces the
+    realised per-detector rates so the empty result can be told apart from a
+    silent failure, with composite/union or an explicit contamination named
+    as alternatives to consider.
+    """

@@ -60,6 +60,7 @@ class GroupSection:
     contrast: pl.DataFrame | None = None
     chart_png_b64: str | None = None
     window_results: list[Any] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +132,7 @@ def _write_json_report(run_meta: RunMeta, groups: list[GroupSection], out_dir: P
                 "group_label": g.group_label,
                 "n_records": len(g.records),
                 "records": g.records.to_dicts(),
+                "warnings": g.warnings,
             }
             for g in groups
         ],
@@ -219,6 +221,24 @@ def _provenance_block(meta: RunMeta) -> str:
     )
 
 
+def _warnings_callout(warnings: list[str]) -> str:
+    """Render a group's persisted warnings as a visible callout above its tabs.
+
+    E.g. ZeroAnomalyWarning for an empty intersection -- otherwise easy to
+    miss in a report viewed long after the run finished.
+    """
+    if not warnings:
+        return ""
+    items = "".join(f"<li>{html.escape(w)}</li>" for w in warnings)
+    return (
+        '<div class="warnings-callout" '
+        'style="border-left:4px solid #c77c00;background:#fff8ec;padding:0.5rem 1rem;margin:0.5rem 0;">'
+        '<strong style="color:#c77c00;">Warnings</strong>'
+        f'<ul style="margin:0.25rem 0 0 0;">{items}</ul>'
+        "</div>"
+    )
+
+
 def _tab_nav(groups: list[GroupSection]) -> str:
     if not groups:
         return ""
@@ -228,6 +248,7 @@ def _tab_nav(groups: list[GroupSection]) -> str:
         parts.append(
             f"<h2>Group: {safe_label} "
             f'<span style="font-size:0.75rem;color:#888">({html.escape(grp.group_key)})</span></h2>'
+            f"{_warnings_callout(grp.warnings)}"
             f'<div class="tabs">'
             f'<button class="tab-btn active" data-group="{i}" data-tab="records" '
             f"onclick=\"showTab({i}, 'records')\">Records</button>"

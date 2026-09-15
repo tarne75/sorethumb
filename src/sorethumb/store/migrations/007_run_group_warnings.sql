@@ -1,0 +1,11 @@
+-- Migration 007: persist per-group warnings
+--
+-- Group-level warnings (SorethumbWarning subclasses raised while a group was
+-- scored, e.g. ZeroAnomalyWarning for an empty three-way intersection) used
+-- to exist only in the in-memory GroupSummary/RunResult returned to whoever
+-- called run_detection/score_forward in that one process. render_report_for_run
+-- always renders from persisted state (so a resumed run and a later
+-- `sorethumb report` re-render reproduce the same report), which meant those
+-- warnings could never appear there, and a later `sorethumb report` re-render
+-- had no way to recover them either.
+ALTER TABLE run_group ADD COLUMN warnings_json TEXT;

@@ -387,11 +387,18 @@ def test_composite_is_weighted_average():
 
 
 def test_intersection_is_min():
+    from sorethumb.errors import ZeroAnomalyWarning
+
     n = 100
     a = np.linspace(0.1, 0.9, n)
     b = np.linspace(0.9, 0.1, n)
     ens = ScoreEnsemble(combination="intersection", contamination=0.5)
-    result = ens.combine({"a": a, "b": b}, {"a": a > 0.5, "b": b > 0.5})
+    # a and b are anti-correlated by construction, so their top-50% sets
+    # never overlap -- a genuinely empty intersection (see the ZeroAnomalyWarning
+    # tests below), not what this test is checking; it only cares about
+    # combined_score.
+    with pytest.warns(ZeroAnomalyWarning):
+        result = ens.combine({"a": a, "b": b}, {"a": a > 0.5, "b": b > 0.5})
     expected = np.minimum(a, b)
     np.testing.assert_allclose(result["combined_score"], expected)
 
@@ -521,6 +528,74 @@ def test_three_way_intersection_requires_all_three_votes():
     assert int(result["anomaly_flag"].sum()) < int(expected_ab.sum())
     assert int(result["anomaly_flag"].sum()) < int(expected_ac.sum())
     assert int(result["anomaly_flag"].sum()) < int(expected_bc.sum())
+
+
+# ---------------------------------------------------------------------------
+# ScoreEnsemble: ZeroAnomalyWarning on an empty intersection (P2-4)
+# ---------------------------------------------------------------------------
+
+
+def test_zero_anomaly_warning_on_deterministic_empty_three_way_intersection():
+    """Three detectors whose flagged sets are pairwise disjoint by
+    construction (no 'all three' region, unlike the Venn-diagram test above)
+    -- the three-way intersection is deterministically empty, a legitimate
+    outcome that must be surfaced, not silently reported as zero anomalies."""
+    from sorethumb.errors import ZeroAnomalyWarning
+
+    idx = np.arange(90)
+    flag_a = (idx >= 0) & (idx < 10)
+    flag_b = (idx >= 10) & (idx < 20)
+    flag_c = (idx >= 20) & (idx < 30)
+    # No row is in more than one of these -- every pairwise intersection,
+    # and therefore the three-way intersection, is empty.
+
+    scores = {"a": flag_a.astype(float), "b": flag_b.astype(float), "c": flag_c.astype(float)}
+    flags = {"a": flag_a, "b": flag_b, "c": flag_c}
+
+    ens = ScoreEnsemble(combination="intersection", contamination="auto")
+    with pytest.warns(ZeroAnomalyWarning) as record:
+        result = ens.combine(scores, flags)
+
+    assert result["anomaly_flag"].sum() == 0
+    msg = str(record[0].message)
+    assert "a" in msg
+    assert "b" in msg
+    assert "c" in msg
+    assert "zero rows" in msg
+    # Realised per-detector rates must be in the message, not just "it's empty".
+    for name in ("a", "b", "c"):
+        rate = 100.0 * flags[name].mean()
+        assert f"{rate:.2f}%" in msg
+
+
+def test_zero_anomaly_warning_not_raised_when_intersection_is_nonempty():
+    """Sanity check: the warning is specific to the empty case, not raised on
+    every intersection combine()."""
+    n = 100
+    a = np.linspace(0.0, 1.0, n)
+    b = np.linspace(0.0, 1.0, n)  # perfectly correlated with a -- full overlap
+    ens = ScoreEnsemble(combination="intersection", contamination=0.2)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = ens.combine({"a": a, "b": b}, {"a": a > 0.8, "b": b > 0.8})
+    assert result["anomaly_flag"].sum() > 0
+
+
+def test_zero_anomaly_warning_not_raised_for_union():
+    """The warning is intersection-specific; union's own docstring/design
+    makes an all-empty result far less likely, and the plan scopes this
+    warning to intersection."""
+    n = 90
+    idx = np.arange(n)
+    flag_a = (idx >= 0) & (idx < 10)
+    flag_b = (idx >= 10) & (idx < 20)
+    scores = {"a": flag_a.astype(float), "b": flag_b.astype(float)}
+    flags = {"a": flag_a, "b": flag_b}
+    ens = ScoreEnsemble(combination="union", contamination="auto")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = ens.combine(scores, flags)  # must not raise
+    assert result["anomaly_flag"].sum() == 20
 
 
 # ---------------------------------------------------------------------------

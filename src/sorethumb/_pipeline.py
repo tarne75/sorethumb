@@ -903,6 +903,7 @@ def _group_summary(
     refit_reason: str | None = None,
     detector_flag_rates: dict[str, float] | None = None,
     dropped_detectors: list[str] | None = None,
+    warnings_issued: list[str] | None = None,
 ) -> GroupSummary:
     return GroupSummary(
         group_key=group_key,
@@ -916,7 +917,7 @@ def _group_summary(
         elapsed_seconds=0.0,
         drifted=drifted,
         refit_reason=refit_reason,
-        warnings_issued=[],
+        warnings_issued=warnings_issued or [],
         detector_flag_rates=detector_flag_rates or {},
         dropped_detectors=dropped_detectors or [],
     )
@@ -936,6 +937,7 @@ def _completed_group_summary(
     n_anom = int(row["anomaly_count"]) if row and row["anomaly_count"] is not None else 0
     rate = row["rate"] if row and row["rate"] is not None else None
     rec = int(row["record_count"]) if row and row["record_count"] is not None else n_records
+    warns = json.loads(row["warnings_json"]) if row and row.get("warnings_json") else []
     rpath = results_path(ws, run_id, group_key)
     return _group_summary(
         group_key,
@@ -945,6 +947,7 @@ def _completed_group_summary(
         n_anomalies=n_anom,
         anomaly_rate=rate,
         results_path=rpath if rpath.exists() else None,
+        warnings_issued=warns,
     )
 
 
@@ -1022,6 +1025,7 @@ def _execute_group(
                 record_count=n_records,
                 error=gsummary.error,
                 timing_seconds=gsummary.elapsed_seconds,
+                warnings_json=json.dumps(warns),
             )
         else:
             ws.store.upsert_run_group(
@@ -1034,6 +1038,7 @@ def _execute_group(
                 anomaly_count=gsummary.n_anomalies,
                 rate=gsummary.anomaly_rate,
                 timing_seconds=gsummary.elapsed_seconds,
+                warnings_json=json.dumps(warns),
             )
         return gsummary
     except Exception as exc:
@@ -1048,6 +1053,7 @@ def _execute_group(
             status="failed",
             error=err_msg[:500],
             timing_seconds=elapsed,
+            warnings_json=json.dumps(warns),
         )
         summary = _group_summary(group_key, group_label, n_records, status="failed", error=err_msg[:500])
         summary.elapsed_seconds = elapsed
@@ -1728,12 +1734,14 @@ def render_report_for_run(ws: Workspace, run_id: str) -> Path | None:
         for grow in sorted(ws.store.all_run_groups(run_id), key=lambda r: str(r["group_label"])):
             gk = str(grow["group_key"])
             rdf = read_results(ws, run_id, gk)
+            warns = json.loads(grow["warnings_json"]) if grow.get("warnings_json") else []
             group_sections.append(
                 GroupSection(
                     group_key=gk,
                     group_label=str(grow["group_label"]),
                     records=rdf if rdf is not None else pl.DataFrame(),
                     plan_dropped=dropped,
+                    warnings=warns,
                 )
             )
 

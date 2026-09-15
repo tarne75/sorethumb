@@ -293,6 +293,26 @@ class TestRenderReport:
         assert "id_col" in content
         assert "identifier" in content
 
+    def test_group_warnings_rendered(self, tmp_path: Path):
+        """A group's persisted warnings (P2-4: e.g. ZeroAnomalyWarning) must
+        be visible in the report, not just recorded in RunResult."""
+        grp = _group(warnings=["Three-way intersection flagged zero rows: ..."])
+        path = render_report(_RUN_META, [grp], tmp_path)
+        content = path.read_text(encoding="utf-8")
+        assert "Three-way intersection flagged zero rows" in content
+
+    def test_group_without_warnings_shows_no_callout(self, tmp_path: Path):
+        path = render_report(_RUN_META, [_group()], tmp_path)
+        content = path.read_text(encoding="utf-8")
+        assert "warnings-callout" not in content
+
+    def test_group_warnings_are_html_escaped(self, tmp_path: Path):
+        grp = _group(warnings=["<script>alert('xss')</script>"])
+        path = render_report(_RUN_META, [grp], tmp_path)
+        content = path.read_text(encoding="utf-8")
+        assert "<script>alert('xss')</script>" not in content
+        assert html_mod.escape("<script>alert('xss')</script>") in content
+
     def test_empty_groups_list_does_not_raise(self, tmp_path: Path):
         path = render_report(_RUN_META, [], tmp_path)
         assert path.exists()

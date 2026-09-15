@@ -10,6 +10,7 @@ score-forward-adjacent workflows built on top of this schema.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 import polars as pl
@@ -114,7 +115,7 @@ def test_all_bundled_migrations_apply_cleanly(tmp_path):
     """Every shipped migration file applies without error and is recorded."""
     with Store(tmp_path / "m.db") as store:
         versions = {r[0] for r in store._conn.execute("SELECT version FROM schema_migration")}
-    assert versions == {1, 2, 3, 4, 5, 6}
+    assert versions == {1, 2, 3, 4, 5, 6, 7}
 
 
 def test_migration_003_adds_artifact_run_id_column(tmp_path):
@@ -172,7 +173,7 @@ def test_a_migration_failing_partway_rolls_back_and_is_safely_replayable(tmp_pat
     # must not have left the DB in a state a plain reopen can't handle.
     with Store(db) as store:
         versions = {r[0] for r in store._conn.execute("SELECT version FROM schema_migration")}
-    assert versions == {1, 2, 3, 4, 5, 6}, "a clean reopen must fully migrate after a rolled-back failure"
+    assert versions == {1, 2, 3, 4, 5, 6, 7}, "a clean reopen must fully migrate after a rolled-back failure"
 
 
 def test_store_second_open_no_duplicate_migration(tmp_path):
@@ -222,7 +223,7 @@ def test_concurrent_opens_all_succeed_and_migrate_once(tmp_path):
         versions = [
             r[0] for r in store._conn.execute("SELECT version FROM schema_migration ORDER BY version")
         ]
-    assert versions == [1, 2, 3, 4, 5, 6]
+    assert versions == [1, 2, 3, 4, 5, 6, 7]
 
 
 def test_migrations_record_a_checksum(tmp_path):
@@ -359,6 +360,26 @@ def test_store_run_group_upsert_no_duplicate_rows(tmp_path):
         ).fetchone()
         assert row["status"] == "complete"
         assert row["anomaly_count"] == 5
+
+
+def test_run_group_warnings_json_round_trips(tmp_path):
+    """P2-4: group-level warnings (e.g. ZeroAnomalyWarning) must be
+    persisted, not only returned in the in-memory RunResult -- otherwise
+    render_report_for_run, which always renders from persisted state, could
+    never show them."""
+    with _open_ws(tmp_path) as ws:
+        s = ws.store
+        s.upsert_dataset("fp1", "uri", "sfp", "cfp", 100, 5)
+        s.insert_run("run1", "fp1", "{}", 0)
+        gk = make_group_key({"country": "US"})
+        payload = json.dumps(["Three-way intersection flagged zero rows: ..."])
+        s.upsert_run_group("run1", gk, '{"country":"US"}', "US", status="complete", warnings_json=payload)
+        row = s.get_run_group("run1", gk)
+        assert row is not None
+        assert json.loads(row["warnings_json"]) == ["Three-way intersection flagged zero rows: ..."]
+
+        all_rows = s.all_run_groups("run1")
+        assert any(json.loads(r["warnings_json"] or "[]") for r in all_rows)
 
 
 def test_store_completed_groups(tmp_path):

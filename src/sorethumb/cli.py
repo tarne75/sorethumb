@@ -1689,6 +1689,11 @@ def _print_run_summary(result: RunResult) -> None:
                 f"    {g.group_label:30s}  {g.elapsed_seconds:6.1f}s  anomalies={g.n_anomalies}{flag}"
             )
 
+    if result.warnings_issued:
+        console.print("\n  [yellow bold]Warnings:[/yellow bold]")
+        for msg in result.warnings_issued:
+            console.print(f"    [yellow]{msg}[/yellow]")
+
     if result.n_failed:
         console.print("\n  [red bold]Failed groups:[/red bold]")
         for g in result.groups:
@@ -1710,6 +1715,7 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
         "report_path": str(result.report_path) if result.report_path else None,
         "started_at": result.started_at,
         "finished_at": result.finished_at,
+        "warnings_issued": result.warnings_issued,
         "groups": [
             {
                 "group_key": g.group_key,
@@ -1722,6 +1728,7 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
                 "status": g.status,
                 "error": g.error,
                 "elapsed_seconds": g.elapsed_seconds,
+                "warnings_issued": g.warnings_issued,
             }
             for g in result.groups
         ],

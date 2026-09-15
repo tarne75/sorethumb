@@ -439,21 +439,23 @@ class Store:
         rate: float | None = None,
         timing_seconds: float | None = None,
         error: str | None = None,
+        warnings_json: str | None = None,
     ) -> None:
         """Insert or replace a run_group row."""
         self._conn.execute(
             """
             INSERT INTO run_group
                 (run_id, group_key, group_values_json, group_label, status,
-                 record_count, anomaly_count, rate, timing_seconds, error)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 record_count, anomaly_count, rate, timing_seconds, error, warnings_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id, group_key) DO UPDATE SET
                 status = excluded.status,
                 record_count = excluded.record_count,
                 anomaly_count = excluded.anomaly_count,
                 rate = excluded.rate,
                 timing_seconds = excluded.timing_seconds,
-                error = excluded.error
+                error = excluded.error,
+                warnings_json = excluded.warnings_json
             """,
             (
                 run_id,
@@ -466,6 +468,7 @@ class Store:
                 rate,
                 timing_seconds,
                 error,
+                warnings_json,
             ),
         )
         self._conn.commit()

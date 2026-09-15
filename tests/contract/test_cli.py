@@ -280,6 +280,70 @@ def test_run_summary_frames_flagged_count_as_a_review_shortlist(workspace):
     assert "Total anomalies" not in out
 
 
+def test_run_summary_and_json_surface_warnings_issued():
+    """P2-4: a group-level warning (e.g. ZeroAnomalyWarning) must reach the
+    user, both in the printed summary and the JSON payload -- previously
+    RunResult.warnings_issued was populated but never displayed anywhere.
+
+    Built directly from RunResult/GroupSummary rather than forcing a real
+    warning through a full pipeline run (which would need engineering
+    genuine ML-detector disagreement to be deterministic): this pins the
+    formatting/serialisation contract these two functions own, the same way
+    a to_dict() test would.
+    """
+    from sorethumb._pipeline import GroupSummary, RunResult
+    from sorethumb.cli import _print_run_summary, _run_result_to_dict
+
+    warning_msg = "Three-way intersection flagged zero rows: no row passed all 3 configured detectors."
+    group = GroupSummary(
+        group_key="gk1",
+        group_label="US",
+        n_records=10,
+        n_anomalies=0,
+        anomaly_rate=0.0,
+        results_path=None,
+        status="success",
+        error=None,
+        elapsed_seconds=0.1,
+        drifted=False,
+        refit_reason=None,
+        warnings_issued=[warning_msg],
+    )
+    result = RunResult(
+        run_id="run1",
+        dataset_uri="file:///x.csv",
+        dataset_fp="fp1",
+        config_hash="ch1",
+        period_label=None,
+        workspace_path=Path("/tmp/ws"),
+        groups=[group],
+        report_path=None,
+        started_at="t0",
+        finished_at="t1",
+        warnings_issued=[warning_msg],
+    )
+
+    import io
+
+    from rich.console import Console
+
+    import sorethumb.cli as cli_mod
+
+    buf = Console(file=io.StringIO(), width=200)
+    original = cli_mod.console
+    cli_mod.console = buf
+    try:
+        _print_run_summary(result)
+    finally:
+        cli_mod.console = original
+    printed = buf.file.getvalue()
+    assert warning_msg in printed
+
+    payload = _run_result_to_dict(result)
+    assert payload["warnings_issued"] == [warning_msg]
+    assert payload["groups"][0]["warnings_issued"] == [warning_msg]
+
+
 # ---------------------------------------------------------------------------
 # sorethumb runs / show
 # ---------------------------------------------------------------------------

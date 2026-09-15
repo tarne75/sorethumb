@@ -25,6 +25,15 @@ Dropped detectors (composite mode only) are listed in the result's
 ``dropped_members`` and appear in ``weights`` with 0.0; their per-detector
 score columns are still recorded for inspection.
 
+Empty intersection
+------------------
+Every configured detector's vote is required by definition for
+combination="intersection" (see above), so a genuine empty result -- no row
+passed every detector -- is a legitimate outcome, not a failure. It emits a
+:class:`~sorethumb.errors.ZeroAnomalyWarning` naming each detector's realised
+natural flag rate, so it can be told apart from a silent bug; the default is
+not changed automatically.
+
 Weighting strategies
 --------------------
 equal:
@@ -89,7 +98,7 @@ from typing import Any
 
 import numpy as np
 
-from sorethumb.errors import AntiCorrelatedMemberWarning
+from sorethumb.errors import AntiCorrelatedMemberWarning, ZeroAnomalyWarning
 
 logger = logging.getLogger(__name__)
 
@@ -304,6 +313,19 @@ class ScoreEnsemble:
             )
             threshold = float("nan")
             contamination_used = float(self._contamination) if not is_auto else contamination
+
+            if self._combination == "intersection" and n > 0 and not anomaly_flag.any():
+                rates_str = ", ".join(f"{d}={per_detector_rates[d] * 100:.2f}%" for d in names)
+                warnings.warn(
+                    f"Three-way intersection flagged zero rows: no row passed all "
+                    f"{len(names)} configured detectors ({', '.join(names)}). Realised "
+                    f"per-detector natural flag rates: {rates_str}. This is a legitimate "
+                    "outcome, not a failure -- consider reviewing the data, using an "
+                    "explicit numeric contamination, or selecting combination='composite' "
+                    "or 'union' instead; the default is not changed automatically.",
+                    ZeroAnomalyWarning,
+                    stacklevel=2,
+                )
         else:
             # composite: single global threshold on combined score
             contamination, is_auto = self._resolve_contamination(flag_matrix)
