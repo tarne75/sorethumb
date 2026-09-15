@@ -26,6 +26,7 @@ import logging
 import re
 import sqlite3
 import sys
+import time
 from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,6 +42,19 @@ _MIGRATIONS_PACKAGE = "sorethumb.store.migrations"
 # "database is locked". Absent, concurrent runs against the same workspace
 # fail instantly rather than simply queuing.
 _BUSY_TIMEOUT_MS = 30_000
+
+# Belt-and-suspenders retry for opening/migrating a workspace under real
+# concurrency. busy_timeout covers ordinary lock waits, but several racing
+# connections switching a brand-new database into WAL mode at the same
+# instant has been observed to still raise "database is locked" on some
+# platform/SQLite-version combinations (observed on macOS CI, not just
+# Linux) even with busy_timeout set -- the WAL-mode switch and its shared-
+# memory setup aren't guaranteed to route every contention case through the
+# ordinary busy handler on every build. Every step retried here (the WAL/
+# foreign_keys pragmas, the migration bootstrap, each migration) is already
+# idempotent or transactional, so replaying the whole sequence is safe.
+_INIT_RETRY_ATTEMPTS = 5
+_INIT_RETRY_BASE_DELAY_S = 0.05
 
 # SQLite has no ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS``; this is the one
 # DDL shape in the bundled migrations that a plain ``IF NOT EXISTS`` can't
@@ -100,9 +114,26 @@ class Store:
         # lock, and this is what turns a concurrent run's "database is locked"
         # into a bounded wait instead of an instant failure.
         self._conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA foreign_keys=ON")
-        self._apply_migrations()
+        self._init_schema_with_retry()
+
+    def _init_schema_with_retry(self) -> None:
+        """Switch to WAL, enable foreign keys, and migrate.
+
+        Retries the whole sequence on a transient "database is locked" (see
+        ``_INIT_RETRY_ATTEMPTS`` above for why busy_timeout alone isn't
+        always enough here).
+        """
+        for attempt in range(_INIT_RETRY_ATTEMPTS):
+            try:
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA foreign_keys=ON")
+                self._apply_migrations()
+                return
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() or attempt == _INIT_RETRY_ATTEMPTS - 1:
+                    raise
+                logger.debug("Store init hit a transient lock (attempt %d), retrying: %s", attempt + 1, exc)
+                time.sleep(_INIT_RETRY_BASE_DELAY_S * (2**attempt))
 
     def close(self) -> None:
         """Close the underlying connection."""
