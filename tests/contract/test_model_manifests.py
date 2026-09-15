@@ -61,7 +61,7 @@ def test_save_load_model_roundtrip(tmp_path):
         save_model(ws, "run1", gk, det, cal, '{"plan":"json"}', "hash_abc", 100, 42)
         det2, cal2, manifest = load_model(ws, "run1", gk, "isolation_forest")
     assert det2.name == "isolation_forest"
-    assert cal2._quantile_values is not None
+    assert cal2._ref_values is not None
     assert manifest["feature_schema_hash"] == "hash_abc"
     assert manifest["seed"] == 42
 
@@ -128,7 +128,7 @@ def test_three_detector_group_round_trips_per_detector(tmp_path):
             det_loaded, cal_loaded, manifest = load_model(ws, "run1", gk, name)
             assert det_loaded.name == name
             assert manifest["detector_name"] == name
-            np.testing.assert_array_equal(cal_loaded._quantile_values, cal._quantile_values)
+            np.testing.assert_array_equal(cal_loaded._ref_values, cal._ref_values)
 
         # DB rows: one model per detector.
         rows = ws.store.models_for_run_group("run1", gk)
@@ -324,4 +324,4 @@ def test_load_model_wrong_plan_digest_raises_integrity_error(tmp_path):
             ws, "run1", gk, "isolation_forest", expected_plan_digest=plan_digest("{}")
         )
         assert det.name == "isolation_forest"
-        assert cal._quantile_values is not None
+        assert cal._ref_values is not None

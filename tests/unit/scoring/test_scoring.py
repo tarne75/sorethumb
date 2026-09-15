@@ -142,16 +142,118 @@ def test_calibrator_to_dict_from_dict_roundtrip():
     c.fit(scores)
     d = c.to_dict()
     c2 = Calibrator.from_dict(d)
-    # Transform with both should give same result
+    # Exact, not approximate: round-tripping the (possibly compressed)
+    # weighted reference through JSON-friendly lists loses no information.
     test = np.linspace(0.0, 1.0, 50)
-    np.testing.assert_allclose(c.transform(test), c2.transform(test), rtol=1e-6)
+    np.testing.assert_array_equal(c.transform(test), c2.transform(test))
+
+
+def test_calibrator_to_dict_schema_version():
+    c = Calibrator()
+    c.fit(np.arange(10, dtype=float))
+    assert c.to_dict()["schema_version"] == 2
+
+
+def test_calibrator_from_dict_migrates_legacy_quantile_values_format():
+    """A dict from before schema_version existed -- a flat quantile_values
+    array, no schema_version key -- must still load and transform, not
+    crash. Exactness isn't expected here (that's the pre-migration bug this
+    schema fixes), only a working, bounded-[0, 1] calibrator."""
+    legacy = {"quantile_values": list(np.linspace(-3.0, 3.0, 10_000))}
+    c = Calibrator.from_dict(legacy)
+    result = c.transform(np.linspace(-3.0, 3.0, 20))
+    assert np.all(result >= 0.0)
+    assert np.all(result <= 1.0)
+
+
+def test_calibrator_from_dict_ignores_legacy_mode_key_and_migrates():
+    """An even older dict shape: 'mode' plus quantile_values, no schema_version."""
+    legacy = {"mode": "reference", "quantile_values": [1.0, 2.0, 2.0, 3.0]}
+    c = Calibrator.from_dict(legacy)
+    result = c.transform(np.array([2.0]))
+    assert 0.0 <= result[0] <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Calibrator: exact tie-aware empirical mid-rank CDF (P2-2)
+# ---------------------------------------------------------------------------
+
+
+def _brute_force_midrank(ref: np.ndarray, query: np.ndarray) -> np.ndarray:
+    """Independent, unoptimised computation of 1 - mid_rank_cdf, straight
+    from the documented formula, to check the real implementation against."""
+    ref = np.asarray(ref, dtype=np.float64)
+    out = np.empty(len(query), dtype=np.float64)
+    for i, s in enumerate(query):
+        below = float(np.sum(ref < s))
+        equal = float(np.sum(ref == s))
+        out[i] = 1.0 - (below + 0.5 * equal) / len(ref)
+    return out
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        np.array([1.0, 2.0]),  # n=2, distinct (smallest non-constant reference)
+        np.array([1.0, 1.0, 1.0, 2.0, 3.0, 3.0, 3.0, 3.0]),  # heavy ties, small n
+        np.concatenate([np.zeros(37), np.ones(3)]),  # extreme skew
+    ],
+    ids=["n2_distinct", "heavy_ties", "extreme_skew"],
+)
+def test_calibrator_matches_brute_force_midrank_cdf_for_small_and_tied_references(ref):
+    """The whole point of this schema: fit() must no longer resample the
+    reference through np.quantile interpolation, which smears ties and
+    invents values that were never in the data. For any n at or under
+    _EXACT_MAX_UNIQUE this must be the *exact* documented formula, not an
+    approximation of it. (A fully constant reference is intentionally
+    excluded here -- see test_calibrator_constant_scores_returns_half: it
+    carries no ranking information, so it deliberately always reads 0.5
+    rather than following the raw mid-rank formula's arbitrary direction.)"""
+    c = Calibrator()
+    c.fit(ref)
+    query = np.concatenate([ref, [ref.min() - 1.0, ref.max() + 1.0]])
+    np.testing.assert_array_equal(c.transform(query), _brute_force_midrank(ref, query))
+
+
+def test_calibrator_single_value_reference_is_constant_guard():
+    c = Calibrator()
+    c.fit(np.array([1.0]))
+    result = c.transform(np.array([0.0, 1.0, 2.0]))
+    np.testing.assert_array_equal(result, [0.5, 0.5, 0.5])
+
+
+def test_calibrator_exact_reference_reports_zero_calibration_error():
+    c = Calibrator()
+    c.fit(np.random.default_rng(0).standard_normal(5_000))
+    assert c._max_calibration_error == 0.0
+
+
+def test_calibrator_compresses_large_distinct_reference_and_bounds_error():
+    """A reference with more distinct values than _EXACT_MAX_UNIQUE must be
+    compressed (never silently truncated or resampled through
+    interpolation), and the reported max_calibration_error must actually
+    bound the observed deviation from the true (uncompressed) mid-rank CDF."""
+    from sorethumb.scoring.calibrate import _EXACT_MAX_UNIQUE
+
+    rng = np.random.default_rng(3)
+    ref = rng.standard_normal(_EXACT_MAX_UNIQUE + 20_000)  # all but certainly distinct
+
+    c = Calibrator()
+    c.fit(ref)
+    assert c._max_calibration_error is not None
+    assert 0.0 < c._max_calibration_error < 0.01
+
+    query = rng.standard_normal(200)
+    approx = c.transform(query)
+    exact = _brute_force_midrank(ref, query)
+    assert np.max(np.abs(approx - exact)) <= c._max_calibration_error + 1e-12
 
 
 def test_calibrator_from_dict_unfitted():
     c = Calibrator()
     d = c.to_dict()
     c2 = Calibrator.from_dict(d)
-    assert c2._quantile_values is None
+    assert c2._ref_values is None
 
 
 def test_calibrator_to_dict_serialisable():

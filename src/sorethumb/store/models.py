@@ -217,7 +217,7 @@ def save_model(
     )
     workspace.store.upsert_calibrator(
         model_id=model_id,
-        quantile_values_json=json.dumps(calibrator_d.get("quantile_values")),
+        quantile_values_json=json.dumps(calibrator_d),
     )
 
     # Register artifacts
