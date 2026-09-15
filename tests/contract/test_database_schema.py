@@ -10,6 +10,8 @@ score-forward-adjacent workflows built on top of this schema.
 
 from __future__ import annotations
 
+import sqlite3
+
 import polars as pl
 import pytest
 
@@ -143,6 +145,34 @@ def test_migration_006_adds_period_execution_table(tmp_path):
         "failed_count",
         "complete",
     } <= cols
+
+
+def test_a_migration_failing_partway_rolls_back_and_is_safely_replayable(tmp_path, monkeypatch):
+    """A migration's DDL runs inside BEGIN IMMEDIATE (see _apply_one_migration),
+    so a statement failing partway through must roll back its own DDL and
+    leave no partial version row -- and a fresh, unpatched open afterward
+    must still apply every migration cleanly, exactly once."""
+    db = tmp_path / "test.db"
+    real_execute_ddl = Store._execute_ddl
+    call_count = 0
+
+    def _flaky_execute_ddl(self, stmt: str) -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:  # fail partway through migration 001's statements
+            raise sqlite3.OperationalError("simulated failure mid-migration")
+        real_execute_ddl(self, stmt)
+
+    monkeypatch.setattr(Store, "_execute_ddl", _flaky_execute_ddl)
+    with pytest.raises(sqlite3.OperationalError, match="simulated failure"):
+        Store(db)
+    monkeypatch.undo()
+
+    # The failed attempt must not have recorded version 1 as applied, and
+    # must not have left the DB in a state a plain reopen can't handle.
+    with Store(db) as store:
+        versions = {r[0] for r in store._conn.execute("SELECT version FROM schema_migration")}
+    assert versions == {1, 2, 3, 4, 5, 6}, "a clean reopen must fully migrate after a rolled-back failure"
 
 
 def test_store_second_open_no_duplicate_migration(tmp_path):
@@ -405,10 +435,34 @@ def test_write_results_leaves_existing_file_on_failure(tmp_path, monkeypatch):
             raise OSError("disk full")
 
         monkeypatch.setattr(_atomic.os, "replace", _boom)
-        df2 = pl.DataFrame({"row_id": [9, 9, 9, 9]})
+        df2 = pl.DataFrame({"row_id": [9, 10, 11, 12]})
         with pytest.raises(OSError, match="disk full"):
             write_results(ws, "run1", "gk01", df2)
         monkeypatch.undo()
 
         assert path.read_bytes() == original_bytes  # untouched, not truncated/replaced
         assert not [p for p in path.parent.iterdir() if p.name.endswith(".tmp")]
+
+
+@pytest.mark.parametrize(
+    ("df", "match"),
+    [
+        (pl.DataFrame({"score": [0.1, 0.2]}), "missing"),
+        (pl.DataFrame({"row_id": [0, None]}), "null"),
+        (pl.DataFrame({"row_id": [0, 0]}), "duplicate"),
+    ],
+    ids=["missing_row_id", "null_row_id", "duplicate_row_id"],
+)
+def test_write_results_rejects_an_unsafe_results_frame(tmp_path, df, match):
+    """P2-6: row_id is the only column every downstream reader relies on to
+    join a result row back to its source; write_results must fail closed
+    before writing (and registering) a Parquet file it would be dangerous to
+    trust."""
+    from sorethumb.store.results import write_results
+
+    with _open_ws(tmp_path) as ws:
+        ws.store.upsert_dataset("fp1", "uri", "sfp", "cfp", 2, 2)
+        ws.store.insert_run("run1", "fp1", "{}", 0)
+        with pytest.raises(StoreError, match=match):
+            write_results(ws, "run1", "gk01", df)
+        assert ws.store._conn.execute("SELECT * FROM artifact").fetchall() == []

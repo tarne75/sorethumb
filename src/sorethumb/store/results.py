@@ -20,6 +20,7 @@ from pathlib import Path
 import polars as pl
 
 from sorethumb._atomic import atomic_write
+from sorethumb.errors import StoreError
 from sorethumb.store.workspace import Workspace
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,17 @@ def write_results(
     -------
     Path to the written Parquet file.
 
+    Raises
+    ------
+    StoreError
+        If ``row_id`` is missing, contains nulls, or has duplicates. This is
+        the only column every reader (CLI, report, history) relies on to
+        identify a row; writing (and registering) a Parquet file without it
+        would surface as a confusing downstream failure far from its cause.
+
     """
+    _validate_results_frame(df)
+
     out_dir = workspace.results_dir(run_id, group_key)
     out_path = out_dir / _RESULT_FILENAME
 
@@ -79,6 +90,16 @@ def write_results(
         run_id=run_id,
     )
     return out_path
+
+
+def _validate_results_frame(df: pl.DataFrame) -> None:
+    """Reject a results frame that can't be safely joined back to source rows."""
+    if "row_id" not in df.columns:
+        raise StoreError("write_results: df is missing the required 'row_id' column.")
+    if df["row_id"].null_count() > 0:
+        raise StoreError("write_results: 'row_id' contains null values.")
+    if df["row_id"].n_unique() != len(df):
+        raise StoreError("write_results: 'row_id' contains duplicate values.")
 
 
 def results_path(workspace: Workspace, run_id: str, group_key: str) -> Path:

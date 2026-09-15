@@ -1492,8 +1492,12 @@ def workspace_prune(
     cfg = _load_config(config, workdir=workdir, log_level=log_level)
     ws_path = Path(cfg.run.workdir)
 
-    with Workspace.open(ws_path) as ws:
-        removed = ws.prune(days, dry_run=dry_run)
+    try:
+        with Workspace.open(ws_path) as ws:
+            removed = ws.prune(days, dry_run=dry_run)
+    except SorethumbError as exc:
+        err_console.print(f"[red]workspace prune failed:[/red] {exc}")
+        raise typer.Exit(2) from exc
 
     prefix = "Would remove" if dry_run else "Removed"
     for item in removed:

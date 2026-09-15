@@ -352,6 +352,16 @@ def test_workspace_prune_dry_run(workspace):
     assert result.exit_code == 0
 
 
+def test_workspace_prune_rejects_negative_days(workspace):
+    """P2-6: --days -1 must fail loudly with a clean exit code, not silently
+    prune every artifact in the workspace."""
+    _, toml_path, _ = workspace
+    runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
+    result = runner.invoke(app, ["workspace", "prune", "--config", str(toml_path), "--days", "-1"])
+    assert result.exit_code == 2
+    assert "retention_days" in result.output
+
+
 def test_workspace_vacuum(workspace):
     _, toml_path, _ = workspace
     runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])

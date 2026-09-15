@@ -12,7 +12,7 @@ import warnings
 import numpy as np
 import pytest
 
-from sorethumb.errors import ModelIntegrityError, ModelSchemaDriftError, ModelSchemaDriftWarning
+from sorethumb.errors import ModelIntegrityError, ModelSchemaDriftError, ModelSchemaDriftWarning, StoreError
 from sorethumb.store.models import plan_digest, save_model, score_with_existing
 from sorethumb.store.results import read_results, write_results
 from sorethumb.store.workspace import make_group_key
@@ -178,6 +178,42 @@ def test_workspace_list_prunable(tmp_path):
         assert isinstance(prunable, list)
 
 
+def test_prune_rejects_negative_retention_days(tmp_path):
+    """P2-6: a negative retention_days would match julianday(now) - created_at
+    > (a negative number), i.e. every artifact regardless of age, including
+    ones just written. Must be refused, not silently treated as "prune
+    everything"."""
+    with _open_ws(tmp_path) as ws:
+        with pytest.raises(StoreError, match="retention_days"):
+            ws.prune(-1)
+        with pytest.raises(StoreError, match="retention_days"):
+            ws.list_prunable(-1)
+
+
+def test_prune_refuses_a_path_outside_the_workspace_root(tmp_path):
+    """P2-6: the artifact index is a database file, not a signed record. A
+    corrupted or hand-edited row pointing outside the workspace root must
+    not turn a routine prune into deleting an arbitrary path."""
+    outside_path = tmp_path / "outside_the_workspace.parquet"
+    outside_path.write_text("do not touch")
+
+    with _open_ws(tmp_path) as ws:
+        ws.store._conn.execute(
+            "INSERT INTO artifact (artifact_id, path, kind, byte_size, regenerable, created_at) "
+            "VALUES (?, ?, 'cache', 4, 1, '2020-01-01T00:00:00Z')",
+            ("escaped_art", str(outside_path)),
+        )
+        ws.store._conn.commit()
+
+        deleted = ws.prune(retention_days=1, dry_run=False)
+        assert str(outside_path) not in deleted
+
+        row = ws.store._conn.execute("SELECT * FROM artifact WHERE artifact_id='escaped_art'").fetchone()
+        assert row is not None, "the escaping row must not be removed from the index either"
+
+    assert outside_path.read_text() == "do not touch"
+
+
 def test_workspace_prune_deletes_missing_file(tmp_path):
     """prune() must tolerate a regenerable artifact whose file is already gone."""
     with _open_ws(tmp_path) as ws:
@@ -198,7 +234,7 @@ def test_prune_dry_run_lists_eligible(tmp_path):
         ws.store._conn.execute(
             "INSERT INTO artifact (artifact_id, path, kind, byte_size, regenerable, created_at) "
             "VALUES (?, ?, 'cache', 0, 1, '2020-01-01T00:00:00Z')",
-            ("art1", str(tmp_path / "old_file.parquet")),
+            ("art1", str(ws.root / "old_file.parquet")),
         )
         ws.store._conn.commit()
         deleted = ws.prune(retention_days=1, dry_run=True)

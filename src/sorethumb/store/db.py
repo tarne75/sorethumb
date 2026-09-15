@@ -121,14 +121,7 @@ class Store:
     # ------------------------------------------------------------------
 
     def _apply_migrations(self) -> None:
-        self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS schema_migration "
-            "(version INTEGER PRIMARY KEY, "
-            "applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')), "
-            "checksum TEXT)"
-        )
-        self._conn.commit()
-        self._backfill_checksum_column()
+        self._bootstrap_schema_migration_table()
 
         migration_files = self._discover_migration_files()
         self._check_schema_ceiling(migration_files)
@@ -136,17 +129,38 @@ class Store:
         for version, sql, checksum in migration_files:
             self._apply_one_migration(version, sql, checksum)
 
-    def _backfill_checksum_column(self) -> None:
-        """Add ``checksum`` to a workspace whose ``schema_migration`` predates it.
+    def _bootstrap_schema_migration_table(self) -> None:
+        """Create ``schema_migration`` and backfill its ``checksum`` column.
 
-        Its rows keep ``checksum=NULL`` for migrations already applied —
-        nothing to verify them against — but every migration applied from
-        here on records one.
+        (Added to a workspace whose table predates it -- those rows keep
+        ``checksum=NULL``, nothing to verify them against.) Runs under the
+        same lock-then-recheck discipline as ``_apply_one_migration``.
+
+        This used to run as two bare statements with no explicit transaction
+        around them -- harmless for one process, but under real concurrency
+        (several threads/processes racing to open the same brand-new
+        workspace) that gap could still raise "database is locked" even with
+        busy_timeout set, because no lock was held across the two statements
+        to serialise the racers. ``BEGIN IMMEDIATE`` closes that: every
+        opener queues through this bootstrap step one at a time, and
+        busy_timeout governs how long the others wait rather than failing.
         """
-        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(schema_migration)")}
-        if "checksum" not in cols:
-            self._conn.execute("ALTER TABLE schema_migration ADD COLUMN checksum TEXT")
-            self._conn.commit()
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS schema_migration "
+                "(version INTEGER PRIMARY KEY, "
+                "applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')), "
+                "checksum TEXT)"
+            )
+            cols = {row[1] for row in self._conn.execute("PRAGMA table_info(schema_migration)")}
+            if "checksum" not in cols:
+                self._conn.execute("ALTER TABLE schema_migration ADD COLUMN checksum TEXT")
+            self._conn.execute("COMMIT")
+        except BaseException:
+            with contextlib.suppress(sqlite3.OperationalError):
+                self._conn.execute("ROLLBACK")
+            raise
 
     def _discover_migration_files(self) -> list[tuple[int, str, str]]:
         """Return (version, sql, sha256-of-sql) for every bundled migration, sorted."""

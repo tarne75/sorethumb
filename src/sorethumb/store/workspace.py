@@ -168,6 +168,7 @@ class Workspace:
 
     def list_prunable(self, retention_days: int) -> list[dict[str, object]]:
         """List artifacts eligible for pruning without deleting anything."""
+        self._check_retention_days(retention_days)
         rows = self._store.artifacts_for_prune(retention_days)
         return [{"artifact_id": r["artifact_id"], "path": r["path"], "kind": r["kind"]} for r in rows]
 
@@ -176,16 +177,43 @@ class Workspace:
 
         Returns a list of paths that were (or would be) deleted.
         With dry_run=True, nothing is deleted.
+
+        Refuses a negative ``retention_days`` (the underlying SQL comparison
+        would treat that as "older than a negative age", i.e. everything,
+        including artifacts just written) and refuses to delete any artifact
+        whose recorded path resolves outside the workspace root -- the
+        artifact index is trusted for normal operation but is still a
+        database file on disk, not a signed record, so a corrupted or
+        hand-edited row must not turn a routine prune into deleting an
+        arbitrary path.
         """
+        self._check_retention_days(retention_days)
         rows = self._store.artifacts_for_prune(retention_days)
+        root = self._root.resolve()
         deleted: list[str] = []
         for row in rows:
             path_str = str(row["path"])
+            p = Path(path_str).resolve()
+            if not p.is_relative_to(root):
+                logger.warning(
+                    "Refusing to prune artifact %s: path %s resolves outside workspace root %s.",
+                    row["artifact_id"],
+                    path_str,
+                    root,
+                )
+                continue
             deleted.append(path_str)
             if not dry_run:
-                p = Path(path_str)
                 if p.exists():
                     p.unlink()
                     logger.info("Pruned artifact: %s", path_str)
                 self._store.delete_artifact(str(row["artifact_id"]))
         return deleted
+
+    @staticmethod
+    def _check_retention_days(retention_days: int) -> None:
+        if retention_days < 0:
+            raise StoreError(
+                f"retention_days must be >= 0, got {retention_days}. A negative value would "
+                "match every artifact regardless of age, including ones just written."
+            )
