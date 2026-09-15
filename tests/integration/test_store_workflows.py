@@ -301,3 +301,54 @@ def test_prune_failed_run_removes_its_own_artifacts(tmp_path):
         deleted = ws.prune(retention_days=1, dry_run=False)
 
     assert str(doomed) in deleted
+
+
+# ---------------------------------------------------------------------------
+# Concurrency: parallel writers wait or fail explicitly, never corrupt
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_write_results_does_not_corrupt_the_workspace(tmp_path):
+    """Several threads writing results for the same (run_id, group_key) at
+    once must each either succeed cleanly or raise a real exception -- never
+    leave a half-written file or a database only some of them can read."""
+    import threading
+
+    import polars as pl
+
+    n_threads = 8
+    errors: list[BaseException] = []
+
+    with _open_ws(tmp_path) as ws:
+        ws.store.upsert_dataset("fp1", "uri", "sfp", "cfp", 10, 2)
+        ws.store.insert_run("run1", "fp1", "{}", 0)
+        gk = make_group_key({"g": "A"})
+
+        def _write(i: int) -> None:
+            df = pl.DataFrame({"row_id": [i], "score": [float(i)]})
+            try:
+                write_results(ws, "run1", gk, df)
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_write, args=(i,)) for i in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Any failure must be a real, catchable exception -- not a hang or a
+        # silently-swallowed corruption.
+        for exc in errors:
+            assert isinstance(exc, Exception)
+
+        # The workspace must still be fully usable: exactly one writer's rows
+        # are the final state (atomic_write's rename means the last one to
+        # replace() wins wholesale, never an interleaved mix of two writes).
+        final = read_results(ws, "run1", gk)
+        assert final is not None
+        assert len(final) == 1
+        assert final["row_id"][0] in range(n_threads)
+
+        # And the database connection itself is unharmed by the contention.
+        assert ws.store.run_status("run1") == "running"

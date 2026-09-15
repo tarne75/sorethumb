@@ -322,3 +322,75 @@ consolidations outweighed it). CI lane **745 passed, 22 deselected**, coverage s
 (identical to P1-4 -- confirms no behavioural drift, just better-organised and higher-quality
 assertions over the same code paths). ruff, ruff format, mypy, and the doc-consistency check all
 clean.
+
+## What P1-6 changed
+
+**Deferred to P2, by explicit user decision**: two items on the plan's acceptance-test list
+depend on production code that doesn't exist yet. "Empty intersections producing a specific
+actionable warning" needs P2-4's `ZeroAnomalyWarning` (grepped the whole tree -- doesn't exist).
+"Explicit contamination selects exactly k rows under ties" needs P2-3's exact-k selector --
+`combine.py` still uses `np.quantile(..., 1.0 - c)` threshold selection today, which can select
+more or fewer than k rows when scores tie at the boundary. Writing tests for either now would
+mean either committing a known-failing test or pulling P2's production changes forward out of
+order; asked the user, who chose to defer both and keep this phase test-only. Revisit when
+P2-3/P2-4 land.
+
+**Fixed a real anti-pattern already in the suite**: `tests/property/test_profiling_properties.py`
+had three `@given` tests using a silent `return` to skip invalid examples (`if n_null > n_total:
+return`) -- exactly what the plan says never to do, since Hypothesis's shrinking/statistics
+can't distinguish "discarded" from "passed" the way `assume()` lets it. Replaced all three with
+`assume(...)`.
+
+**Acceptance scenarios -- audited first, most already existed**: grepped for each of the nine
+named scenarios before writing anything new. Eight were already covered by P0/P1-1..P1-5 work
+(failed groups persisted as failed, atomic config-scoped history, the three-way intersection
+vote, dense ranks, score-forward's five corruption/mismatch rejections, null-vs-empty-vs-literal
+groups, source-stable row ids). The ninth -- "reports containing planted IDs/reasons" -- was a
+real gap: the existing report tests checked the report wasn't *blank*, never that it actually
+*contains* the specific planted rows and a real reason. Added
+`test_report_surfaces_planted_row_ids_and_reasons` (`tests/integration/test_report.py`): runs a
+real planted-anomaly detection with reporting on, and asserts the sibling group CSV's `row_id`
+set matches the flagged rows exactly (not a substring guess) and that `reason_1` is populated.
+
+**New property tests** (`tests/property/`, all using `assume()`/constrained strategies, never
+silent returns):
+- `test_profiling_properties.py`: classification *and* treatment are invariant to row
+  permutation; exact row duplication preserves `null_ratio` and classification/treatment.
+  (`cardinality_ratio` is deliberately *not* asserted invariant under duplication -- doubling
+  the population without adding new distinct values mathematically halves unique/total by
+  construction; Hypothesis found this immediately when a first draft of the test asserted it,
+  which was the test's bug, not the product's.)
+- `test_calibration_properties.py` (new): `Calibrator.transform()` is bounded to [0, 1],
+  monotone non-increasing in the raw score, tie-aware (identical raw scores calibrate
+  identically), and `to_dict()`/`from_dict()` round-trips to identical transform output.
+- `test_feature_properties.py` (new): `fit_features`/`apply_feature_plan` always preserve row
+  count and produce a fully finite matrix, across make_frame's space of column types, nulls,
+  and correlation.
+- `test_grouping_properties.py` (new): `make_group_key` is invariant to the order its dict was
+  built in (already guaranteed by `json.dumps(..., sort_keys=True)`, now regression-tested
+  directly), and distinguishes `None`/`""`/`"None"` and same-string-form different types (`1`
+  vs `"1"`).
+- `test_detector_properties.py` (new): `natural_flag` is batch-invariant -- a row's flag must
+  not depend on what else was scored alongside it -- for the five detectors that already
+  promise it (isolation_forest, one_class_svm, lof, ecod, hbos) via a threshold fixed at fit
+  time. `kmeans_distance` is deliberately excluded: its Tukey-fence natural boundary is
+  recomputed from whatever batch is passed to `natural_flag()`, so it does not yet promise this
+  (that's P2-1's fix).
+- `test_atomic_write_properties.py` (new): for arbitrary prior/attempted byte content, an
+  interrupted `atomic_write` always leaves the target exactly as it was and cleans up its own
+  temp file -- generalises the fixed-example versions of this check already in
+  `test_database_schema.py`/`test_model_manifests.py`/`test_report.py` into one property test
+  against `_atomic.py` directly.
+
+**New concurrency scenario** (`tests/integration/test_store_workflows.py`):
+`test_concurrent_write_results_does_not_corrupt_the_workspace` -- eight threads writing results
+for the same `(run_id, group_key)` at once; every thread either succeeds cleanly or raises a
+real exception (never hangs or corrupts), and afterward the workspace is fully readable with
+exactly one writer's rows as the final state (atomic_write's rename is all-or-nothing, so the
+last one to replace() wins wholesale, never an interleaved mix).
+
+Verified after every change: **782 collected** (767 + 15 net: 18 property tests including the 3
+fixed ones, +1 concurrency scenario, +1 report acceptance test). CI lane **760 passed, 22
+deselected**, coverage **72.92%** (up slightly from 72.89% -- the new property tests exercise a
+few previously-uncovered lines in `calibrate.py`/`workspace.py`/`_atomic.py`). ruff, ruff
+format, mypy, and the doc-consistency check all clean.

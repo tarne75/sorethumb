@@ -9,12 +9,13 @@ import math
 
 import polars as pl
 import pytest
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
-from sorethumb.config import ColumnsConfig, ProfilingConfig
-from sorethumb.profiling.classify import ColumnClass, classify_column
+from sorethumb.config import ColumnsConfig, FeaturesConfig, ProfilingConfig
+from sorethumb.profiling.classify import ColumnClass, classify_column, treatment_for
 from sorethumb.profiling.profile import profile_columns
+from tests.synth import make_frame
 
 pytestmark = pytest.mark.property
 
@@ -37,8 +38,7 @@ def _classify_float_col(
 )
 @settings(max_examples=200)
 def test_high_null_iff_ratio_exceeds_threshold(n_null: int, n_total: int, threshold: float) -> None:
-    if n_null > n_total:
-        return  # invalid, skip
+    assume(n_null <= n_total)
     vals: list[float | None] = [None] * n_null + [float(i) for i in range(n_total - n_null)]
     null_ratio = n_null / n_total
     col_class = _classify_float_col(vals, null_ratio_drop=threshold)
@@ -72,8 +72,7 @@ def test_high_null_iff_ratio_exceeds_threshold(n_null: int, n_total: int, thresh
 )
 @settings(max_examples=200)
 def test_near_constant_iff_n_unique_at_or_below_threshold(n_unique: int, n_rows: int, threshold: int) -> None:
-    if n_unique > n_rows:
-        return  # invalid
+    assume(n_unique <= n_rows)
     cats = [str(i) for i in range(n_unique)]
     values = [cats[i % n_unique] for i in range(n_rows)]
     df = pl.DataFrame({"s": values})
@@ -116,10 +115,89 @@ def test_all_null_always_empty_not_constant(n_rows: int) -> None:
 )
 @settings(max_examples=200)
 def test_null_ratio_is_in_unit_interval(n_rows: int, null_count: int) -> None:
-    if null_count > n_rows:
-        return
+    assume(null_count <= n_rows)
     vals: list[float | None] = [None] * null_count + [1.0] * (n_rows - null_count)
     df = pl.DataFrame({"x": vals})
     p = profile_columns(df, ProfilingConfig())[0]
     assert 0.0 <= p.null_ratio <= 1.0
     assert not math.isnan(p.null_ratio)
+
+
+# ---------------------------------------------------------------------------
+# Profiling/treatment decisions are invariant to how the rows are ordered or
+# duplicated -- neither should change what a column *is* or how it's treated.
+# ---------------------------------------------------------------------------
+
+
+def _classify_and_treat_every_column(
+    df: pl.DataFrame, profiling_cfg: ProfilingConfig, features_cfg: FeaturesConfig
+) -> list[tuple[ColumnClass, object]]:
+    columns_cfg = ColumnsConfig()
+    results = []
+    for profile in profile_columns(df, profiling_cfg):
+        col_class, _ = classify_column(profile, profiling_cfg, columns_cfg, set())
+        results.append((col_class, treatment_for(col_class, profile, features_cfg)))
+    return results
+
+
+@given(
+    seed=st.integers(min_value=0, max_value=10_000),
+    n_rows=st.integers(min_value=10, max_value=100),
+    shuffle_seed=st.integers(min_value=0, max_value=10_000),
+)
+@settings(max_examples=50)
+def test_classification_and_treatment_invariant_to_row_permutation(
+    seed: int, n_rows: int, shuffle_seed: int
+) -> None:
+    df, _ = make_frame(
+        n_rows=n_rows,
+        seed=seed,
+        null_ratio=0.1,
+        with_low_cardinality_string=True,
+        with_boolean=True,
+        with_timestamp=True,
+    )
+    shuffled = df.sample(fraction=1.0, shuffle=True, seed=shuffle_seed)
+
+    profiling_cfg, features_cfg = ProfilingConfig(), FeaturesConfig()
+    original = _classify_and_treat_every_column(df, profiling_cfg, features_cfg)
+    permuted = _classify_and_treat_every_column(shuffled, profiling_cfg, features_cfg)
+
+    for name, before, after in zip(df.columns, original, permuted, strict=True):
+        assert before == after, f"{name}: (class, treatment) changed under row permutation"
+
+
+@given(
+    seed=st.integers(min_value=0, max_value=10_000),
+    n_rows=st.integers(min_value=10, max_value=100),
+)
+@settings(max_examples=50)
+def test_classification_and_ratios_invariant_to_exact_row_duplication(seed: int, n_rows: int) -> None:
+    """Duplicating every row (2x each) doubles the population without
+    changing its *shape*: null_ratio is a ratio of two quantities that both
+    double in lockstep, so it must be unchanged, and so must the resulting
+    classification/treatment. cardinality_ratio is deliberately NOT checked
+    here -- exact duplication adds no new distinct values while doubling the
+    denominator, so unique/total is mathematically halved by construction,
+    not preserved."""
+    df, _ = make_frame(
+        n_rows=n_rows,
+        seed=seed,
+        null_ratio=0.1,
+        with_low_cardinality_string=True,
+        with_boolean=True,
+    )
+    doubled = pl.concat([df, df])
+
+    profiling_cfg = ProfilingConfig()
+    profiles_before = profile_columns(df, profiling_cfg)
+    profiles_after = profile_columns(doubled, profiling_cfg)
+
+    features_cfg = FeaturesConfig()
+    columns_cfg = ColumnsConfig()
+    for name, pa, pb in zip(df.columns, profiles_before, profiles_after, strict=True):
+        assert pa.null_ratio == pytest.approx(pb.null_ratio), f"{name}: null_ratio changed on duplication"
+        class_a, _ = classify_column(pa, profiling_cfg, columns_cfg, set())
+        class_b, _ = classify_column(pb, profiling_cfg, columns_cfg, set())
+        assert class_a == class_b, f"{name}: classification changed on duplication"
+        assert treatment_for(class_a, pa, features_cfg) == treatment_for(class_b, pb, features_cfg)

@@ -475,3 +475,32 @@ def test_render_report_for_run_rebuilds_a_deleted_report(tmp_path: Path) -> None
     assert out.exists()
     assert out.read_text(encoding="utf-8") == original
     assert list(report_dir.glob("*.csv"))  # group CSV siblings rebuilt too
+
+
+def test_report_surfaces_planted_row_ids_and_reasons(tmp_path: Path) -> None:
+    """A real report -- not just the internal results Parquet a user never
+    opens -- must show which rows were actually flagged and why."""
+    csv = tmp_path / "data.csv"
+    write_planted_csv(csv, n_normal=200, n_anomaly=5, seed=2)
+    workdir = tmp_path / "ws"
+    cfg = make_config(csv, workdir, contamination=0.03)
+
+    result = run_detection(cfg, no_report=False)
+    assert result.n_anomalies > 0
+    assert result.report_path is not None
+
+    results_df = pl.read_parquet(result.groups[0].results_path)
+    flagged_ids = results_df["row_id"].to_list()
+    assert flagged_ids, "fixture must flag at least one row to exercise this path"
+
+    group_csv_path = next(result.report_path.parent.glob("*.csv"))
+    csv_df = pl.read_csv(group_csv_path)
+    assert set(csv_df["row_id"].to_list()) == set(flagged_ids), (
+        "report CSV must list exactly the flagged rows"
+    )
+
+    reasons = csv_df["reason_1"].drop_nulls().to_list()
+    assert reasons, "flagged rows must carry a real reason, not a blank explanation"
+
+    html = result.report_path.read_text(encoding="utf-8")
+    assert str(flagged_ids[0]) in html, "the report HTML must surface at least one flagged row's id"
