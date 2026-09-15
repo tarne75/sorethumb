@@ -134,6 +134,45 @@ def test_kmeans_get_params_includes_cblof_fields():
     assert params["n_large_clusters"] >= 1
 
 
+def test_kmeans_get_params_exposes_natural_threshold():
+    """P2-1: the fit-time Tukey fence must be visible in manifest provenance."""
+    det = KMeansDetector(k=3)
+    rng = np.random.default_rng(0)
+    det.fit(rng.normal(size=(100, 4)), seed=0)
+    params = det.get_params()
+    assert isinstance(params["natural_threshold"], float)
+
+
+def test_kmeans_natural_flag_is_batch_invariant_alone_chunked_and_whole():
+    """P2-1 regression: natural_flag used to recompute a Tukey fence from
+    whatever batch it was given, so the same row could flip its flag
+    depending on what else was scored alongside it. The fence must now be
+    fixed once at fit time and reused, so scoring a row alone, in a chunk, or
+    in one big batch must always agree."""
+    rng = np.random.default_rng(2)
+    X_train = rng.standard_normal((200, 4))
+    det = KMeansDetector(k=3)
+    det.fit(X_train, seed=0)
+
+    X_query = rng.standard_normal((30, 4))
+    X_query[:3] += 20.0  # a few clear outliers
+
+    scores_whole = det.score_samples(X_query)
+    flags_whole = det.natural_flag(scores_whole)
+
+    # Same rows, scored one at a time.
+    flags_alone = np.array(
+        [det.natural_flag(det.score_samples(X_query[i : i + 1]))[0] for i in range(len(X_query))]
+    )
+
+    # Same rows, scored in three uneven chunks.
+    chunks = [X_query[:7], X_query[7:15], X_query[15:]]
+    flags_chunked = np.concatenate([det.natural_flag(det.score_samples(chunk)) for chunk in chunks])
+
+    np.testing.assert_array_equal(flags_whole, flags_alone)
+    np.testing.assert_array_equal(flags_whole, flags_chunked)
+
+
 def test_kmeans_cblof_scores_anomaly_cluster_lower():
     """Tight anomaly cluster must score lower (more anomalous) than inliers.
 

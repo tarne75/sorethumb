@@ -3,10 +3,8 @@ at fit time (not recomputed from whatever's in the scoring batch),
 natural_flag's result for a given row must not depend on what else is
 scored alongside it in the same call.
 
-kmeans_distance is deliberately excluded: its Tukey-fence boundary is
-recomputed from the batch passed to natural_flag() each time, so it does not
-(yet) promise batch invariance -- see P2-1, which persists a fit-time
-threshold instead.
+kmeans_distance's Tukey-fence boundary is fixed from the training distances
+at fit time (P2-1), so it promises this too and is included below.
 """
 
 from __future__ import annotations
@@ -19,6 +17,7 @@ from hypothesis import strategies as st
 from sorethumb.detectors.ecod import ECODDetector
 from sorethumb.detectors.hbos import HBOSDetector
 from sorethumb.detectors.isolation_forest import IsolationForestDetector
+from sorethumb.detectors.kmeans_distance import KMeansDetector
 from sorethumb.detectors.lof import LOFDetector
 from sorethumb.detectors.one_class_svm import OneClassSVMDetector
 from tests.factories.hypothesis_profiles import scaled_examples
@@ -31,6 +30,7 @@ _BATCH_INVARIANT_DETECTOR_CLASSES = [
     LOFDetector,
     ECODDetector,
     HBOSDetector,
+    KMeansDetector,
 ]
 
 

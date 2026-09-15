@@ -120,6 +120,7 @@ class KMeansDetector:
         self._model: Any = None
         self._chosen_k: int | None = None
         self._large_centroids: np.ndarray | None = None  # subset of centroids used for scoring
+        self._natural_threshold: float | None = None  # Tukey upper fence, fixed at fit time
         self.last_labels: np.ndarray | None = None
         self.last_contributions: np.ndarray | None = None
 
@@ -160,6 +161,19 @@ class KMeansDetector:
             len(X),
         )
 
+        # Fix the natural-flag boundary from the training distances now, once,
+        # against the large centroids just selected. natural_flag() then reuses
+        # this fit-time threshold rather than recomputing quantiles from
+        # whatever batch it happens to be given -- otherwise the same row gets
+        # a different flag depending on what else was scored alongside it
+        # (scored alone vs. in a chunk vs. in one batch), and score-forward
+        # would silently rederive its own threshold from a held-out batch
+        # instead of the one the model was actually fitted on.
+        _, train_distances = _nearest_large_centroid(X, self._large_centroids)
+        q25 = float(np.percentile(train_distances, 25))
+        q75 = float(np.percentile(train_distances, 75))
+        self._natural_threshold = q75 + 1.5 * (q75 - q25)
+
     def score_samples(self, X: np.ndarray) -> np.ndarray:
         """Return negative distance to nearest large-cluster centroid.
 
@@ -187,12 +201,16 @@ class KMeansDetector:
         return self._large_centroids
 
     def natural_flag(self, scores: np.ndarray) -> np.ndarray:
-        """Flag rows whose distance is an outlier by Tukey's method (1.5 × IQR fence)."""
+        """Flag rows whose distance exceeds the fit-time Tukey fence (1.5 x IQR).
+
+        The fence is fixed once during ``fit()`` from the training distances,
+        not recomputed from *scores*, so the same row gets the same flag
+        whether it is scored alone, in a chunk, or in one batch with everyone
+        else.
+        """
+        assert self._natural_threshold is not None, "fit() must be called before natural_flag()"
         distances = -scores
-        q25 = float(np.percentile(distances, 25))
-        q75 = float(np.percentile(distances, 75))
-        upper_fence = q75 + 1.5 * (q75 - q25)
-        return distances > upper_fence
+        return distances > self._natural_threshold
 
     def get_params(self) -> dict[str, Any]:
         """Return serialisable hyper-parameters."""
@@ -205,6 +223,7 @@ class KMeansDetector:
             "n_init": self._n_init,
             "large_cluster_coverage": self._large_coverage,
             "n_large_clusters": n_large,
+            "natural_threshold": self._natural_threshold,
             "extra_params": dict(self._extra),
         }
 
