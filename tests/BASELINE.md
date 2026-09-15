@@ -394,3 +394,113 @@ fixed ones, +1 concurrency scenario, +1 report acceptance test). CI lane **760 p
 deselected**, coverage **72.92%** (up slightly from 72.89% -- the new property tests exercise a
 few previously-uncovered lines in `calibrate.py`/`workspace.py`/`_atomic.py`). ruff, ruff
 format, mypy, and the doc-consistency check all clean.
+
+## What P1-7 changed
+
+Rebuilt CI around the lane taxonomy from P1-1..P1-6, and audited the full "Test-refactor
+acceptance criteria" list (`prompts/pre-release-plan.md` line 59) end to end -- 15 of 17
+criteria fully hold; one required an actual fix (below); one is knowingly partial and carried
+to P3-2, documented rather than silently dropped.
+
+**Audit finding: `slow` and `network` markers were declared but empty.** Both had zero members
+since P1-1 ("declared for later phases to use") -- a literal violation of "every declared marker
+selects a meaningful, non-empty lane." The only genuinely network-dependent thing in the whole
+tree was `docs/check_readme_snippets.py`, invoked directly by a CI step, never through pytest.
+Fixed by adding `tests/benchmark/test_real_dataset_smoke.py`: fits `isolation_forest` on the
+real, network-fetched `kddcup99_sa` and `covtype` datasets (capped to 20k rows via `max_rows`,
+one seed) and asserts ROC-AUC beats random. Marked `benchmark`, `slow`, *and* `network` --
+it's genuinely all three (fits a real detector, fetches over the network, and is too slow for
+every-PR use), which is exactly the kind of test these two lanes exist for. Both lanes are now
+non-empty (2 tests each) without inventing filler.
+
+**Windows CI: knowingly not added, per a standing decision.** P1-7's text asks for "local
+integration on Linux and Windows." A separate, earlier remediation effort already decided twice
+(2026-09-08, recorded in project memory) to leave Windows out of the matrix -- it needs its own
+phase for SQLite file-locking and path-separator behaviour, not a drive-by addition inside a
+CI-policy phase. The new `integration` job stays Linux-only; the comment in `ci.yml` says why.
+This is a disclosed, deliberate gap against the plan's literal wording, not an oversight.
+
+**`.github/workflows/ci.yml` rebuilt around nine named jobs** (was five):
+- `lint` -- unchanged (ruff, format, mypy, doc-check).
+- `fast-tests` -- `-m "unit or contract"`, matrix `{ubuntu, macos} x {3.11, 3.12, 3.13}`. This is
+  both a required PR job and the deterministic-compatibility-across-Python-versions run the
+  plan asks for; they were the same matrix already, just now scoped to the right marker
+  expression and named for what it actually checks.
+- `integration` -- `-m integration`, Linux only (see above), required on every PR.
+- `property` -- `-m property`, `HYPOTHESIS_PROFILE=ci`, required on every PR.
+- `repo-check` -- `-m repo_check`, required on every PR. (Previously these 10 tests ran
+  unnamed inside the old monolithic `test` job; they now have their own required lane, matching
+  the plan's "repository/docs checks" bullet as a job of its own, distinct from `lint`'s direct
+  script invocation.)
+- `benchmark-smoke` -- `pytest tests/benchmark/test_accuracy_floors.py -m benchmark`, required
+  on every PR. Narrow and fast on purpose: synthetic data, one seed, ~2.5s. This is the "one
+  tolerance-banded benchmark smoke case that can catch a score-direction regression" the plan
+  asks for; it already existed as `test_default_ensemble_beats_random` +
+  `test_detector_clears_roc_auc_floor` (added when the `kmeans_distance`/CBLOF fix needed a
+  regression guard), just never run on PRs before -- the full `benchmark` marker was
+  schedule-only.
+- `coverage` -- new. Runs `unit or contract or integration or property or repo_check` together
+  with `--cov-report=xml`/`--cov-report=term` (informational; no `--cov-fail-under`), uploads to
+  Codecov, then on `pull_request` events runs `uvx diff-cover coverage.xml
+  --compare-branch=origin/<base> --fail-under=85` -- required, changed-lines-only. This replaces
+  the old blanket `--cov-fail-under=70` gate (itself already a stopgap down from 80%, see P1-3)
+  with exactly what the plan asks for: informational overall branch coverage, required diff
+  coverage on changed lines.
+- `build` -- unchanged (sdist/wheel, twine check, package-data assertion, clean-venv smoke).
+- `docs-snippets` -- moved off `push`/`pull_request`; now `if: github.event_name == 'schedule'
+  || github.event_name == 'workflow_dispatch'`. It downloads a real dataset via the README
+  quickstart and was running on every push despite being the one job the plan explicitly wants
+  kept "manual or nightly."
+- `full-nightly` -- new, schedule/manual only. `-m "benchmark or slow or network or property"`
+  with `HYPOTHESIS_PROFILE=nightly`, 30-minute budget. This is the "full accuracy, memory and
+  slow tests on a frozen canonical environment on schedule" job; there is currently no
+  meaningful separate "memory" signal to run (`peak_rss_mb` was removed as misleading in P0-7,
+  see `tests/benchmark/test_benchmark_harness.py::test_run_benchmark_row_has_no_peak_rss_mb`) --
+  a real one is P3-2 scope (measuring true peak process memory across a rebuilt harness), not
+  invented here.
+- Every job has an explicit `timeout-minutes` (5-30, sized to what was actually measured
+  locally: fast-tests ~11s, integration ~36s, property ~6s, repo-check ~2s, benchmark-smoke
+  ~3s, coverage ~2min) and inherits `--durations=15` from `addopts`, so slowest-test output and
+  collected/passed/deselected counts land in every job's log -- satisfying "emit lane runtime,
+  collected-test count and slowest tests" without extra tooling.
+
+**Hypothesis profiles made explicit** (new `tests/factories/hypothesis_profiles.py`). All 16
+`@settings(max_examples=N)` call sites across the six `tests/property/*.py` files previously
+hardcoded a fixed count each; none of them actually varied with any profile, so "bounded for CI
+vs larger for dev/nightly" wasn't real even though the plan asked for it explicitly. Replaced
+every hardcoded `N` with `scaled_examples(N)`: a `HYPOTHESIS_PROFILE` env var (`ci` | `dev` |
+`nightly`, default `dev`) selects a multiplier (1x / 3x / 10x) applied to each test's original
+baseline, so per-test relative tuning (cheap tests still get more examples than ones that fit a
+real detector) is preserved while the *scale* is now genuinely profile-driven. `deadline=None`
+on all three registered profiles -- several of these tests fit real estimators inside an
+example, and wall-clock deadlines were a flakiness risk waiting to happen, not a real signal.
+CI sets `HYPOTHESIS_PROFILE=ci`; `full-nightly` sets `nightly`; local runs default to `dev`.
+Verified property lane still passes at both `ci` (18 passed, 5.6s) and `dev` (18 passed, 10.1s).
+
+**Full acceptance-criteria audit** (all 17, against the current tree):
+
+| # | Criterion | Status |
+|---|---|---|
+| 1 | Plain `pytest` = fast/deterministic/network-free | Holds (574/784 collected, 210 deselected) |
+| 2 | Every marker non-empty | Fixed this phase (`slow`/`network` were 0; now 2 each) |
+| 3 | Local integration required on PRs | Fixed this phase (`integration` job, no `if` gate) |
+| 4 | No tier/reload/coverage-only tests remain | Holds (grep clean outside this file) |
+| 5 | No workspace/CLI/SQLite/serialization/report/benchmark-fit in `tests/unit/` | Holds (grep clean) |
+| 6 | Shared factories replace duplicated builders | Holds (`tests/factories/`, from P1-2) |
+| 7 | Every resource fixture uses `yield`; conftest has only used fixtures | Holds (root `conftest.py` re-checked) |
+| 8 | One parameterised case per new detector | Holds (`DETECTOR_SPECS`, from P1-5) |
+| 9 | Required regressions cannot dynamically skip | Holds (no `pytest.skip`/`mark.skip` in unit/contract/integration/property/repo_check) |
+| 10 | CLI tests avoid `store._conn` | Holds (grep clean, from P1-5) |
+| 11 | Private estimator state only in named adapter contracts | Holds (only hit outside `tests/contract/` was `tree_shap_attributions`, a false positive on `.tree_`) |
+| 12 | Every P0 fix has a regression | Holds for the runtime fixes P0-1..P0-7 (grep-matched by keyword per item); P0-8/9/10 are docs/CI/metadata, not runtime behaviour, so a pytest regression doesn't apply to them |
+| 13 | Default config exercises `combination="intersection"` | Holds (`tests/factories/configs.py`, from P1-2) |
+| 14 | PR benchmark smoke detects inverted direction; floors include varying-density + tolerance bands | **Partial.** Smoke fixed this phase (`benchmark-smoke` job). A varying-density synthetic dataset does not exist yet -- `test_accuracy_floors.py` already documents excluding LOF from its floors for exactly this reason. Building one is P3-2 scope ("varying-density regimes") and is deliberately not done here, same disposition as the two P1-6 deferrals |
+| 15 | Explicit bounded-CI / larger-dev/nightly Hypothesis profiles | Fixed this phase (`hypothesis_profiles.py`) |
+| 16 | Informational overall branch coverage; required >=85% diff coverage | Fixed this phase (`coverage` job) |
+| 17 | Required lanes report runtime budget + slowest tests | Fixed this phase (`timeout-minutes` + `--durations=15` per job) |
+
+Final collected count: **784** (782 + 2, the new real-dataset smoke test). Lane counts: unit
+422, contract 152, integration 158, property 18, slow 2, benchmark 24, network 2, repo_check 10.
+Plain `pytest` (unit + contract): 574 passed. `-m integration`: 158 passed in ~36s. `-m property`
+at the `ci` profile: 18 passed in 5.6s. ruff, ruff format, mypy, and the doc-consistency check
+all clean.

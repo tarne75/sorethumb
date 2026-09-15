@@ -12,6 +12,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from sorethumb.store.workspace import make_group_key
+from tests.factories.hypothesis_profiles import scaled_examples
 
 pytestmark = pytest.mark.property
 
@@ -26,7 +27,7 @@ _GROUP_VALUES = st.dictionaries(st.text(min_size=1, max_size=10), _JSON_SAFE_VAL
 
 
 @given(values=_GROUP_VALUES, shuffle_seed=st.integers(min_value=0, max_value=2**31 - 1))
-@settings(max_examples=200)
+@settings(max_examples=scaled_examples(200))
 def test_make_group_key_is_mapping_order_invariant(values: dict[str, object], shuffle_seed: int) -> None:
     items = list(values.items())
     shuffled = items.copy()

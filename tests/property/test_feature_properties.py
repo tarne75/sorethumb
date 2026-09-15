@@ -13,6 +13,7 @@ from hypothesis import strategies as st
 from sorethumb.config import Config, RunConfig, SourceConfig
 from sorethumb.features.build import apply_feature_plan, fit_features
 from sorethumb.profiling.plan import build_feature_plan
+from tests.factories.hypothesis_profiles import scaled_examples
 from tests.synth import make_frame
 
 pytestmark = pytest.mark.property
@@ -31,7 +32,7 @@ _CFG = Config(source=SourceConfig(uri="dummy"), run=RunConfig(workdir="/unused")
     with_timestamp=st.booleans(),
     with_correlated=st.booleans(),
 )
-@settings(max_examples=100)
+@settings(max_examples=scaled_examples(100))
 def test_fit_features_preserves_row_count_and_is_finite(
     seed: int,
     n_rows: int,
@@ -63,7 +64,7 @@ def test_fit_features_preserves_row_count_and_is_finite(
     with_low_card=st.booleans(),
     with_boolean=st.booleans(),
 )
-@settings(max_examples=50)
+@settings(max_examples=scaled_examples(50))
 def test_apply_feature_plan_preserves_row_count_and_is_finite(
     seed: int, n_rows: int, with_low_card: bool, with_boolean: bool
 ) -> None:

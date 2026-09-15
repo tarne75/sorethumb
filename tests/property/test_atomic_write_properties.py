@@ -14,6 +14,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from sorethumb import _atomic
+from tests.factories.hypothesis_profiles import scaled_examples
 
 pytestmark = pytest.mark.property
 
@@ -22,7 +23,7 @@ pytestmark = pytest.mark.property
     original=st.binary(max_size=200),
     attempted=st.binary(max_size=200),
 )
-@settings(max_examples=100)
+@settings(max_examples=scaled_examples(100))
 def test_interrupted_write_leaves_prior_content_untouched(
     tmp_path_factory: pytest.TempPathFactory, original: bytes, attempted: bytes
 ) -> None:

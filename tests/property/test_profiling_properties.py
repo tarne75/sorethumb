@@ -15,6 +15,7 @@ from hypothesis import strategies as st
 from sorethumb.config import ColumnsConfig, FeaturesConfig, ProfilingConfig
 from sorethumb.profiling.classify import ColumnClass, classify_column, treatment_for
 from sorethumb.profiling.profile import profile_columns
+from tests.factories.hypothesis_profiles import scaled_examples
 from tests.synth import make_frame
 
 pytestmark = pytest.mark.property
@@ -36,7 +37,7 @@ def _classify_float_col(
     n_total=st.integers(min_value=2, max_value=50),
     threshold=st.floats(min_value=0.01, max_value=0.99),
 )
-@settings(max_examples=200)
+@settings(max_examples=scaled_examples(200))
 def test_high_null_iff_ratio_exceeds_threshold(n_null: int, n_total: int, threshold: float) -> None:
     assume(n_null <= n_total)
     vals: list[float | None] = [None] * n_null + [float(i) for i in range(n_total - n_null)]
@@ -70,7 +71,7 @@ def test_high_null_iff_ratio_exceeds_threshold(n_null: int, n_total: int, thresh
     n_rows=st.integers(min_value=20, max_value=100),
     threshold=st.integers(min_value=2, max_value=8),
 )
-@settings(max_examples=200)
+@settings(max_examples=scaled_examples(200))
 def test_near_constant_iff_n_unique_at_or_below_threshold(n_unique: int, n_rows: int, threshold: int) -> None:
     assume(n_unique <= n_rows)
     cats = [str(i) for i in range(n_unique)]
@@ -92,7 +93,7 @@ def test_near_constant_iff_n_unique_at_or_below_threshold(n_unique: int, n_rows:
 
 
 @given(st.integers(min_value=2, max_value=100))
-@settings(max_examples=100)
+@settings(max_examples=scaled_examples(100))
 def test_constant_never_classified_empty(n_rows: int) -> None:
     df = pl.DataFrame({"x": [42.0] * n_rows})
     p = profile_columns(df, ProfilingConfig())[0]
@@ -101,7 +102,7 @@ def test_constant_never_classified_empty(n_rows: int) -> None:
 
 
 @given(st.integers(min_value=1, max_value=100))
-@settings(max_examples=100)
+@settings(max_examples=scaled_examples(100))
 def test_all_null_always_empty_not_constant(n_rows: int) -> None:
     df = pl.DataFrame({"x": [None] * n_rows}, schema={"x": pl.Float64})
     p = profile_columns(df, ProfilingConfig())[0]
@@ -113,7 +114,7 @@ def test_all_null_always_empty_not_constant(n_rows: int) -> None:
     n_rows=st.integers(min_value=10, max_value=200),
     null_count=st.integers(min_value=0, max_value=10),
 )
-@settings(max_examples=200)
+@settings(max_examples=scaled_examples(200))
 def test_null_ratio_is_in_unit_interval(n_rows: int, null_count: int) -> None:
     assume(null_count <= n_rows)
     vals: list[float | None] = [None] * null_count + [1.0] * (n_rows - null_count)
@@ -145,7 +146,7 @@ def _classify_and_treat_every_column(
     n_rows=st.integers(min_value=10, max_value=100),
     shuffle_seed=st.integers(min_value=0, max_value=10_000),
 )
-@settings(max_examples=50)
+@settings(max_examples=scaled_examples(50))
 def test_classification_and_treatment_invariant_to_row_permutation(
     seed: int, n_rows: int, shuffle_seed: int
 ) -> None:
@@ -171,7 +172,7 @@ def test_classification_and_treatment_invariant_to_row_permutation(
     seed=st.integers(min_value=0, max_value=10_000),
     n_rows=st.integers(min_value=10, max_value=100),
 )
-@settings(max_examples=50)
+@settings(max_examples=scaled_examples(50))
 def test_classification_and_ratios_invariant_to_exact_row_duplication(seed: int, n_rows: int) -> None:
     """Duplicating every row (2x each) doubles the population without
     changing its *shape*: null_ratio is a ratio of two quantities that both

@@ -14,6 +14,7 @@ from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from sorethumb.scoring.calibrate import Calibrator
+from tests.factories.hypothesis_profiles import scaled_examples
 
 pytestmark = pytest.mark.property
 
@@ -22,7 +23,7 @@ _REFERENCE = st.lists(_FLOATS, min_size=5, max_size=200)
 
 
 @given(reference=_REFERENCE, query=st.lists(_FLOATS, min_size=1, max_size=50))
-@settings(max_examples=200)
+@settings(max_examples=scaled_examples(200))
 def test_calibrated_scores_are_bounded(reference: list[float], query: list[float]) -> None:
     c = Calibrator()
     c.fit(np.array(reference))
@@ -32,7 +33,7 @@ def test_calibrated_scores_are_bounded(reference: list[float], query: list[float
 
 
 @given(reference=_REFERENCE, a=_FLOATS, b=_FLOATS)
-@settings(max_examples=200)
+@settings(max_examples=scaled_examples(200))
 def test_calibration_is_monotone_non_increasing_in_raw_score(
     reference: list[float], a: float, b: float
 ) -> None:
@@ -50,7 +51,7 @@ def test_calibration_is_monotone_non_increasing_in_raw_score(
     value=_FLOATS,
     repeats=st.integers(min_value=2, max_value=10),
 )
-@settings(max_examples=100)
+@settings(max_examples=scaled_examples(100))
 def test_calibration_is_tie_aware(reference: list[float], value: float, repeats: int) -> None:
     """Identical raw scores must calibrate to identical values, regardless of
     where else in the query batch they appear."""
@@ -61,7 +62,7 @@ def test_calibration_is_tie_aware(reference: list[float], value: float, repeats:
 
 
 @given(reference=_REFERENCE, query=st.lists(_FLOATS, min_size=1, max_size=50))
-@settings(max_examples=200)
+@settings(max_examples=scaled_examples(200))
 def test_calibration_serialisation_is_idempotent(reference: list[float], query: list[float]) -> None:
     c = Calibrator()
     c.fit(np.array(reference))

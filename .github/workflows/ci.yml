@@ -5,13 +5,16 @@ on:
     branches: [main]
   pull_request:
   schedule:
-    # Weekly accuracy-regression run (Mondays 06:00 UTC). Only this event
-    # triggers the `benchmark` job below.
+    # Weekly full-accuracy/slow/network + nightly-profile property run
+    # (Mondays 06:00 UTC). Only this event (or a manual dispatch) triggers
+    # the schedule-only jobs below.
     - cron: "0 6 * * 1"
+  workflow_dispatch: {}
 
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -22,8 +25,14 @@ jobs:
       - name: Verify configuration.md + prose docs match the schema
         run: uv run python docs/generate_config_docs.py --check
 
-  test:
+  # Required PR lane: fast unit tests + public/persistence contracts, across
+  # every supported Python version (the deterministic compatibility suite).
+  fast-tests:
+    name: fast-tests (${{ matrix.os }}, py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      HYPOTHESIS_PROFILE: ci
     strategy:
       fail-fast: false
       matrix:
@@ -37,31 +46,110 @@ jobs:
       - run: uv sync --all-extras
       - name: Install shap (Python 3.12 workaround — uv pulls incompatible numba)
         run: uv pip install "shap>=0.45"
-      - run: |
-          uv run pytest \
-            -m "not benchmark and not slow and not network" \
-            --cov=sorethumb \
-            --cov-report=xml \
-            --cov-fail-under=70
-      - uses: codecov/codecov-action@v4
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage.xml
+      - run: uv run pytest -m "unit or contract"
 
-  docs-snippets:
-    # Executes every fenced code block in README.md. The Python quickstart
-    # downloads the KDDCup99 10% subset via scikit-learn, so this job needs
-    # network access and runs separately from the offline test matrix.
+  # Required PR lane: local integration tests (real workspace, SQLite,
+  # CLI process, full pipeline, report rendering). Linux only for now — a
+  # Windows integration job needs its own phase (SQLite file-locking,
+  # path-separator behaviour) and was explicitly deferred, not overlooked.
+  integration:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HYPOTHESIS_PROFILE: ci
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
       - run: uv sync --all-extras
-      - run: uv run python docs/check_readme_snippets.py
+      - run: uv pip install "shap>=0.45"
+      - run: uv run pytest -m integration
 
+  # Required PR lane: bounded Hypothesis property tests.
+  property:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      HYPOTHESIS_PROFILE: ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --all-extras
+      - run: uv run pytest -m property
+
+  # Required PR lane: repository/docs consistency checks.
+  repo-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --all-extras
+      - run: uv run pytest -m repo_check
+
+  # Required PR lane: one tolerance-banded benchmark smoke case that catches
+  # a score-direction regression. Deliberately narrow (synthetic data only,
+  # one seed) so it stays fast enough to require on every PR; the full
+  # accuracy-floor suite and real-dataset checks run on schedule (see
+  # `full-nightly` below).
+  benchmark-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --all-extras
+      - run: uv pip install "shap>=0.45"
+      - run: uv run pytest tests/benchmark/test_accuracy_floors.py -m benchmark
+
+  # Informational overall branch coverage + required >=85% diff coverage on
+  # changed lines. Replaces the old global --cov-fail-under merge gate,
+  # which incentivised padding (assertion-free importlib.reload tests) more
+  # than it caught real regressions — see tests/BASELINE.md (P1-3, P1-7).
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HYPOTHESIS_PROFILE: ci
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --all-extras
+      - run: uv pip install "shap>=0.45"
+      - name: Run behavioural lanes with branch coverage (informational)
+        run: |
+          uv run pytest \
+            -m "unit or contract or integration or property or repo_check" \
+            --cov=sorethumb \
+            --cov-report=xml \
+            --cov-report=term
+      - uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml
+      - name: Diff coverage on changed lines (required, >=85%)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch origin ${{ github.base_ref }} --depth=1
+          uvx diff-cover coverage.xml \
+            --compare-branch=origin/${{ github.base_ref }} \
+            --fail-under=85
+
+  # Required PR job: build, twine check, clean-wheel install smoke.
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -84,12 +172,33 @@ jobs:
           /tmp/smoke/bin/sorethumb --version
           /tmp/smoke/bin/python -c "import sorethumb; from sorethumb import Config, SourceConfig, run_detection; print('import OK', sorethumb.__version__)"
 
-  benchmark:
+  # Network/external-dataset validation: manual or nightly only, never on a
+  # PR push. Executes every fenced code block in README.md; the Python
+  # quickstart downloads the KDDCup99 10% subset via scikit-learn.
+  docs-snippets:
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule'
+    timeout-minutes: 10
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --all-extras
+      - run: uv run python docs/check_readme_snippets.py
+
+  # Full accuracy/slow/network suite plus a larger Hypothesis profile, on a
+  # frozen canonical environment (ubuntu-latest, pinned Python), manual or
+  # nightly only — never required on a PR.
+  full-nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    env:
+      HYPOTHESIS_PROFILE: nightly
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --all-extras
       - run: uv pip install "shap>=0.45"
-      - run: uv run pytest -m benchmark --tb=short
+      - run: uv run pytest -m "benchmark or slow or network or property" --tb=short

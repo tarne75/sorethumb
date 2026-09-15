@@ -21,6 +21,7 @@ from sorethumb.detectors.hbos import HBOSDetector
 from sorethumb.detectors.isolation_forest import IsolationForestDetector
 from sorethumb.detectors.lof import LOFDetector
 from sorethumb.detectors.one_class_svm import OneClassSVMDetector
+from tests.factories.hypothesis_profiles import scaled_examples
 
 pytestmark = pytest.mark.property
 
@@ -52,7 +53,7 @@ _FITTED_BY_CLASS = {cls: _fit_on_fixed_training_data(cls) for cls in _BATCH_INVA
     n_rows=st.integers(min_value=4, max_value=40),
     split=st.integers(min_value=1, max_value=39),
 )
-@settings(max_examples=150)
+@settings(max_examples=scaled_examples(150))
 def test_natural_flag_is_batch_invariant(cls: type, seed: int, n_rows: int, split: int) -> None:
     assume(split < n_rows)
     det = _FITTED_BY_CLASS[cls]
