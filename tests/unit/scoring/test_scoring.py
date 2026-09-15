@@ -406,6 +406,76 @@ def test_union_is_max():
     np.testing.assert_allclose(result["combined_score"], expected)
 
 
+# ---------------------------------------------------------------------------
+# ScoreEnsemble: exact-k numeric contamination under heavy ties (P2-3)
+# ---------------------------------------------------------------------------
+
+
+def test_exact_k_flags_breaks_ties_by_earliest_row_order():
+    from sorethumb.scoring.combine import _exact_k_flags
+
+    scores = np.array([5.0, 5.0, 5.0, 4.0, 3.0, 3.0, 2.0])
+    # k=2 falls inside the 3-way tie for the top score; the two EARLIEST
+    # tied rows (indices 0, 1) must win -- not any other pair.
+    flags = _exact_k_flags(scores, 2 / 7)
+    assert flags.tolist() == [True, True, False, False, False, False, False]
+
+
+def test_exact_k_flags_flags_whole_tie_group_when_k_matches_its_size():
+    from sorethumb.scoring.combine import _exact_k_flags
+
+    scores = np.array([5.0, 5.0, 5.0, 4.0, 3.0, 3.0, 2.0])
+    flags = _exact_k_flags(scores, 3 / 7)
+    assert flags.tolist() == [True, True, True, False, False, False, False]
+
+
+def test_exact_k_flags_zero_and_full_contamination():
+    from sorethumb.scoring.combine import _exact_k_flags
+
+    scores = np.array([1.0, 2.0, 3.0])
+    np.testing.assert_array_equal(_exact_k_flags(scores, 0.0), [False, False, False])
+    np.testing.assert_array_equal(_exact_k_flags(scores, 1.0), [True, True, True])
+
+
+def test_composite_exact_k_with_heavy_ties_at_boundary():
+    """8 rows tied at the top score; contamination targets k=5, which falls
+    inside that tie group. A quantile threshold would flag all 8 (its own
+    value satisfies `>= threshold`); exact-k must flag precisely 5."""
+    n = 20
+    scores_a = np.array([1.0] * 8 + [0.0] * 12)
+    ens = ScoreEnsemble(weighting="equal", combination="composite", contamination=5 / n)
+    result = ens.combine({"a": scores_a}, {"a": scores_a > 0.5})
+    assert result["anomaly_flag"].sum() == 5
+    assert result["anomaly_flag"][:5].all()
+    assert not result["anomaly_flag"][5:].any()
+
+
+def test_intersection_exact_k_with_heavy_ties_per_detector():
+    n = 20
+    a = np.array([1.0] * 8 + [0.0] * 12)  # 8-way tie at the top
+    b = np.array([1.0] * 5 + [0.0] * 15)  # exactly 5, no tie ambiguity
+    ens = ScoreEnsemble(combination="intersection", contamination=5 / n)
+    result = ens.combine({"a": a, "b": b}, {"a": a > 0.5, "b": b > 0.5})
+    # a's exact-5 selection (earliest of its 8 tied rows) and b's exact-5
+    # selection are the same 5 rows by construction, so the intersection
+    # is exactly those 5 -- not 8 (what a naive quantile threshold on a
+    # would have flagged).
+    assert result["anomaly_flag"].sum() == 5
+    assert result["anomaly_flag"][:5].all()
+    assert not result["anomaly_flag"][5:].any()
+
+
+def test_union_exact_k_with_heavy_ties_per_detector():
+    n = 20
+    a = np.array([1.0] * 5 + [0.0] * 15)
+    b = np.concatenate([np.zeros(5), np.ones(5), np.zeros(10)])  # a disjoint set of 5
+    ens = ScoreEnsemble(combination="union", contamination=5 / n)
+    result = ens.combine({"a": a, "b": b}, {"a": a > 0.5, "b": b > 0.5})
+    assert result["anomaly_flag"].sum() == 10  # two disjoint exact-5 sets
+    assert result["anomaly_flag"][:10].all()
+    assert not result["anomaly_flag"][10:].any()
+
+
 def test_three_way_intersection_requires_all_three_votes():
     """P0-3: a genuine three-way intersection must be the AND of all three
     detectors' votes, strictly smaller than every two-way intersection of its
@@ -467,11 +537,32 @@ def test_manual_weights_normalised():
     assert result["weights"]["det_b"] == pytest.approx(0.25)
 
 
-def test_manual_weights_all_zero_fallback():
+def test_manual_weights_all_zero_rejected_at_construction():
+    """P2-3: a non-positive-sum manual_weights dict must fail loudly at
+    construction, not silently fall back to equal weights at combine time."""
+    with pytest.raises(ValueError, match="positive total"):
+        ScoreEnsemble(weighting="manual", contamination=0.1, manual_weights={"det_a": 0.0, "det_b": 0.0})
+
+
+def test_manual_weights_negative_rejected():
+    with pytest.raises(ValueError, match="non-negative"):
+        ScoreEnsemble(weighting="manual", contamination=0.1, manual_weights={"det_a": -1.0, "det_b": 2.0})
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_manual_weights_non_finite_rejected(bad):
+    with pytest.raises(ValueError, match="finite"):
+        ScoreEnsemble(weighting="manual", contamination=0.1, manual_weights={"det_a": bad, "det_b": 1.0})
+
+
+def test_manual_weights_falls_back_when_combine_subset_sums_to_zero():
+    """manual_weights is valid at construction, but combine() is called with
+    detectors that aren't in it -- .get(name, 0.0) makes the *relevant*
+    subset sum to zero for this call. That still falls back to equal
+    weights with a warning; it's a different case from an invalid dict."""
     scores, flags = _make_scores_flags()
-    ens = ScoreEnsemble(weighting="manual", contamination=0.1, manual_weights={"det_a": 0.0, "det_b": 0.0})
-    result = ens.combine(scores, flags)
-    # Falls back to equal weights
+    ens = ScoreEnsemble(weighting="manual", contamination=0.1, manual_weights={"det_c": 1.0})
+    result = ens.combine(scores, flags)  # scores has det_a/det_b, not det_c
     assert abs(result["weights"]["det_a"] - 0.5) < 1e-9
 
 

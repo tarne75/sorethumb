@@ -30,8 +30,9 @@ Weighting strategies
 equal:
     All detectors receive weight 1 / n. Default, no configuration needed.
 manual:
-    User supplies a dict mapping detector name → weight. Weights are
-    normalised to sum to 1.0 before use.
+    User supplies a dict mapping detector name → weight. Weights must be
+    finite, non-negative, and sum to a positive total (validated at
+    construction) -- normalised to sum to 1.0 before use.
 agreement:
     Weight each detector by how well its *ranking* agrees with the consensus:
     Spearman's rho between the detector's calibrated scores and the mean rank
@@ -57,26 +58,27 @@ union:
 
 Thresholding
 ------------
-composite mode:
+composite mode, contamination="auto":
     Binary flag is set where combined score >= threshold, where threshold is
-    the (1 − contamination) quantile of the combined score distribution.
+    the (1 − contamination) quantile of the combined score distribution
+    (contamination itself a heuristic: the median natural_flag rate across
+    detectors).
 
-intersection / union modes:
-    Each detector's scores are thresholded independently at the
-    (1 − contamination) quantile of that detector's scores, producing a
-    per-detector boolean flag. Set intersection or union of those flags is the
-    final result. No global score threshold is applied.
-
-``contamination="auto"``:
-    composite: threshold derived from median natural_flag rate across detectors.
-    intersection/union: each detector uses its own natural_flag boundary
-    (detector-specific internal threshold, e.g. zero-hyperplane for OCSVM,
-    Tukey fence for KMeans). Each detector independently decides its anomalies;
+intersection / union modes, contamination="auto":
+    Each detector uses its own natural_flag boundary (detector-specific
+    internal threshold, e.g. zero-hyperplane for OCSVM, Tukey fence for
+    KMeans). Each detector independently decides its anomalies;
     contamination is not assumed to be equal across detectors.
 
-``contamination=float``:
-    Each detector (or the combined score in composite mode) is thresholded so
-    that exactly that fraction of rows are flagged as anomalous.
+``contamination=float`` (composite, intersection, and union alike):
+    Exactly ``k = round(n * contamination)`` rows are flagged -- the
+    highest-scoring ones (per detector, for intersection/union; on the
+    combined score, for composite) -- via ``_exact_k_flags``, never a
+    quantile threshold. A quantile threshold flags every row *at* the
+    boundary, which over- or under-shoots the requested fraction whenever
+    there are ties there (routine for small groups and heavily-tied
+    detectors like ECOD/HBOS). Ties are broken deterministically: highest
+    score first, then earliest source row order for rows that tie exactly.
 """
 
 from __future__ import annotations
@@ -113,6 +115,30 @@ def _rho(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.corrcoef(a, b)[0, 1])
 
 
+def _exact_k_flags(scores: np.ndarray, contamination: float) -> np.ndarray:
+    """Flag exactly ``k = round(n * contamination)`` rows -- the highest-scoring ones.
+
+    Ties are broken deterministically by score, then by source row order
+    (an earlier row wins a tie) -- a plain ``score >= quantile(1 - c)``
+    threshold flags every tied row at the boundary, which can over- or
+    under-shoot the requested fraction whenever the reference has repeated
+    values (small groups and heavily-ties detectors like ECOD/HBOS hit this
+    routinely). ``np.argsort(..., kind="stable")`` on ``-scores`` sorts
+    descending by score while a stable sort's own guarantee -- equal keys
+    keep their original relative order -- gives the row-order tie-break for
+    free, with no extra key needed.
+    """
+    n = len(scores)
+    k = round(n * contamination)
+    k = max(0, min(k, n))
+    flags = np.zeros(n, dtype=bool)
+    if k == 0:
+        return flags
+    order = np.argsort(-scores, kind="stable")
+    flags[order[:k]] = True
+    return flags
+
+
 class ScoreEnsemble:
     """Combine calibrated scores from multiple detectors into a final anomaly decision.
 
@@ -146,6 +172,17 @@ class ScoreEnsemble:
         if weighting == "manual" and not manual_weights:
             msg = "manual_weights must be provided when weighting='manual'."
             raise ValueError(msg)
+        if weighting == "manual" and manual_weights:
+            values = list(manual_weights.values())
+            if not all(np.isfinite(v) for v in values):
+                msg = f"manual_weights must be finite; got {manual_weights}"
+                raise ValueError(msg)
+            if any(v < 0 for v in values):
+                msg = f"manual_weights must be non-negative; got {manual_weights}"
+                raise ValueError(msg)
+            if sum(values) <= 0:
+                msg = f"manual_weights must sum to a positive total; got {manual_weights}"
+                raise ValueError(msg)
         if isinstance(contamination, float) and not (0.0 < contamination < 1.0):
             msg = f"contamination float must be in (0, 1); got {contamination}"
             raise ValueError(msg)
@@ -270,8 +307,19 @@ class ScoreEnsemble:
         else:
             # composite: single global threshold on combined score
             contamination, is_auto = self._resolve_contamination(flag_matrix)
-            threshold = float(np.quantile(combined, 1.0 - contamination))
-            anomaly_flag = combined >= threshold
+            if is_auto:
+                # contamination="auto" is a heuristic estimate, not a hard
+                # constraint -- left unchanged by P2-3, which only tightens
+                # *explicit* numeric contamination (see module docstring).
+                threshold = float(np.quantile(combined, 1.0 - contamination))
+                anomaly_flag = combined >= threshold
+            else:
+                # Explicit contamination: exact-k select the top-scoring
+                # rows rather than a quantile threshold, which over- or
+                # under-flags whenever the combined score has ties at the
+                # boundary (see _exact_k_flags).
+                anomaly_flag = _exact_k_flags(combined, contamination)
+                threshold = float(combined[anomaly_flag].min()) if anomaly_flag.any() else float("nan")
             contamination_used = contamination
             logger.info(
                 "ScoreEnsemble: weighting=%s combination=%s contamination=%.4f%s "
@@ -411,11 +459,14 @@ class ScoreEnsemble:
             rate = max(0.001, min(0.5, rate))
             return flags, rate, True
 
-        # Explicit contamination: threshold each detector at its own quantile
+        # Explicit contamination: exact-k select each detector independently
+        # (ties broken by score then source row order; see _exact_k_flags),
+        # rather than a per-detector quantile threshold that over- or
+        # under-flags whenever that detector's scores have ties at the
+        # boundary.
         c = float(self._contamination)
         for i in range(k):
-            thr_i = float(np.quantile(score_matrix[:, i], 1.0 - c))
-            flags[:, i] = score_matrix[:, i] >= thr_i
+            flags[:, i] = _exact_k_flags(score_matrix[:, i], c)
         return flags, c, False
 
     def _resolve_contamination(self, flag_matrix: np.ndarray) -> tuple[float, bool]:
