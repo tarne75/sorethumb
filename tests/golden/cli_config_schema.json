@@ -1,0 +1,682 @@
+{
+  "$defs": {
+    "ColumnsConfig": {
+      "additionalProperties": false,
+      "description": "Logical roles for specific columns.",
+      "properties": {
+        "group_by": {
+          "description": "Columns to group by before scoring (e.g. site_id, region). Protected from dropping.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Group By",
+          "type": "array"
+        },
+        "id_column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Row-identifier column to carry through to the output but exclude from features.",
+          "title": "Id Column"
+        },
+        "ignore": {
+          "description": "Glob patterns of columns to ignore. Prefix with 'type:<polars_dtype>' to restrict the glob to columns of that dtype, e.g. 'type:String id_*'.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Ignore",
+          "type": "array"
+        },
+        "include_only": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When set, only these columns (plus protected ones) are considered. Useful for narrowing scope without touching the source schema.",
+          "title": "Include Only"
+        },
+        "reference_column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional binary reference label (0/1) used only for evaluation, not training.",
+          "title": "Reference Column"
+        },
+        "time_column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Primary timestamp column. Protected from identifier-drop heuristics and used for temporal features and history alignment.",
+          "title": "Time Column"
+        }
+      },
+      "title": "ColumnsConfig",
+      "type": "object"
+    },
+    "DetectorConfig": {
+      "additionalProperties": false,
+      "description": "Configuration for a single anomaly detector.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Skip this detector entirely when False.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Detector identifier, e.g. 'isolation_forest'.",
+          "title": "Name",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": true,
+          "description": "Detector-specific hyperparameters, forwarded verbatim to the wrapper constructor. Nest an 'extra_params' table to pass arbitrary kwargs straight to the underlying sklearn estimator, e.g. params = { n_estimators = 300, extra_params = { n_jobs = 4 } }. Keys are validated at construction; reserved keys (random_state, contamination) and keys already exposed as wrapper arguments are rejected.",
+          "title": "Params",
+          "type": "object"
+        },
+        "train_row_cap": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Subsample the training data to at most this many rows before fitting this detector. Unset uses the detector's built-in cap (isolation_forest 250000, kmeans_distance 200000, one_class_svm 25000, lof 50000, ecod/hbos 500000). Set a value larger than your dataset to train on every row.",
+          "title": "Train Row Cap"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "DetectorConfig",
+      "type": "object"
+    },
+    "ExplainConfig": {
+      "additionalProperties": false,
+      "description": "Controls SHAP-based anomaly explanations.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Disable to skip the explanation stage entirely.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "kernel_shap": {
+          "default": false,
+          "description": "Fall back to KernelSHAP for models where TreeSHAP is unavailable. Much slower; sets a FallbackAttributionWarning.",
+          "title": "Kernel Shap",
+          "type": "boolean"
+        },
+        "max_rows": {
+          "default": 5000,
+          "description": "Explain at most this many rows; rows beyond the cap are skipped.",
+          "minimum": 1,
+          "title": "Max Rows",
+          "type": "integer"
+        },
+        "permutation_importance": {
+          "default": false,
+          "description": "Also compute permutation importance as a cross-check. Roughly doubles explanation runtime.",
+          "title": "Permutation Importance",
+          "type": "boolean"
+        },
+        "top_n": {
+          "default": 3,
+          "description": "Number of top contributing features to surface per anomalous row.",
+          "minimum": 1,
+          "title": "Top N",
+          "type": "integer"
+        }
+      },
+      "title": "ExplainConfig",
+      "type": "object"
+    },
+    "FeaturesConfig": {
+      "additionalProperties": false,
+      "description": "Feature engineering knobs.",
+      "properties": {
+        "array_features": {
+          "default": true,
+          "description": "Derive __len/__mean/__min/__max features from List columns.",
+          "title": "Array Features",
+          "type": "boolean"
+        },
+        "correlation_reduction": {
+          "default": true,
+          "description": "Drop one column from each pair with Pearson |r| > correlation_threshold. Reduces redundancy for distance-based detectors.",
+          "title": "Correlation Reduction",
+          "type": "boolean"
+        },
+        "correlation_threshold": {
+          "default": 0.95,
+          "description": "Correlation magnitude above which one of the pair is dropped.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Correlation Threshold",
+          "type": "number"
+        },
+        "dtype": {
+          "default": "float32",
+          "description": "Output dtype of the feature matrix. float32 halves memory vs float64.",
+          "enum": [
+            "float32",
+            "float64"
+          ],
+          "title": "Dtype",
+          "type": "string"
+        },
+        "max_feature_width": {
+          "default": 2000,
+          "description": "If the encoded feature matrix would exceed this many columns a FeatureWidthWarning is raised (or error in strict mode).",
+          "minimum": 1,
+          "title": "Max Feature Width",
+          "type": "integer"
+        },
+        "missing_indicators": {
+          "default": true,
+          "description": "Emit '<col>__is_missing' boolean features for high-null columns.",
+          "title": "Missing Indicators",
+          "type": "boolean"
+        },
+        "one_hot_max_cardinality": {
+          "default": 20,
+          "description": "Categorical columns with n_unique <= this get one-hot encoding. Above this threshold frequency encoding is used instead.",
+          "minimum": 2,
+          "title": "One Hot Max Cardinality",
+          "type": "integer"
+        },
+        "pca": {
+          "default": false,
+          "description": "Compress features with PCA after scaling. Useful when the feature matrix is very wide; adds latency and reduces explainability.",
+          "title": "Pca",
+          "type": "boolean"
+        },
+        "pca_max_components": {
+          "default": 50,
+          "description": "Maximum number of PCA components to retain.",
+          "minimum": 1,
+          "title": "Pca Max Components",
+          "type": "integer"
+        },
+        "pca_min_explained_variance": {
+          "default": 0.8,
+          "description": "Stop adding PCA components once cumulative explained variance exceeds this.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Pca Min Explained Variance",
+          "type": "number"
+        },
+        "scaler": {
+          "default": "robust",
+          "description": "'robust' uses median+IQR (less sensitive to extreme outliers). 'standard' uses mean+std (required if downstream models assume z-scores).",
+          "enum": [
+            "standard",
+            "robust"
+          ],
+          "title": "Scaler",
+          "type": "string"
+        },
+        "time_derivatives": {
+          "description": "Temporal derivatives to extract from the chosen time column. Supported: hour, dayofweek, day, month, year, quarter.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Time Derivatives",
+          "type": "array"
+        }
+      },
+      "title": "FeaturesConfig",
+      "type": "object"
+    },
+    "HistoryConfig": {
+      "additionalProperties": false,
+      "description": "Controls baseline comparison and trend detection.",
+      "properties": {
+        "bootstrap_periods": {
+          "default": 28,
+          "description": "Minimum periods of history required before history scoring activates.",
+          "minimum": 1,
+          "title": "Bootstrap Periods",
+          "type": "integer"
+        },
+        "lookback_periods": {
+          "default": 28,
+          "description": "Number of historical periods used to build the baseline.",
+          "minimum": 1,
+          "title": "Lookback Periods",
+          "type": "integer"
+        },
+        "low_volume_threshold": {
+          "default": 100,
+          "description": "Periods with fewer rows than this emit a PopulationMismatchWarning and are excluded from the baseline.",
+          "minimum": 1,
+          "title": "Low Volume Threshold",
+          "type": "integer"
+        },
+        "max_backfill_periods": {
+          "default": 30,
+          "description": "Maximum periods to backfill when catch-up runs are requested.",
+          "minimum": 0,
+          "title": "Max Backfill Periods",
+          "type": "integer"
+        },
+        "period_granularity": {
+          "default": "day",
+          "description": "Bucket size for period-over-period comparisons.",
+          "enum": [
+            "hour",
+            "day",
+            "week",
+            "month"
+          ],
+          "title": "Period Granularity",
+          "type": "string"
+        },
+        "roll_non_business": {
+          "default": true,
+          "description": "Include weekends and holidays when computing rolling baselines.",
+          "title": "Roll Non Business",
+          "type": "boolean"
+        }
+      },
+      "title": "HistoryConfig",
+      "type": "object"
+    },
+    "ProfilingConfig": {
+      "additionalProperties": false,
+      "description": "Thresholds that control column classification during profiling.",
+      "properties": {
+        "categorical_cardinality_ratio": {
+          "default": 0.01,
+          "description": "String columns with cardinality_ratio <= this are classified 'categorical'. Above this threshold they go through the identifier / free-text path.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Categorical Cardinality Ratio",
+          "type": "number"
+        },
+        "free_text_mean_length": {
+          "default": 20.0,
+          "description": "String columns with mean value length > this (after failing other checks) are classified 'free_text' and dropped.",
+          "minimum": 1.0,
+          "title": "Free Text Mean Length",
+          "type": "number"
+        },
+        "identifier_cardinality_ratio": {
+          "default": 0.9,
+          "description": "String columns with cardinality_ratio > this are candidates for identifier_like classification (subject to pattern checks).",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Identifier Cardinality Ratio",
+          "type": "number"
+        },
+        "identifier_detection": {
+          "default": "conservative",
+          "description": "'conservative' only flags UUID/hex patterns at high cardinality. 'aggressive' also flags any high-cardinality string. 'off' never classifies as identifier_like (use when IDs carry signal).",
+          "enum": [
+            "conservative",
+            "aggressive",
+            "off"
+          ],
+          "title": "Identifier Detection",
+          "type": "string"
+        },
+        "near_constant_distinct": {
+          "default": 3,
+          "description": "A non-empty column with n_unique <= this is classified 'near_constant' and dropped (too low variance to be useful).",
+          "minimum": 2,
+          "title": "Near Constant Distinct",
+          "type": "integer"
+        },
+        "null_ratio_drop": {
+          "default": 0.7,
+          "description": "Columns with null_ratio > this are classified 'high_null' and dropped. A missing-indicator feature is still emitted when missing_indicators=True.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Null Ratio Drop",
+          "type": "number"
+        },
+        "null_ratio_flag": {
+          "default": 0.0,
+          "description": "Columns with null_ratio > this (and <= null_ratio_drop) get a '<col>__is_missing' indicator feature appended. Default 0.0 means any column with at least one null emits an indicator.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Null Ratio Flag",
+          "type": "number"
+        },
+        "sample_rows_for_examples": {
+          "default": 1000,
+          "description": "Number of non-null rows sampled for example values and mean-length estimation.",
+          "minimum": 10,
+          "title": "Sample Rows For Examples",
+          "type": "integer"
+        }
+      },
+      "title": "ProfilingConfig",
+      "type": "object"
+    },
+    "ReportConfig": {
+      "additionalProperties": false,
+      "description": "Output report settings. Excluded from the config hash (cosmetic only).",
+      "properties": {
+        "formats": {
+          "description": "Report formats to generate. Supported: html, csv, json.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Formats",
+          "type": "array"
+        },
+        "open_after": {
+          "default": false,
+          "description": "Open the HTML report in the default browser after generation.",
+          "title": "Open After",
+          "type": "boolean"
+        },
+        "rolling_windows": {
+          "description": "Rolling window sizes (in periods) shown in trend charts.",
+          "items": {
+            "type": "integer"
+          },
+          "title": "Rolling Windows",
+          "type": "array"
+        }
+      },
+      "title": "ReportConfig",
+      "type": "object"
+    },
+    "RunConfig": {
+      "additionalProperties": false,
+      "description": "Execution-level settings. workdir is required; everything else has a default.",
+      "properties": {
+        "log_level": {
+          "default": "INFO",
+          "description": "Python logging level for the sorethumb logger. Logs are written to both the console and {workdir}/logs/sorethumb.log (rotating, 10 MB limit, 5 backups). Does not affect the config hash.",
+          "title": "Log Level",
+          "type": "string"
+        },
+        "max_memory_mb": {
+          "default": 8192,
+          "description": "Pre-flight cap on the projected feature-matrix size (rows x encoded columns x dtype bytes). A run whose estimate exceeds this aborts with MemoryBudgetError before any model is fitted. It is not a live RSS ceiling -- actual peak memory can still exceed the budget.",
+          "minimum": 256,
+          "title": "Max Memory Mb",
+          "type": "integer"
+        },
+        "max_rows": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Truncate the input to at most this many rows (after filtering). Triggers SampleTruncatedWarning. None uses all rows.",
+          "title": "Max Rows"
+        },
+        "retention_days": {
+          "default": 90,
+          "description": "Prune run artefacts older than this many days from workdir.",
+          "minimum": 1,
+          "title": "Retention Days",
+          "type": "integer"
+        },
+        "reuse_models": {
+          "default": false,
+          "description": "If a matching model artefact exists in workdir, skip retraining. Useful for score-forward runs.",
+          "title": "Reuse Models",
+          "type": "boolean"
+        },
+        "seed": {
+          "default": 42,
+          "description": "Global random seed for reproducible results.",
+          "title": "Seed",
+          "type": "integer"
+        },
+        "slow_stage_seconds": {
+          "default": 300,
+          "description": "Emit a SlowStageWarning if any pipeline stage exceeds this many seconds. Purely diagnostic; does not affect results.",
+          "minimum": 1,
+          "title": "Slow Stage Seconds",
+          "type": "integer"
+        },
+        "strict": {
+          "default": false,
+          "description": "Promote all SorethumbWarnings to errors. Always active in the test suite.",
+          "title": "Strict",
+          "type": "boolean"
+        },
+        "workdir": {
+          "description": "Workspace root directory where all run artefacts are stored.",
+          "title": "Workdir",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workdir"
+      ],
+      "title": "RunConfig",
+      "type": "object"
+    },
+    "ScoringConfig": {
+      "additionalProperties": false,
+      "description": "How per-detector scores are combined into a single anomaly score.",
+      "properties": {
+        "combination": {
+          "default": "intersection",
+          "description": "'composite' averages normalised detector scores and applies a single global threshold. 'intersection' thresholds each detector independently then flags rows where ALL detectors agree (high precision). 'union' thresholds each detector independently then flags rows where ANY detector agrees (high recall).",
+          "enum": [
+            "composite",
+            "intersection",
+            "union"
+          ],
+          "title": "Combination",
+          "type": "string"
+        },
+        "contamination": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "default": "auto",
+          "description": "Review-budget knob: the fraction of rows to flag. NOT an estimate of how many anomalies the data contains -- it sizes the shortlist you are willing to review. A float in (0, 0.5] makes each detector flag exactly that fraction and sets the OneClassSVM nu to match. 'auto' lets each detector use its own heuristic boundary (OCSVM zero-hyperplane, KMeans Tukey fence, IsolationForest offset); these rates differ per detector and the run output reports the realised rate of each.",
+          "title": "Contamination"
+        },
+        "min_records": {
+          "default": 100,
+          "description": "Minimum rows needed to run scoring. Fewer rows raise a CalibrationModeWarning (or error in strict mode).",
+          "minimum": 1,
+          "title": "Min Records",
+          "type": "integer"
+        },
+        "weighting": {
+          "default": "equal",
+          "description": "How detector weights are set for combination='composite' (ignored by 'intersection' / 'union'). 'equal': 1/n each. 'manual': from `weights`. 'agreement': by each detector's rank correlation (leave-one-out Spearman) with the consensus ranking; anti-correlated or flat detectors get weight 0.",
+          "enum": [
+            "equal",
+            "manual",
+            "agreement"
+          ],
+          "title": "Weighting",
+          "type": "string"
+        },
+        "weights": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "description": "Per-detector weights, used only when weighting='manual'.",
+          "title": "Weights",
+          "type": "object"
+        }
+      },
+      "title": "ScoringConfig",
+      "type": "object"
+    },
+    "SourceConfig": {
+      "additionalProperties": false,
+      "description": "Where the raw data lives and how to read it.",
+      "properties": {
+        "auth": {
+          "default": "none",
+          "description": "HTTP authentication scheme. Token/credentials come from auth_env_var.",
+          "enum": [
+            "none",
+            "bearer",
+            "basic"
+          ],
+          "title": "Auth",
+          "type": "string"
+        },
+        "auth_env_var": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Name of the environment variable that holds the auth credential. The value is read at runtime and never stored in the config or logs.",
+          "title": "Auth Env Var"
+        },
+        "cache": {
+          "default": true,
+          "description": "Cache downloaded files locally. Disable only for tiny or always-fresh sources.",
+          "title": "Cache",
+          "type": "boolean"
+        },
+        "dataset_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Stable logical identity for this dataset, kept constant across snapshots (appended rows, corrections, the file moving to a new path). All history -- periods, per-group totals, runs -- is keyed on it. When unset it is derived from 'uri'; set it explicitly so a change of path does not orphan prior history. Allowed characters: letters, digits, '.', '_', '-' (max 128).",
+          "title": "Dataset Id"
+        },
+        "format": {
+          "default": "auto",
+          "description": "File format. 'auto' infers from the file extension. Set explicitly when the extension is misleading.",
+          "enum": [
+            "auto",
+            "csv",
+            "tsv",
+            "parquet",
+            "json",
+            "jsonl",
+            "tsf"
+          ],
+          "title": "Format",
+          "type": "string"
+        },
+        "max_nesting_depth": {
+          "default": 5,
+          "description": "Maximum recursion depth for struct unnesting. 0 disables unnesting.",
+          "minimum": 0,
+          "title": "Max Nesting Depth",
+          "type": "integer"
+        },
+        "read_options": {
+          "additionalProperties": true,
+          "description": "Format-specific reader overrides, e.g. {'delimiter': '|', 'null_values': ['NA']}. Passed verbatim to the polars scan_* call.",
+          "title": "Read Options",
+          "type": "object"
+        },
+        "uri": {
+          "description": "Local path or http(s) URL to the source file.",
+          "title": "Uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ],
+      "title": "SourceConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Top-level sorethumb configuration.\n\nThe library always receives a fully-resolved ``Config`` object.\nConstruct it programmatically in tests; use the CLI layer for TOML/env/flag\nresolution in production.",
+  "properties": {
+    "columns": {
+      "$ref": "#/$defs/ColumnsConfig"
+    },
+    "detectors": {
+      "items": {
+        "$ref": "#/$defs/DetectorConfig"
+      },
+      "title": "Detectors",
+      "type": "array"
+    },
+    "explain": {
+      "$ref": "#/$defs/ExplainConfig"
+    },
+    "features": {
+      "$ref": "#/$defs/FeaturesConfig"
+    },
+    "history": {
+      "$ref": "#/$defs/HistoryConfig"
+    },
+    "profiling": {
+      "$ref": "#/$defs/ProfilingConfig"
+    },
+    "report": {
+      "$ref": "#/$defs/ReportConfig"
+    },
+    "run": {
+      "$ref": "#/$defs/RunConfig"
+    },
+    "scoring": {
+      "$ref": "#/$defs/ScoringConfig"
+    },
+    "source": {
+      "$ref": "#/$defs/SourceConfig"
+    }
+  },
+  "required": [
+    "source",
+    "run"
+  ],
+  "title": "Config",
+  "type": "object"
+}

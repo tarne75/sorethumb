@@ -43,42 +43,6 @@ def _data_with_outliers(n: int = 200, n_outliers: int = 10, seed: int = 0) -> np
 # ---------------------------------------------------------------------------
 
 
-def test_isolation_forest_fit_score_shape():
-    X = _normal_data()
-    det = IsolationForestDetector(n_estimators=50)
-    det.fit(X, seed=42)
-    scores = det.score_samples(X)
-    assert scores.shape == (len(X),)
-
-
-def test_isolation_forest_scores_are_floats():
-    X = _normal_data()
-    det = IsolationForestDetector(n_estimators=50)
-    det.fit(X, seed=42)
-    scores = det.score_samples(X)
-    assert scores.dtype.kind == "f"
-
-
-def test_isolation_forest_higher_more_normal():
-    X = _data_with_outliers()
-    det = IsolationForestDetector(n_estimators=100)
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    outlier_mean = scores[:10].mean()
-    normal_mean = scores[10:].mean()
-    assert normal_mean > outlier_mean, "outliers should score lower than normals"
-
-
-def test_isolation_forest_natural_flag_shape():
-    X = _normal_data()
-    det = IsolationForestDetector(n_estimators=50)
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    flags = det.natural_flag(scores)
-    assert flags.shape == (len(X),)
-    assert flags.dtype == bool
-
-
 def test_isolation_forest_natural_flag_flags_outliers():
     X = _data_with_outliers(n=200, n_outliers=10)
     det = IsolationForestDetector(n_estimators=100)
@@ -96,23 +60,9 @@ def test_isolation_forest_get_params():
     assert params["max_samples"] == 512
 
 
-def test_isolation_forest_class_vars():
-    assert IsolationForestDetector.name == "isolation_forest"
-    assert IsolationForestDetector.supports_tree_shap is True
-    assert IsolationForestDetector.default_train_row_cap == 250_000
-
-
 # ---------------------------------------------------------------------------
 # KMeans
 # ---------------------------------------------------------------------------
-
-
-def test_kmeans_fit_score_shape():
-    X = _normal_data(n=300)
-    det = KMeansDetector(k=3)
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    assert scores.shape == (300,)
 
 
 def test_kmeans_scores_negative_distance():
@@ -140,16 +90,6 @@ def test_kmeans_last_contributions_populated():
     det.score_samples(X)
     assert det.last_contributions is not None
     assert det.last_contributions.shape == (100, 4)
-
-
-def test_kmeans_natural_flag_shape_and_dtype():
-    X = _normal_data(n=100)
-    det = KMeansDetector(k=2)
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    flags = det.natural_flag(scores)
-    assert flags.shape == (100,)
-    assert flags.dtype == bool
 
 
 def test_kmeans_natural_flag_tukey_outliers():
@@ -181,12 +121,6 @@ def test_kmeans_get_params():
     assert params["k_min"] == 2
     assert params["k_max"] == 8
     assert params["n_init"] == 5
-
-
-def test_kmeans_class_vars():
-    assert KMeansDetector.name == "kmeans_distance"
-    assert KMeansDetector.supports_tree_shap is False
-    assert KMeansDetector.default_train_row_cap == 200_000
 
 
 def test_kmeans_get_params_includes_cblof_fields():
@@ -290,36 +224,6 @@ def test_elbow_index_constant_returns_zero():
 # ---------------------------------------------------------------------------
 
 
-def test_ocsvm_fit_score_shape():
-    X = _normal_data(n=200)
-    det = OneClassSVMDetector()
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    assert scores.shape == (200,)
-
-
-def test_ocsvm_decision_function_sign():
-    X = _data_with_outliers(n=200, n_outliers=10)
-    det = OneClassSVMDetector(nu=0.1)
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    # Decision function: positive = inlier, negative = outlier
-    # Outliers (first 10) should have lower (more negative) scores
-    outlier_mean = scores[:10].mean()
-    normal_mean = scores[10:].mean()
-    assert normal_mean > outlier_mean
-
-
-def test_ocsvm_natural_flag_shape():
-    X = _normal_data(n=100)
-    det = OneClassSVMDetector()
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    flags = det.natural_flag(scores)
-    assert flags.shape == (100,)
-    assert flags.dtype == bool
-
-
 def test_ocsvm_natural_flag_below_zero():
     # Manually craft scores to check the threshold
     scores = np.array([-0.5, 0.0, 0.5, -1.0, 1.0])
@@ -370,49 +274,9 @@ def test_ocsvm_get_params():
     assert params["resolved_nu"] == pytest.approx(0.05)
 
 
-def test_ocsvm_class_vars():
-    assert OneClassSVMDetector.name == "one_class_svm"
-    assert OneClassSVMDetector.supports_tree_shap is False
-    assert OneClassSVMDetector.default_train_row_cap == 25_000
-
-
 # ---------------------------------------------------------------------------
 # ECOD
 # ---------------------------------------------------------------------------
-
-
-def test_ecod_fit_score_shape():
-    X = _normal_data(n=200)
-    det = ECODDetector()
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    assert scores.shape == (200,)
-
-
-def test_ecod_scores_are_floats():
-    X = _normal_data(n=200)
-    det = ECODDetector()
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    assert scores.dtype.kind == "f"
-
-
-def test_ecod_higher_more_normal():
-    X = _data_with_outliers(n=200, n_outliers=10)
-    det = ECODDetector()
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    assert scores[10:].mean() > scores[:10].mean(), "outliers should score lower than normals"
-
-
-def test_ecod_natural_flag_shape_and_dtype():
-    X = _normal_data(n=200)
-    det = ECODDetector()
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    flags = det.natural_flag(scores)
-    assert flags.shape == (200,)
-    assert flags.dtype == bool
 
 
 def test_ecod_natural_flag_flags_outliers():
@@ -427,12 +291,6 @@ def test_ecod_natural_flag_flags_outliers():
 def test_ecod_get_params():
     det = ECODDetector()
     assert det.get_params() == {"extra_params": {}}
-
-
-def test_ecod_class_vars():
-    assert ECODDetector.name == "ecod"
-    assert ECODDetector.supports_tree_shap is False
-    assert ECODDetector.default_train_row_cap == 500_000
 
 
 def test_ecod_score_on_unseen_data():
@@ -493,43 +351,6 @@ def test_ecod_feature_contributions_higher_for_planted_outlier_feature():
 # ---------------------------------------------------------------------------
 
 
-def test_lof_fit_score_shape():
-    X = _normal_data(n=200)
-    det = LOFDetector(n_neighbors=10)
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    assert scores.shape == (200,)
-
-
-def test_lof_scores_are_floats():
-    X = _normal_data(n=200)
-    det = LOFDetector(n_neighbors=10)
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    assert scores.dtype.kind == "f"
-
-
-def test_lof_higher_more_normal():
-    # LOF novelty mode scores *new* points — test on held-out data
-    rng = np.random.default_rng(42)
-    X_train = rng.standard_normal((200, 4))
-    det = LOFDetector(n_neighbors=10)
-    det.fit(X_train, seed=0)
-    X_normal = rng.standard_normal((20, 4))
-    X_outlier = rng.standard_normal((20, 4)) + 10.0  # far from training distribution
-    assert det.score_samples(X_normal).mean() > det.score_samples(X_outlier).mean()
-
-
-def test_lof_natural_flag_shape_and_dtype():
-    X = _normal_data(n=200)
-    det = LOFDetector(n_neighbors=10)
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    flags = det.natural_flag(scores)
-    assert flags.shape == (200,)
-    assert flags.dtype == bool
-
-
 def test_lof_natural_flag_flags_outliers():
     # Score held-out outliers against a model trained on normal data
     rng = np.random.default_rng(5)
@@ -548,12 +369,6 @@ def test_lof_get_params():
     assert det.get_params() == {"n_neighbors": 15, "extra_params": {}}
 
 
-def test_lof_class_vars():
-    assert LOFDetector.name == "lof"
-    assert LOFDetector.supports_tree_shap is False
-    assert LOFDetector.default_train_row_cap == 50_000
-
-
 def test_lof_nneighbors_clamped_on_small_dataset():
     """n_neighbors must be clamped to n_rows-1 when dataset is tiny."""
     rng = np.random.default_rng(0)
@@ -567,40 +382,6 @@ def test_lof_nneighbors_clamped_on_small_dataset():
 # ---------------------------------------------------------------------------
 # HBOS
 # ---------------------------------------------------------------------------
-
-
-def test_hbos_fit_score_shape():
-    X = _normal_data(n=200)
-    det = HBOSDetector()
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    assert scores.shape == (200,)
-
-
-def test_hbos_scores_are_floats():
-    X = _normal_data(n=200)
-    det = HBOSDetector()
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    assert scores.dtype.kind == "f"
-
-
-def test_hbos_higher_more_normal():
-    X = _data_with_outliers(n=200, n_outliers=10)
-    det = HBOSDetector()
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    assert scores[10:].mean() > scores[:10].mean(), "outliers should score lower than normals"
-
-
-def test_hbos_natural_flag_shape_and_dtype():
-    X = _normal_data(n=200)
-    det = HBOSDetector()
-    det.fit(X, seed=0)
-    scores = det.score_samples(X)
-    flags = det.natural_flag(scores)
-    assert flags.shape == (200,)
-    assert flags.dtype == bool
 
 
 def test_hbos_natural_flag_flags_outliers():
@@ -624,12 +405,6 @@ def test_hbos_fixed_bins():
 def test_hbos_get_params_auto():
     det = HBOSDetector()
     assert det.get_params() == {"n_bins": "auto", "extra_params": {}}
-
-
-def test_hbos_class_vars():
-    assert HBOSDetector.name == "hbos"
-    assert HBOSDetector.supports_tree_shap is False
-    assert HBOSDetector.default_train_row_cap == 500_000
 
 
 def test_hbos_score_on_unseen_data():

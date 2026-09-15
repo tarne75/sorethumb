@@ -8,6 +8,7 @@ tests/contract/test_cli.py.
 from __future__ import annotations
 
 import json
+import tomllib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -132,29 +133,31 @@ def test_run_idempotent_second_run_skips_groups(workspace):
 
 
 def test_run_dry_run_registers_dataset_and_run_but_fits_nothing(workspace):
-    _, toml_path, workdir = workspace
+    csv_path, toml_path, workdir = workspace
     result = runner.invoke(app, ["run", "--config", str(toml_path), "--dry-run"])
     assert result.exit_code == 0
     assert "DRY RUN" in result.stdout
 
     from sorethumb import Workspace
+    from sorethumb.io.fingerprint import logical_dataset_id
+
+    dataset_fp = logical_dataset_id(None, str(csv_path))
 
     with Workspace.open(workdir) as ws:
-        conn = ws.store._conn
-        # It DOES write: the workspace DB (migrations applied), a dataset row,
-        # a dataset_snapshot row, and a run row left in status 'running'.
-        assert conn.execute("SELECT COUNT(*) FROM dataset").fetchone()[0] == 1
-        assert conn.execute("SELECT COUNT(*) FROM dataset_snapshot").fetchone()[0] == 1
-        runs = conn.execute("SELECT status FROM run").fetchall()
-        assert [r[0] for r in runs] == ["running"]
-        # It does NOT write: run_group rows, models, results, history, report.
-        assert conn.execute("SELECT COUNT(*) FROM run_group").fetchone()[0] == 0
-        assert conn.execute("SELECT COUNT(*) FROM totals").fetchone()[0] == 0
-        assert conn.execute("SELECT COUNT(*) FROM model").fetchone()[0] == 0
+        # It DOES write: the workspace DB (migrations applied), a dataset +
+        # dataset_snapshot row, and a run row left in status 'running'.
+        assert len(ws.store.dataset_snapshots(dataset_fp)) == 1
+        runs = ws.store.list_runs()
+        assert [r["status"] for r in runs] == ["running"]
+        # It does NOT write: run_group rows (and therefore no totals either,
+        # since totals are only recorded per processed group).
+        assert ws.store.all_run_groups(runs[0]["run_id"]) == []
 
+    # No results/models/report artefacts were produced on disk either.
     assert list(workdir.rglob("anomalies.parquet")) == []
     assert list(workdir.rglob("index.html")) == []
     assert list((workdir / "models").rglob("plan.json")) == []
+    assert list((workdir / "models").rglob("*.joblib")) == []
 
 
 def test_run_with_groups(workspace_grouped):
@@ -422,11 +425,19 @@ def timeseries_workspace(tmp_path: Path):
     return toml_path, workdir, labels
 
 
-def _totals_period_labels(workdir: Path) -> set[str]:
+def _totals_period_labels(toml_path: Path, workdir: Path, candidate_labels: list[str]) -> set[str]:
+    """Which of ``candidate_labels`` have a totals row, via the Store's public API
+    (not raw SQL -- CLI tests treat the store as a black box)."""
     from sorethumb import Workspace
+    from sorethumb.config import Config
+    from sorethumb.io.fingerprint import logical_dataset_id
+
+    with toml_path.open("rb") as fh:
+        cfg = Config.model_validate(tomllib.load(fh))
+    dataset_fp = logical_dataset_id(cfg.source.dataset_id, cfg.source.uri)
 
     with Workspace.open(workdir) as ws:
-        rows = ws.store._conn.execute("SELECT DISTINCT period_label FROM totals").fetchall()
+        rows = ws.store.totals_for_periods(dataset_fp, candidate_labels, cfg.config_hash())
     return {str(r["period_label"]) for r in rows}
 
 
@@ -439,7 +450,7 @@ def test_backfill_processes_pending_periods_and_writes_totals(timeseries_workspa
     assert "Backfill complete." in result.stdout
 
     # every backfilled period now has a totals row (this is what makes it idempotent)
-    assert _totals_period_labels(workdir) == set(labels)
+    assert _totals_period_labels(toml_path, workdir, labels) == set(labels)
 
 
 def test_backfill_is_idempotent(timeseries_workspace):
@@ -460,7 +471,7 @@ def test_backfill_dry_run_writes_no_totals(timeseries_workspace):
     assert result.exit_code == 0, result.stdout + (result.stderr or "")
     for label in labels:
         assert label in result.stdout
-    assert _totals_period_labels(workdir) == set()
+    assert _totals_period_labels(toml_path, workdir, labels) == set()
 
 
 def test_backfill_no_time_column_exits_cleanly(workspace):

@@ -6,6 +6,7 @@ feature schema hash.
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -14,10 +15,11 @@ import pytest
 
 from sorethumb import Config
 from sorethumb._pipeline import run_detection
-from sorethumb.config import DetectorConfig, RunConfig, SourceConfig
+from sorethumb.config import DetectorConfig, FeaturesConfig, RunConfig, SourceConfig
 from sorethumb.detectors.isolation_forest import IsolationForestDetector
 from sorethumb.detectors.kmeans_distance import KMeansDetector
 from sorethumb.detectors.one_class_svm import OneClassSVMDetector
+from sorethumb.errors import FeatureWidthWarning
 from sorethumb.features.build import apply_feature_plan, fit_features
 from sorethumb.profiling.plan import build_feature_plan
 from tests.factories.configs import make_config
@@ -157,29 +159,40 @@ def test_kmeans_auc_above_half() -> None:
 
 
 def test_fit_apply_schema_is_stable(tmp_path: Path) -> None:
-    """apply_feature_plan must produce the same feature_schema_hash as build_features.
+    """apply_feature_plan must produce the same feature_schema_hash as fit_features
+    when width-control demotion actually fires -- not just when the fixture happens
+    to already be under budget and demotion is a no-op on both sides.
 
-    Uses a column with enough unique values to trigger demotion
-    (n_unique > max_feature_width, default 50).
+    Three low-cardinality categorical columns (each one-hot on its own) push the
+    matrix well past a deliberately restrictive max_feature_width, so at least one
+    must be demoted to frequency encoding for both fit and apply to agree on.
     """
     rng = np.random.default_rng(0)
     n = 200
-    # 80 unique categories → above default max_feature_width=50 → triggers demotion
-    cats = [f"cat_{i % 80}" for i in range(n)]
     df = pl.DataFrame(
         {
             "id": list(range(n)),
             "num_a": rng.normal(0.0, 1.0, n).tolist(),
-            "high_card": cats,
+            "cat_a": [f"a{i % 8}" for i in range(n)],
+            "cat_b": [f"b{i % 8}" for i in range(n)],
+            "cat_c": [f"c{i % 8}" for i in range(n)],
         }
     )
 
     cfg = Config(
         source=SourceConfig(uri="dummy"),
         run=RunConfig(workdir=str(tmp_path), seed=0),
+        features=FeaturesConfig(max_feature_width=10),  # 3 one-hot columns need ~27
     )
     plan = build_feature_plan(df, cfg)
-    fit_space = fit_features(df, plan, cfg)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fit_space = fit_features(df, plan, cfg)
+
+    assert plan.demoted_columns, "fixture must actually trigger demotion to exercise this path"
+    assert any(issubclass(w.category, FeatureWidthWarning) for w in caught)
+
     apply_space = apply_feature_plan(df, plan)
 
     assert fit_space.feature_schema_hash == apply_space.feature_schema_hash, (

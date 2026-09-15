@@ -18,6 +18,7 @@ from typer.testing import CliRunner
 
 from sorethumb.cli import app
 from tests.factories.frames import write_grouped_csv as _write_csv
+from tests.factories.golden import assert_matches_golden
 
 pytestmark = pytest.mark.contract
 
@@ -163,12 +164,14 @@ def test_config_check_missing_file(tmp_path: Path):
     assert result.exit_code == 2
 
 
-def test_config_schema_emits_json(workspace):
+def test_config_schema_matches_golden(workspace):
+    """The full JSON schema, not just a couple of top-level keys -- a renamed
+    or dropped field anywhere in the config tree is a breaking change for
+    anyone generating config files from this schema."""
     _, toml_path, _ = workspace
     result = runner.invoke(app, ["config", "schema"])
     assert result.exit_code == 0
-    schema = json.loads(result.stdout)
-    assert "properties" in schema or "$defs" in schema
+    assert_matches_golden(result.stdout, "cli_config_schema.json", is_json=True)
 
 
 def test_config_show_prints_summary(workspace):
@@ -222,13 +225,10 @@ def test_detectors_lists_isolation_forest():
     assert "isolation_forest" in result.stdout
 
 
-def test_detectors_json_output():
+def test_detectors_json_output_matches_golden():
     result = runner.invoke(app, ["detectors", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.stdout)
-    assert isinstance(data, list)
-    names = [d["name"] for d in data]
-    assert "isolation_forest" in names
+    assert_matches_golden(result.stdout, "cli_detectors.json", is_json=True)
 
 
 # ---------------------------------------------------------------------------

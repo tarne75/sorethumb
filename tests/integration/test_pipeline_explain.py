@@ -58,9 +58,11 @@ def test_explanation_references_perturbed_column(tmp_path: Path) -> None:
     assert parquet_path is not None
     df_anomalies = pl.read_parquet(parquet_path)
 
-    # At least one flagged row should have reason_1 referencing num_a
-    if "reason_1" not in df_anomalies.columns:
-        pytest.skip("explain not enabled or reason columns absent")
+    # explain is enabled by default, so reason columns must be present -- a
+    # missing reason_1 here is itself a bug, not a reason to skip the test.
+    assert "reason_1" in df_anomalies.columns, (
+        f"explain is enabled by default; reason_1 must be present. Got columns: {df_anomalies.columns}"
+    )
 
     reason_values = df_anomalies["reason_1"].drop_nulls().to_list()
     # The reason must not only mention num_a but show the planted value (999).

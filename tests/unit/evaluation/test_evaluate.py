@@ -90,65 +90,23 @@ def test_metrics_str_contains_key_fields():
 # ---------------------------------------------------------------------------
 
 
-def test_evaluate_scores_returns_metrics():
-    scores, labels = _random_scores()
-    m = evaluate_scores(scores, labels)
+def test_evaluate_scores_on_random_input():
+    """One evaluate_scores() call, one coherent set of assertions over every
+    field, instead of nine near-identical calls each checking one field."""
+    n, contamination = 300, 0.15
+    scores, labels = _random_scores(n=n, contamination=contamination)
+    m = evaluate_scores(scores, labels, contamination=contamination)
+
     assert isinstance(m, Metrics)
-
-
-def test_evaluate_scores_roc_auc_range():
-    scores, labels = _random_scores()
-    m = evaluate_scores(scores, labels)
     assert 0.0 <= m.roc_auc <= 1.0
-
-
-def test_evaluate_scores_ap_range():
-    scores, labels = _random_scores()
-    m = evaluate_scores(scores, labels)
     assert 0.0 <= m.average_precision <= 1.0
-
-
-def test_evaluate_scores_precision_at_k_range():
-    scores, labels = _random_scores()
-    m = evaluate_scores(scores, labels, contamination=0.1)
     assert 0.0 <= m.precision_at_k <= 1.0
-
-
-def test_evaluate_scores_recall_at_k_range():
-    scores, labels = _random_scores()
-    m = evaluate_scores(scores, labels, contamination=0.1)
     assert 0.0 <= m.recall_at_k <= 1.0
-
-
-def test_evaluate_scores_f1_range():
-    scores, labels = _random_scores()
-    m = evaluate_scores(scores, labels)
     assert 0.0 <= m.f1_at_contamination <= 1.0
-
-
-def test_evaluate_scores_k_used_matches_contamination():
-    scores, labels = _random_scores(n=200, contamination=0.1)
-    m = evaluate_scores(scores, labels, contamination=0.1)
-    expected_k = max(1, round(200 * 0.1))
-    assert m.k_used == expected_k
-
-
-def test_evaluate_scores_contamination_stored():
-    scores, labels = _random_scores()
-    m = evaluate_scores(scores, labels, contamination=0.15)
-    assert m.contamination_used == pytest.approx(0.15)
-
-
-def test_evaluate_scores_n_total():
-    scores, labels = _random_scores(n=300)
-    m = evaluate_scores(scores, labels)
-    assert m.n_total == 300
-
-
-def test_evaluate_scores_n_positives():
-    scores, labels = _random_scores(n=200, contamination=0.1)
-    m = evaluate_scores(scores, labels)
+    assert m.contamination_used == pytest.approx(contamination)
+    assert m.n_total == n
     assert m.n_positives == int(labels.sum())
+    assert m.k_used == max(1, round(n * contamination))
 
 
 # ---------------------------------------------------------------------------
@@ -156,27 +114,12 @@ def test_evaluate_scores_n_positives():
 # ---------------------------------------------------------------------------
 
 
-def test_perfect_detector_roc_auc_is_1():
-    scores, labels = _perfect_scores()
-    m = evaluate_scores(scores, labels)
+def test_perfect_detector_maximises_every_metric():
+    scores, labels = _perfect_scores(contamination=0.1)
+    m = evaluate_scores(scores, labels, contamination=0.1)
     assert m.roc_auc == pytest.approx(1.0, abs=1e-6)
-
-
-def test_perfect_detector_ap_is_1():
-    scores, labels = _perfect_scores()
-    m = evaluate_scores(scores, labels)
     assert m.average_precision == pytest.approx(1.0, abs=1e-6)
-
-
-def test_perfect_detector_precision_at_k_is_1():
-    scores, labels = _perfect_scores(contamination=0.1)
-    m = evaluate_scores(scores, labels, contamination=0.1)
     assert m.precision_at_k == pytest.approx(1.0, abs=1e-6)
-
-
-def test_perfect_detector_recall_at_k_is_1():
-    scores, labels = _perfect_scores(contamination=0.1)
-    m = evaluate_scores(scores, labels, contamination=0.1)
     assert m.recall_at_k == pytest.approx(1.0, abs=1e-6)
 
 

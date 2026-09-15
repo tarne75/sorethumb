@@ -19,6 +19,7 @@ from sorethumb.report.csv import write_group_csv
 from sorethumb.report.html import GroupSection, RunMeta, render_report
 from tests.factories.configs import make_config
 from tests.factories.frames import write_planted_csv
+from tests.factories.golden import assert_matches_golden
 
 pytestmark = pytest.mark.integration
 
@@ -125,19 +126,13 @@ class TestRenderTrendChart:
 
 
 class TestWriteGroupCsv:
-    def test_writes_csv_file(self, tmp_path: Path):
+    def test_writes_csv_with_matching_name_columns_and_row_count(self, tmp_path: Path):
         path = write_group_csv(_RECORDS_DF, tmp_path, "abc123def456abcd")
         assert path.exists()
         assert path.name == "abc123def456abcd.csv"
 
-    def test_csv_has_correct_columns(self, tmp_path: Path):
-        path = write_group_csv(_RECORDS_DF, tmp_path, "testkey12345678a")
         df = pl.read_csv(str(path))
         assert set(df.columns) == set(_RECORDS_DF.columns)
-
-    def test_csv_row_count_matches(self, tmp_path: Path):
-        path = write_group_csv(_RECORDS_DF, tmp_path, "rowcountkey12345")
-        df = pl.read_csv(str(path))
         assert len(df) == len(_RECORDS_DF)
 
     def test_creates_out_dir_if_missing(self, tmp_path: Path):
@@ -214,28 +209,17 @@ class TestWriteGroupCsv:
 
 
 class TestRenderReport:
-    def test_writes_index_html(self, tmp_path: Path):
-        grp = _group()
-        path = render_report(_RUN_META, [grp], tmp_path)
+    def test_writes_index_html_matching_golden(self, tmp_path: Path):
+        """The full rendered HTML, not just a couple of substrings -- a
+        layout/provenance regression anywhere in the template shows up here."""
+        path = render_report(_RUN_META, [_group()], tmp_path)
         assert path.name == "index.html"
-        assert path.exists()
-
-    def test_html_contains_run_id(self, tmp_path: Path):
-        grp = _group()
-        path = render_report(_RUN_META, [grp], tmp_path)
-        content = path.read_text(encoding="utf-8")
-        assert "run_test_01" in content
-
-    def test_html_contains_dataset_uri(self, tmp_path: Path):
-        grp = _group()
-        path = render_report(_RUN_META, [grp], tmp_path)
-        content = path.read_text(encoding="utf-8")
-        assert "file:///data/test.parquet" in content
+        assert_matches_golden(path.read_text(encoding="utf-8"), "report_index.html")
 
     def test_html_is_self_contained_no_external_refs(self, tmp_path: Path):
-        """No CDN URLs, no external stylesheets, no external script src."""
-        grp = _group()
-        path = render_report(_RUN_META, [grp], tmp_path)
+        """No CDN URLs, no external stylesheets, no external script src -- a
+        report must render standalone, offline, wherever it's opened."""
+        path = render_report(_RUN_META, [_group()], tmp_path)
         content = path.read_text(encoding="utf-8")
         assert "://cdn" not in content
         assert '<link rel="stylesheet"' not in content

@@ -251,3 +251,74 @@ local definition always wins in its own file), but it's a naming trap for anyone
 files side by side. Renaming it (e.g. to `cli_workspace`) would touch every one of the ~50 CLI
 test signatures for a cosmetic win; left as a note rather than done under this phase's already
 large diff.
+
+## What P1-5 changed
+
+- **Detector contract table** (`tests/contract/test_detector_plugins.py`): a `DetectorSpec`
+  dataclass table, one row per built-in detector, with fields for min_rows, whether `seed`
+  actually changes the fit (verified against each wrapper's `# noqa: ARG002` on `seed` --
+  isolation_forest/kmeans_distance pass it to sklearn's `random_state`, one_class_svm/lof/
+  ecod/hbos ignore it entirely), the natural_flag mechanism, training cap, extra-params
+  support, and attribution kind. Four parametrized tests run over the table: class-vars match,
+  fit/score at the documented minimum row count, the higher-is-more-normal orientation
+  invariant, seed-sensitivity, and (new) a save_model/load_model round-trip -- which ECOD,
+  HBOS and LOF had *never* been individually tested through before; only the shipped
+  three-detector ensemble was. Removed the 26 now-subsumed generic per-detector tests
+  (fit_score_shape, scores_are_floats, natural_flag_shape[_and_dtype], class_vars, and the
+  four bare `higher_more_normal` mean-comparison duplicates) from
+  `tests/unit/detectors/test_detectors.py`, keeping every detector-*specific* test (CBLOF,
+  elbow-k, ECOD/HBOS feature contributions, LOF's small-dataset clamp, OCSVM's exact
+  zero-hyperplane threshold, extra_params forwarding) exactly as it was.
+- **`tests/unit/evaluation/test_evaluate.py`**: collapsed 9 `evaluate_scores()` tests that
+  each called it with near-identical inputs to check one field into
+  `test_evaluate_scores_on_random_input` (one call, one coherent assertion block), and 4
+  "perfect detector" tests into `test_perfect_detector_maximises_every_metric` the same way.
+- **`tests/integration/test_report.py`**: collapsed 4 `render_report()` calls with the exact
+  same fixture (checking file existence, run_id, dataset_uri, and no-external-refs
+  separately) into one golden-file comparison plus one focused
+  `test_html_is_self_contained_no_external_refs` (kept separate and explicitly named because
+  it's a security-relevant invariant, not just another field); collapsed 3 identical
+  `write_group_csv()` calls (name, columns, row count) into one. Every formula-injection and
+  escaping test was left untouched, per the explicit instruction to retain those.
+- **`test_explanation_references_perturbed_column`**: replaced its `pytest.skip("explain not
+  enabled or reason columns absent")` escape hatch with a hard assertion that `reason_1`
+  exists (explain is enabled by default in this fixture, so the skip was pure dead code that
+  could have silently hidden a real regression).
+- **`test_fit_apply_schema_is_stable`**: this test's whole point is proving fit and apply agree
+  on the feature schema hash *when demotion fires* -- but its fixture (`high_card`, 80
+  categories) never actually triggered demotion: at cardinality 80 with the default
+  `one_hot_max_cardinality=20`, that column was already frequency-encoded, never one-hot, so
+  `compute_demotions` had nothing to demote and the hash comparison passed vacuously regardless
+  of whether demotion logic worked at all. Rebuilt the fixture with three genuinely one-hot
+  categorical columns and a deliberately restrictive `max_feature_width=10`, and added
+  `assert plan.demoted_columns` (plus the expected `FeatureWidthWarning`) before comparing
+  hashes, so the test now fails loudly if demotion stops firing instead of passing either way.
+- **CLI tests must not query `store._conn`**: found one violation in each of two files.
+  `tests/integration/test_cli.py::_totals_period_labels` used raw
+  `SELECT DISTINCT period_label FROM totals`; rewritten to load the same `Config` the CLI
+  loaded and call the public `Store.totals_for_periods()`. `test_run_dry_run_registers_dataset_and_run_but_fits_nothing`
+  checked six raw `SELECT COUNT(*)` queries; rewritten onto `Store.dataset_snapshots()`,
+  `Store.list_runs()` and `Store.all_run_groups()` (dropping the redundant standalone `totals`
+  count, since zero run_groups already implies zero totals) plus a filesystem check for models.
+  Every other `store._conn` usage in the tree is in `tests/contract/` (the store/manifest
+  contract files) or `tests/integration/test_history.py` / `test_store_workflows.py` (seeding
+  scenario state for a workflow test) -- both legitimate, not CLI tests.
+- **Private estimator checks audited**: `._model`/`._quantile_values` access exists only in
+  `tests/contract/test_model_manifests.py` (clearly a manifest contract file) and in
+  `tests/unit/detectors/test_detectors.py` functions all named `test_extra_params_forwarded_to_*`
+  / `test_extra_params_via_registry_kwargs` -- already self-describing as adapter-contract
+  checks, so nothing needed renaming or moving.
+- **Golden files** (new `tests/golden/` + `tests/factories/golden.py`): `cli_detectors.json`
+  and `cli_config_schema.json` (both fully deterministic CLI JSON output -- no timestamps or
+  run ids involved) replace weak substring checks in `test_detectors_json_output`/
+  `test_config_schema_emits_json`; `report_index.html` pins the full rendered report from the
+  file's existing fixed `_RUN_META`/`_group()` fixtures. `assert_matches_golden()` normalises
+  JSON (`sort_keys=True`) before comparing so key-order alone can't cause a spurious failure,
+  and supports `UPDATE_GOLDEN=1` to regenerate after reviewing an intentional diff.
+
+Verified after every change: **767 collected** (780 - 13 net, despite the detector table adding
+48 new tests -- the 26 removed detector duplicates plus the evaluate.py/report.py
+consolidations outweighed it). CI lane **745 passed, 22 deselected**, coverage still **72.89%**
+(identical to P1-4 -- confirms no behavioural drift, just better-organised and higher-quality
+assertions over the same code paths). ruff, ruff format, mypy, and the doc-consistency check all
+clean.

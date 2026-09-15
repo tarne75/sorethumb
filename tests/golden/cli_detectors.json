@@ -1,0 +1,32 @@
+[
+  {
+    "name": "ecod",
+    "train_row_cap": 500000,
+    "tree_shap": false
+  },
+  {
+    "name": "hbos",
+    "train_row_cap": 500000,
+    "tree_shap": false
+  },
+  {
+    "name": "isolation_forest",
+    "train_row_cap": 250000,
+    "tree_shap": true
+  },
+  {
+    "name": "kmeans_distance",
+    "train_row_cap": 200000,
+    "tree_shap": false
+  },
+  {
+    "name": "lof",
+    "train_row_cap": 50000,
+    "tree_shap": false
+  },
+  {
+    "name": "one_class_svm",
+    "train_row_cap": 25000,
+    "tree_shap": false
+  }
+]
