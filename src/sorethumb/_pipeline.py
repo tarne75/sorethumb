@@ -403,6 +403,7 @@ def run_detection(
     *,
     only_groups: list[str] | None = None,
     group_filter_regex: str | None = None,
+    limit_groups: int | None = None,
     force: bool = False,
     no_report: bool = False,
     dry_run: bool = False,
@@ -419,6 +420,11 @@ def run_detection(
     group_filter_regex:
         Regex applied to group labels; only matching groups run.
         Unanchored search semantics — use ``^`` / ``$`` to anchor explicitly.
+    limit_groups:
+        Cap the number of groups processed, applied after only_groups and
+        group_filter_regex. Groups are sorted by label first, so the same
+        limit always keeps the same groups regardless of the order the
+        source data happened to be discovered in.
     force:
         Re-run groups that are already marked complete in the ledger.
     no_report:
@@ -546,12 +552,16 @@ def run_detection(
         else:
             groups_info = [{"__n__": len(df_raw)}]
 
-        # Apply user filters (only_groups first, then regex)
+        # Apply user filters (only_groups first, then regex, then a
+        # deterministic limit -- sorted by label so the same limit always
+        # keeps the same groups, regardless of discovery order).
         if only_groups:
             groups_info = [g for g in groups_info if _group_label(g, group_by) in only_groups]
         if group_filter_regex:
             pat = re.compile(group_filter_regex)
             groups_info = [g for g in groups_info if pat.search(_group_label(g, group_by))]
+        if limit_groups is not None:
+            groups_info = sorted(groups_info, key=lambda g: _group_label(g, group_by))[:limit_groups]
 
         # ── 6. Per-group pipeline ────────────────────────────────────────
         group_results: list[GroupSummary] = []
@@ -1700,14 +1710,25 @@ def _run_permutation_importance_crosscheck(
 # ---------------------------------------------------------------------------
 
 
-def render_report_for_run(ws: Workspace, run_id: str) -> Path | None:
+def render_report_for_run(ws: Workspace, run_id: str, *, formats: list[str] | None = None) -> Path | None:
     """Render (or re-render) the HTML report for *run_id* from persisted state.
 
-    Everything is read from the store and the per-group results Parquet files --
-    never from in-memory run state -- so this is safe to call after a resumed
-    run (where every group is skipped) and is what backs ``sorethumb report``.
-    A repeat of the same deterministic ``run_id`` therefore reproduces the same
-    report instead of blanking it.
+    Every data-shaping input -- the feature plan, group structure, per-row
+    results -- is read from the store and the per-group results Parquet
+    files, from *run_id*'s own historical config, never from the config the
+    caller currently has loaded: the persisted results were computed against
+    that historical plan/group structure, so re-rendering against a
+    different (current) one could not correspond to them correctly. This is
+    also what makes it safe to call after a resumed run (where every group
+    is skipped) and gives a repeat of the same deterministic ``run_id`` the
+    same report instead of blanking it.
+
+    *formats* is the one deliberate exception: ``report.formats`` is purely
+    cosmetic (which output files get written; it cannot affect what the data
+    says), so ``sorethumb report`` passes the *current* config's value here
+    to let a `report.formats` change actually take effect on a re-render, as
+    its own help text promises. Passing ``None`` (every other caller, right
+    after a live run) falls back to the historical run's own recorded value.
 
     Returns the ``index.html`` path, or ``None`` if the run is unknown or
     rendering fails (logged, never raised).
@@ -1759,9 +1780,8 @@ def render_report_for_run(ws: Workspace, run_id: str) -> Path | None:
                 )
             )
 
-        return render_report(
-            meta, group_sections, ws.root / "reports" / run_id, formats=config.report.formats
-        )
+        effective_formats = formats if formats is not None else config.report.formats
+        return render_report(meta, group_sections, ws.root / "reports" / run_id, formats=effective_formats)
 
     except Exception:
         logger.warning("Report rendering failed for run %s; skipping.", run_id, exc_info=True)

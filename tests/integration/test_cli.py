@@ -166,6 +166,78 @@ def test_run_with_groups(workspace_grouped):
     assert result.exit_code == 0, result.stdout + (result.stderr or "")
 
 
+def test_run_limit_groups_caps_deterministically(workspace_grouped):
+    """P2-7: --limit-groups used to be parsed and silently ignored. Must
+    actually cap the group count, and do so deterministically (sorted by
+    label) so the same limit always keeps the same groups."""
+    _, toml_path, workdir = workspace_grouped  # group labels "G0", "G1"
+    result = runner.invoke(app, ["run", "--config", str(toml_path), "--no-report", "--limit-groups", "1"])
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+
+    from sorethumb import Workspace
+
+    with Workspace.open(workdir) as ws:
+        run_id = ws.store.list_runs(limit=1)[0]["run_id"]
+        groups = ws.store.all_run_groups(run_id)
+    assert len(groups) == 1
+    assert groups[0]["group_label"] == "G0"
+
+
+# ---------------------------------------------------------------------------
+# --strict overrides an explicit TOML value; not passing it respects TOML (P2-7)
+# ---------------------------------------------------------------------------
+
+
+def test_run_strict_flag_overrides_explicit_toml_false(workspace):
+    """The old `run_section.setdefault("strict", strict)` silently ignored
+    --strict whenever TOML already had *any* explicit value for it (even
+    False) -- setdefault only fills in a missing key."""
+    _, toml_path, workdir = workspace
+    toml_path.write_text(toml_path.read_text().replace("[run]\n", "[run]\nstrict = false\n", 1))
+
+    result = runner.invoke(app, ["run", "--config", str(toml_path), "--no-report", "--strict"])
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+
+    from sorethumb import Workspace
+
+    with Workspace.open(workdir) as ws:
+        run_id = ws.store.list_runs(limit=1)[0]["run_id"]
+        config_json = ws.store.get_run(run_id)["config_json"]
+    assert json.loads(config_json)["run"]["strict"] is True
+
+
+def test_run_no_strict_flag_overrides_explicit_toml_true(workspace):
+    _, toml_path, workdir = workspace
+    toml_path.write_text(toml_path.read_text().replace("[run]\n", "[run]\nstrict = true\n", 1))
+
+    result = runner.invoke(app, ["run", "--config", str(toml_path), "--no-report", "--no-strict"])
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+
+    from sorethumb import Workspace
+
+    with Workspace.open(workdir) as ws:
+        run_id = ws.store.list_runs(limit=1)[0]["run_id"]
+        config_json = ws.store.get_run(run_id)["config_json"]
+    assert json.loads(config_json)["run"]["strict"] is False
+
+
+def test_run_no_strict_or_no_strict_flag_respects_toml_true(workspace):
+    """When neither --strict nor --no-strict is passed, TOML's own value
+    must be respected, not silently replaced by the hardcoded default."""
+    _, toml_path, workdir = workspace
+    toml_path.write_text(toml_path.read_text().replace("[run]\n", "[run]\nstrict = true\n", 1))
+
+    result = runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+
+    from sorethumb import Workspace
+
+    with Workspace.open(workdir) as ws:
+        run_id = ws.store.list_runs(limit=1)[0]["run_id"]
+        config_json = ws.store.get_run(run_id)["config_json"]
+    assert json.loads(config_json)["run"]["strict"] is True
+
+
 # ---------------------------------------------------------------------------
 # sorethumb run --detectors must not rewrite sorethumb.toml (P0-6)
 # ---------------------------------------------------------------------------
@@ -333,6 +405,55 @@ def test_report_unknown_run_id_errors(workspace):
     assert "Run not found" in result.stdout + (result.stderr or "")
 
 
+def test_report_rerender_uses_current_config_report_formats(workspace):
+    """P2-7: report.formats is the one deliberate exception to 'report
+    re-renders from the run's historical state' -- it is purely cosmetic
+    (which output files get written), so a change to the *current* config
+    must take effect on re-render, as the command's own help text promises."""
+    _, toml_path, workdir = workspace
+    assert runner.invoke(app, ["run", "--config", str(toml_path)]).exit_code == 0
+
+    from sorethumb import Workspace
+
+    with Workspace.open(workdir) as ws:
+        run_id = str(ws.store.list_runs(limit=1)[0]["run_id"])
+    report_dir = workdir / "reports" / run_id
+    assert (report_dir / "index.html").exists()
+    assert not (report_dir / "index.json").exists()
+
+    toml_path.write_text(toml_path.read_text() + '\n[report]\nformats = ["json"]\n')
+
+    result = runner.invoke(app, ["report", run_id, "--config", str(toml_path)])
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+    assert (report_dir / "index.json").exists()
+
+
+def test_report_rerender_group_structure_comes_from_historical_run(workspace_grouped):
+    """The data-shaping half of the same rule: a re-render must reflect the
+    run's own historical group structure, never whatever the *current*
+    config says now -- the persisted results were computed against that
+    historical structure and couldn't correctly correspond to a different
+    one."""
+    _, toml_path, workdir = workspace_grouped  # group_by = ["group"] -> 2 groups
+    assert runner.invoke(app, ["run", "--config", str(toml_path)]).exit_code == 0
+
+    from sorethumb import Workspace
+
+    with Workspace.open(workdir) as ws:
+        run_id = str(ws.store.list_runs(limit=1)[0]["run_id"])
+        assert len(ws.store.all_run_groups(run_id)) == 2
+
+    # A current config that would produce a single group on a *fresh* run.
+    toml_path.write_text(toml_path.read_text().replace('group_by = ["group"]', "group_by = []"))
+
+    result = runner.invoke(app, ["report", run_id, "--config", str(toml_path)])
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+
+    html = (workdir / "reports" / run_id / "index.html").read_text(encoding="utf-8")
+    assert "G0" in html
+    assert "G1" in html
+
+
 # ---------------------------------------------------------------------------
 # sorethumb backfill
 # ---------------------------------------------------------------------------
@@ -479,6 +600,65 @@ def test_backfill_no_time_column_exits_cleanly(workspace):
     result = runner.invoke(app, ["backfill", "--config", str(toml_path)])
     assert result.exit_code == 0
     assert "No time_column configured" in result.stdout
+
+
+def test_backfill_collects_every_result_and_exits_nonzero_on_any_failure(
+    timeseries_workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2-7: backfill used to discard every period's RunResult and always
+    print "Backfill complete." with exit code 0, even if every period
+    failed. One period is made to fail (its RunResult carries a failed
+    group); the other two must still be processed (not stopped early), and
+    the command must exit non-zero and name the failed period."""
+    import sorethumb.cli as cli_mod
+    from sorethumb._pipeline import GroupSummary, RunResult
+
+    toml_path, workdir, labels = timeseries_workspace
+    failing_label = labels[1]
+    real_run_detection = cli_mod.run_detection
+    seen_labels: list[str | None] = []
+
+    def _patched(cfg, *, period_label_override=None, **kwargs):
+        seen_labels.append(period_label_override)
+        if period_label_override == failing_label:
+            bad_group = GroupSummary(
+                group_key="gk",
+                group_label="__all__",
+                n_records=10,
+                n_anomalies=0,
+                anomaly_rate=None,
+                results_path=None,
+                status="failed",
+                error="injected failure",
+                elapsed_seconds=0.1,
+                drifted=False,
+                refit_reason=None,
+                warnings_issued=[],
+            )
+            return RunResult(
+                run_id="fake-run",
+                dataset_uri=cfg.source.uri,
+                dataset_fp="fp",
+                config_hash=cfg.config_hash(),
+                period_label=period_label_override,
+                workspace_path=Path(cfg.run.workdir),
+                groups=[bad_group],
+                report_path=None,
+                started_at="t0",
+                finished_at="t1",
+            )
+        return real_run_detection(cfg, period_label_override=period_label_override, **kwargs)
+
+    monkeypatch.setattr(cli_mod, "run_detection", _patched)
+
+    result = runner.invoke(app, ["backfill", "--config", str(toml_path)])
+    output = result.stdout + (result.stderr or "")
+
+    assert set(seen_labels) == set(labels), "every pending period must still be processed, not stopped early"
+    assert result.exit_code == 1
+    assert failing_label in output
+    assert "failed" in output.lower()
+    assert "Backfill complete." not in output
 
 
 # ---------------------------------------------------------------------------

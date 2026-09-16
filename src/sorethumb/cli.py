@@ -83,12 +83,12 @@ _WORKDIR_OPT = Annotated[
     typer.Option("--workdir", "-w", help="Workspace root (overrides config)."),
 ]
 _LOG_LEVEL_OPT = Annotated[
-    str,
-    typer.Option("--log-level", help="Logging level (DEBUG/INFO/WARNING)."),
+    str | None,
+    typer.Option("--log-level", help="Logging level (DEBUG/INFO/WARNING).", show_default="INFO"),
 ]
 _STRICT_OPT = Annotated[
-    bool,
-    typer.Option("--strict/--no-strict", help="Treat all library warnings as errors."),
+    bool | None,
+    typer.Option("--strict/--no-strict", help="Treat all library warnings as errors.", show_default="False"),
 ]
 _SEED_OPT = Annotated[int | None, typer.Option("--seed", help="Random seed (overrides config).")]
 _DRY_RUN_OPT = Annotated[
@@ -183,8 +183,8 @@ def _load_config(
     config_path: Path | None,
     workdir: Path | None = None,
     seed: int | None = None,
-    strict: bool = False,
-    log_level: str = "INFO",
+    strict: bool | None = None,
+    log_level: str | None = None,
     uri_override: str | None = None,
     detectors_override: list[dict[str, Any]] | None = None,
 ) -> Config:
@@ -196,6 +196,13 @@ def _load_config(
     When *uri_override* is provided and no config file exists, an empty raw dict
     is used so the caller can proceed with defaults (workdir defaults to ".").
     When *detectors_override* is provided it replaces the detectors list entirely.
+
+    *strict* and *log_level* are ``None`` when the caller's CLI flag was not
+    explicitly given (see ``_STRICT_OPT``/``_LOG_LEVEL_OPT``) — that is the
+    only way to tell "not specified" apart from "explicitly set to the same
+    value as the default", which a plain ``bool``/``str`` parameter can't.
+    An explicit value always overrides TOML; when not given, TOML's own
+    value (or the hardcoded default) applies untouched.
     """
     import tomllib  # noqa: PLC0415 — stdlib, Python 3.11+
 
@@ -232,8 +239,17 @@ def _load_config(
         run_section["workdir"] = "."
     if seed is not None:
         run_section["seed"] = seed
-    run_section.setdefault("strict", strict)
-    run_section.setdefault("log_level", log_level)
+    # An explicitly-passed flag overrides TOML outright; not passing one
+    # (None) leaves whatever TOML already has, falling back to the
+    # documented default only when TOML is silent too.
+    if strict is not None:
+        run_section["strict"] = strict
+    else:
+        run_section.setdefault("strict", False)
+    if log_level is not None:
+        run_section["log_level"] = log_level
+    else:
+        run_section.setdefault("log_level", "INFO")
 
     try:
         cfg = Config.model_validate(raw)
@@ -244,7 +260,7 @@ def _load_config(
             err_console.print(f"  [yellow]{loc}[/yellow]: {err['msg']}")
         raise typer.Exit(2) from exc
 
-    _add_file_handler(Path(cfg.run.workdir), log_level)
+    _add_file_handler(Path(cfg.run.workdir), cfg.run.log_level)
     return cfg
 
 
@@ -557,7 +573,7 @@ def init(
 def inspect(
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
-    log_level: _LOG_LEVEL_OPT = "INFO",
+    log_level: _LOG_LEVEL_OPT = None,
     seed: _SEED_OPT = None,
 ) -> None:
     """Profile the dataset and print the feature plan without running any models.
@@ -567,7 +583,7 @@ def inspect(
     first `sorethumb run` to check that high-cardinality columns will be encoded
     as expected and identifiers will be dropped.
     """
-    _setup_logging(log_level)
+    _setup_logging(log_level or "INFO")
     cfg = _load_config(config, workdir=workdir, seed=seed, log_level=log_level)
 
     console.print("[bold]Loading dataset…[/bold]")
@@ -620,9 +636,9 @@ def run(
     ] = None,
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
-    log_level: _LOG_LEVEL_OPT = "INFO",
+    log_level: _LOG_LEVEL_OPT = None,
     seed: _SEED_OPT = None,
-    strict: _STRICT_OPT = False,
+    strict: _STRICT_OPT = None,
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -647,8 +663,16 @@ def run(
     period: Annotated[
         str | None, typer.Option("--period", help="Force a specific period label (YYYY-MM-DD).")
     ] = None,
-    limit_groups: Annotated[  # noqa: ARG001 — accepted for future implementation
-        int | None, typer.Option("--limit-groups", help="Cap the number of groups processed.")
+    limit_groups: Annotated[
+        int | None,
+        typer.Option(
+            "--limit-groups",
+            help=(
+                "Cap the number of groups processed, applied after --only-group/"
+                "--group-filter. Groups are sorted by label first, so the same "
+                "limit always keeps the same groups."
+            ),
+        ),
     ] = None,
     detectors: Annotated[
         str | None,
@@ -672,7 +696,7 @@ def run(
     is set. This makes repeated invocations cheap: the dataset snapshot cache
     avoids re-downloading, and the completion ledger avoids redundant inference.
     """
-    _setup_logging(log_level)
+    _setup_logging(log_level or "INFO")
 
     config_path = config or Path("sorethumb.toml")
     config_existed = config_path.exists()
@@ -721,6 +745,7 @@ def run(
         cfg,
         only_groups=only_group,
         group_filter_regex=group_filter,
+        limit_groups=limit_groups,
         force=force,
         no_report=no_report,
         dry_run=dry_run,
@@ -749,9 +774,9 @@ def score(
     from_run: Annotated[str, typer.Option("--from-run", help="Source run_id to reuse models from.")],
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
-    log_level: _LOG_LEVEL_OPT = "INFO",
+    log_level: _LOG_LEVEL_OPT = None,
     seed: _SEED_OPT = None,
-    strict: _STRICT_OPT = False,
+    strict: _STRICT_OPT = None,
     no_report: Annotated[bool, typer.Option("--no-report")] = False,
     json_output: _JSON_OPT = False,
 ) -> None:
@@ -770,14 +795,14 @@ def score(
     malicious one. Only use --from-run against a workspace you created
     yourself or fully trust — see SECURITY.md.
     """
-    _setup_logging(log_level)
+    _setup_logging(log_level or "INFO")
     cfg = _load_config(config, workdir=workdir, seed=seed, strict=strict, log_level=log_level)
 
     if not json_output:
         console.print(f"[bold]sorethumb score[/bold]  from_run={from_run}")
 
     try:
-        result: RunResult = score_forward(cfg, from_run, strict=strict, no_report=no_report)
+        result: RunResult = score_forward(cfg, from_run, strict=cfg.run.strict, no_report=no_report)
     except SorethumbError as exc:
         err_console.print(f"[red]score --from-run failed:[/red] {exc}")
         raise typer.Exit(2) from exc
@@ -802,15 +827,24 @@ def report(
     run_id: Annotated[str | None, typer.Argument(help="Run ID to re-render (default: latest run).")] = None,
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
-    log_level: _LOG_LEVEL_OPT = "INFO",
+    log_level: _LOG_LEVEL_OPT = None,
 ) -> None:
     """Re-render a run's HTML report from persisted results — no recompute.
 
-    Reads the run's stored config, FeaturePlan and per-group results Parquet and
-    rewrites ``{workdir}/reports/{run_id}/index.html``. Use it to refresh a
-    report after a `report.*` config change, or to rebuild one that was deleted.
+    Reads the run's stored config, FeaturePlan and per-group results Parquet
+    -- never today's ``--config``/``sorethumb.toml`` -- and rewrites
+    ``{workdir}/reports/{run_id}/index.html``. The persisted results were
+    computed against that historical plan and group structure, so anything
+    that could change what they *mean* (columns, detectors, scoring, ...)
+    always comes from the run's own history, never from the current config;
+    otherwise a re-render could silently stop corresponding to the data it's
+    rendering. ``report.formats`` is the one deliberate exception -- purely
+    cosmetic (which output files get written), so it *is* taken from the
+    current config: change it and re-run this command to pick up the new
+    formats, or to rebuild a report that was deleted. ``--config``/
+    ``--workdir`` otherwise only locate the workspace the run lives in.
     """
-    _setup_logging(log_level)
+    _setup_logging(log_level or "INFO")
     cfg = _load_config(config, workdir=workdir, log_level=log_level)
     ws_path = Path(cfg.run.workdir)
 
@@ -828,7 +862,7 @@ def report(
 
         n_groups = len(ws.store.all_run_groups(run_id))
         console.print(f"Re-rendering report for [cyan]{run_id}[/cyan] ({n_groups} groups)…")
-        path = render_report_for_run(ws, run_id)
+        path = render_report_for_run(ws, run_id, formats=cfg.report.formats)
         if path is None:
             err_console.print(f"[red]Could not render report for {run_id}.[/red] See the log for details.")
             raise typer.Exit(1)
@@ -844,9 +878,9 @@ def report(
 def backfill(
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
-    log_level: _LOG_LEVEL_OPT = "INFO",
+    log_level: _LOG_LEVEL_OPT = None,
     seed: _SEED_OPT = None,
-    strict: _STRICT_OPT = False,
+    strict: _STRICT_OPT = None,
     dry_run: _DRY_RUN_OPT = False,
     force_period: Annotated[
         list[str] | None, typer.Option("--force-period", help="Force recompute of these period labels.")
@@ -866,7 +900,7 @@ def backfill(
     absolute anomaly level on a shared scale — for that, score every period
     against one fixed run with ``sorethumb score --from-run``.
     """
-    _setup_logging(log_level)
+    _setup_logging(log_level or "INFO")
     cfg = _load_config(config, workdir=workdir, seed=seed, strict=strict, log_level=log_level)
 
     if not cfg.columns.time_column:
@@ -924,9 +958,26 @@ def backfill(
                 console.print(f"  [dim]would process:[/dim] {lbl}")
             raise typer.Exit(0)
 
+        # Every period's RunResult is collected (not just the last one) so a
+        # failure partway through a long backfill is never silently dropped
+        # -- each period runs independently, so one failing must not stop the
+        # rest, but the command must still exit non-zero and name every
+        # period that had a failed group.
+        failed: list[tuple[str, RunResult]] = []
         for period_lbl in pending:
             console.print(f"  Processing period [cyan]{period_lbl}[/cyan]…")
-            run_detection(cfg, period_label_override=period_lbl, no_report=True)
+            result = run_detection(cfg, period_label_override=period_lbl, no_report=True)
+            if result.n_failed:
+                failed.append((period_lbl, result))
+
+        if failed:
+            err_console.print(
+                f"\n[red bold]Backfill finished with {len(failed)} failed period(s):[/red bold]"
+            )
+            for period_lbl, result in failed:
+                failed_groups = [g.group_label for g in result.groups if g.status == "failed"]
+                err_console.print(f"  {period_lbl}: {', '.join(failed_groups)}")
+            raise typer.Exit(1)
 
         console.print("[green]Backfill complete.[/green]")
 
@@ -940,14 +991,14 @@ def backfill(
 def history(
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
-    log_level: _LOG_LEVEL_OPT = "INFO",
+    log_level: _LOG_LEVEL_OPT = None,
     windows: Annotated[
         list[int] | None, typer.Option("--window", help="Rolling window sizes (e.g. --window 7 --window 28).")
     ] = None,
     group_key: Annotated[str | None, typer.Option("--group", help="Limit to a specific group key.")] = None,
 ) -> None:
     """Show rolling-window anomaly trends for the configured dataset."""
-    _setup_logging(log_level)
+    _setup_logging(log_level or "INFO")
     cfg = _load_config(config, workdir=workdir, log_level=log_level)
 
     ws_path = Path(cfg.run.workdir)
@@ -1023,12 +1074,12 @@ def history(
 def list_runs_cmd(
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
-    log_level: _LOG_LEVEL_OPT = "INFO",
+    log_level: _LOG_LEVEL_OPT = None,
     limit: Annotated[int, typer.Option("--limit", help="Maximum number of runs to show.")] = 20,
     json_output: _JSON_OPT = False,
 ) -> None:
     """List recent runs with status, dataset, group counts, and duration."""
-    _setup_logging(log_level)
+    _setup_logging(log_level or "INFO")
     cfg = _load_config(config, workdir=workdir, log_level=log_level)
     ws_path = Path(cfg.run.workdir)
 
@@ -1074,12 +1125,12 @@ def show(
     run_id: Annotated[str, typer.Argument(help="Run ID to inspect.")],
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
-    log_level: _LOG_LEVEL_OPT = "INFO",
+    log_level: _LOG_LEVEL_OPT = None,
     group: Annotated[str | None, typer.Option("--group", help="Group key to show detail for.")] = None,
     json_output: _JSON_OPT = False,
 ) -> None:
     """Show detail for one run or group, including feature plan summary."""
-    _setup_logging(log_level)
+    _setup_logging(log_level or "INFO")
     cfg = _load_config(config, workdir=workdir, log_level=log_level)
     ws_path = Path(cfg.run.workdir)
 
@@ -1138,7 +1189,7 @@ def anomalies(
     ] = None,
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
-    log_level: _LOG_LEVEL_OPT = "INFO",
+    log_level: _LOG_LEVEL_OPT = None,
     top: Annotated[int, typer.Option("--top", help="Show only the top-N anomalies by rank.")] = 0,
     reasons: Annotated[int, typer.Option("--reasons", help="Number of reason columns to display.")] = 3,
     json_output: _JSON_OPT = False,
@@ -1151,7 +1202,7 @@ def anomalies(
     """
     import polars as pl  # noqa: PLC0415
 
-    _setup_logging(log_level)
+    _setup_logging(log_level or "INFO")
     cfg = _load_config(config, workdir=workdir, log_level=log_level)
     ws_path = Path(cfg.run.workdir)
 
@@ -1234,11 +1285,11 @@ def explain_plan(
     run_id: Annotated[str | None, typer.Argument(help="Run ID whose plan to show.")] = None,  # noqa: ARG001
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
-    log_level: _LOG_LEVEL_OPT = "INFO",
+    log_level: _LOG_LEVEL_OPT = None,
     json_output: _JSON_OPT = False,
 ) -> None:
     """Print the FeaturePlan for a run — what was dropped, encoded, derived, and why."""
-    _setup_logging(log_level)
+    _setup_logging(log_level or "INFO")
     cfg = _load_config(config, workdir=workdir, log_level=log_level)
     ws_path = Path(cfg.run.workdir)
     cache_dir = ws_path / "cache" / "datasets"
@@ -1416,11 +1467,11 @@ def config_show(
 def workspace_ls(
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
-    log_level: _LOG_LEVEL_OPT = "INFO",
+    log_level: _LOG_LEVEL_OPT = None,
     json_output: _JSON_OPT = False,
 ) -> None:
     """List runs, datasets, and artefact counts in the workspace."""
-    _setup_logging(log_level)
+    _setup_logging(log_level or "INFO")
     cfg = _load_config(config, workdir=workdir, log_level=log_level)
     ws_path = Path(cfg.run.workdir)
 
@@ -1452,10 +1503,10 @@ def workspace_ls(
 def workspace_du(
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
-    log_level: _LOG_LEVEL_OPT = "INFO",
+    log_level: _LOG_LEVEL_OPT = None,
 ) -> None:
     """Show disk usage broken down by regenerable vs non-regenerable artefacts."""
-    _setup_logging(log_level)
+    _setup_logging(log_level or "INFO")
     cfg = _load_config(config, workdir=workdir, log_level=log_level)
     ws_path = Path(cfg.run.workdir)
 
@@ -1479,7 +1530,7 @@ def workspace_du(
 def workspace_prune(
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
-    log_level: _LOG_LEVEL_OPT = "INFO",
+    log_level: _LOG_LEVEL_OPT = None,
     days: Annotated[int, typer.Option("--days", help="Retention window in days.")] = 90,
     dry_run: _DRY_RUN_OPT = False,
 ) -> None:
@@ -1488,7 +1539,7 @@ def workspace_prune(
     --dry-run prints what would be removed. A real prune removes files and
     database rows together — never one without the other.
     """
-    _setup_logging(log_level)
+    _setup_logging(log_level or "INFO")
     cfg = _load_config(config, workdir=workdir, log_level=log_level)
     ws_path = Path(cfg.run.workdir)
 
@@ -1509,10 +1560,10 @@ def workspace_prune(
 def workspace_vacuum(
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
-    log_level: _LOG_LEVEL_OPT = "INFO",
+    log_level: _LOG_LEVEL_OPT = None,
 ) -> None:
     """Run SQLite VACUUM and reconcile orphan files with no database row."""
-    _setup_logging(log_level)
+    _setup_logging(log_level or "INFO")
     cfg = _load_config(config, workdir=workdir, log_level=log_level)
     ws_path = Path(cfg.run.workdir)
 
@@ -1525,11 +1576,11 @@ def workspace_vacuum(
 def workspace_migrate(
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
-    log_level: _LOG_LEVEL_OPT = "INFO",
+    log_level: _LOG_LEVEL_OPT = None,
     dry_run: _DRY_RUN_OPT = False,
 ) -> None:
     """Apply pending schema migrations to the workspace database."""
-    _setup_logging(log_level)
+    _setup_logging(log_level or "INFO")
     cfg = _load_config(config, workdir=workdir, log_level=log_level)
 
     if dry_run:
@@ -1553,7 +1604,7 @@ def workspace_migrate(
 def workspace_reset(
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
-    log_level: _LOG_LEVEL_OPT = "INFO",
+    log_level: _LOG_LEVEL_OPT = None,
     yes: Annotated[
         bool,
         typer.Option("--yes", help="Skip interactive confirmation (for unattended use)."),
@@ -1565,7 +1616,7 @@ def workspace_reset(
     unattended use). Named explicitly so you know exactly what will be destroyed
     before it happens.
     """
-    _setup_logging(log_level)
+    _setup_logging(log_level or "INFO")
     cfg = _load_config(config, workdir=workdir, log_level=log_level)
     ws_path = Path(cfg.run.workdir).resolve()
 
@@ -1590,7 +1641,7 @@ def workspace_reset(
 
 @app.command()
 def benchmark(
-    log_level: _LOG_LEVEL_OPT = "INFO",
+    log_level: _LOG_LEVEL_OPT = None,
     seeds: Annotated[
         int,
         typer.Option(
@@ -1603,7 +1654,7 @@ def benchmark(
     ] = 5,
 ) -> None:
     """Run the evaluation harness (requires the [benchmark] extra)."""
-    _setup_logging(log_level)
+    _setup_logging(log_level or "INFO")
     try:
         import datasets  # noqa: PLC0415, F401
     except ImportError:
