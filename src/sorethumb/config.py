@@ -50,7 +50,10 @@ class SourceConfig(BaseModel):
         None,
         description=(
             "Name of the environment variable that holds the auth credential. "
-            "The value is read at runtime and never stored in the config or logs."
+            "For auth='bearer', the token value. For auth='basic', 'user:password' "
+            "in plain text -- it is base64-encoded automatically to build the "
+            "header; do not pre-encode it. Read at runtime and never stored in "
+            "the config or logs."
         ),
     )
     read_options: dict[str, object] = Field(
@@ -68,6 +71,15 @@ class SourceConfig(BaseModel):
         5,
         ge=0,
         description="Maximum recursion depth for struct unnesting. 0 disables unnesting.",
+    )
+    max_download_bytes: int = Field(
+        2_000_000_000,
+        gt=0,
+        description=(
+            "Reject an http(s) download whose declared (Content-Length) or actual "
+            "streamed size exceeds this many bytes. Guards against an unbounded or "
+            "misconfigured remote response."
+        ),
     )
 
     @field_validator("dataset_id")
@@ -548,8 +560,8 @@ class Config(BaseModel):
         """32-char (128-bit) hex hash covering only result-affecting fields.
 
         Excludes run.workdir, run.log_level, run.slow_stage_seconds, run.reuse_models,
-        source.dataset_id, and the entire report section so purely cosmetic or
-        execution-only changes don't bust artefact caches.
+        source.dataset_id, source.max_download_bytes, and the entire report section
+        so purely cosmetic or execution-only changes don't bust artefact caches.
         """
         d = self.model_dump()
         run = d["run"]
@@ -560,7 +572,10 @@ class Config(BaseModel):
         # dataset_id is an organisational label (which logical dataset history
         # files under), not a result-affecting parameter -- exclude it so adding
         # or changing it does not bust the per-detector model cache.
-        d.get("source", {}).pop("dataset_id", None)
+        # max_download_bytes is a download-safety ceiling, not a property of the
+        # data itself -- exclude it for the same reason.
+        for key in ("dataset_id", "max_download_bytes"):
+            d.get("source", {}).pop(key, None)
         d.pop("report", None)
         serialised = json.dumps(d, sort_keys=True, default=str)
         return hashlib.sha256(serialised.encode()).hexdigest()[:32]

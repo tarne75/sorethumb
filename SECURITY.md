@@ -25,6 +25,34 @@ file also controls the digest recorded alongside it, so a hostile workspace
 can carry a digest that "matches" perfectly. Do not treat a passing digest
 check as evidence that a workspace is safe to load.
 
+## Source downloads: SSRF-adjacent hardening, not a sandbox
+
+`source.uri` pointed at `http(s)://` is fetched with `httpx`. Redirects are
+followed manually and capped; any redirect target whose host differs from
+the one you configured must resolve to a public, non-reserved address --
+refusing an obvious pivot to a cloud metadata endpoint (169.254.169.254) or
+another internal/link-local target a compromised or malicious remote server
+redirects to. The host you configure yourself is never blocked, even if it
+is internal (e.g. `http://localhost:8080/export.csv`) -- that is a
+deliberate choice you made, not something a third party redirected you
+into. This is **not** a defence against DNS rebinding (the resolved address
+is not pinned for the actual connection) and does not sandbox the remote
+server in any other way; only fetch datasets from sources you trust.
+
+`source.max_download_bytes` bounds both the declared `Content-Length` and
+the actual streamed size, so an unbounded or misconfigured response cannot
+exhaust disk space.
+
+A source URI's userinfo (`user:pass@host`) and known signed-URL/token query
+parameters are stripped before the URI is logged or persisted
+(`dataset.source_uri`, `run.config_json`) — but the *auth token itself*
+(`source.auth_env_var`) is read from the environment at call time and never
+written anywhere. If you embed a credential directly in `source.uri` in a
+form this redaction doesn't recognise, it will still reach the HTTP request
+line/headers as normal, and any *unrecognised* query parameter is not
+redacted — prefer `source.auth`/`source.auth_env_var` over embedding
+credentials in the URI itself.
+
 ## Reporting a Vulnerability
 
 Please do not report security vulnerabilities through public GitHub issues.

@@ -37,10 +37,11 @@ so trivial changes do not invalidate cached artefacts.
 | `source.dataset_id` | str \| null | null | Stable logical identity for this dataset, kept constant across snapshots (appended rows, corrections, the file moving to a new path). All history -- periods, per-group totals, runs -- is keyed on it. When unset it is derived from 'uri'; set it explicitly so a change of path does not orphan prior history. Allowed characters: letters, digits, '.', '_', '-' (max 128). |
 | `source.format` | "auto" \| "csv" \| "tsv" \| "parquet" \| "json" \| "jsonl" \| "tsf" | "auto" | File format. 'auto' infers from the file extension. Set explicitly when the extension is misleading. |
 | `source.auth` | "none" \| "bearer" \| "basic" | "none" | HTTP authentication scheme. Token/credentials come from auth_env_var. |
-| `source.auth_env_var` | str \| null | null | Name of the environment variable that holds the auth credential. The value is read at runtime and never stored in the config or logs. |
+| `source.auth_env_var` | str \| null | null | Name of the environment variable that holds the auth credential. For auth='bearer', the token value. For auth='basic', 'user:password' in plain text -- it is base64-encoded automatically to build the header; do not pre-encode it. Read at runtime and never stored in the config or logs. |
 | `source.read_options` | dict[str, object] | {} | Format-specific reader overrides, e.g. {'delimiter': '\|', 'null_values': ['NA']}. Passed verbatim to the polars scan_* call. |
 | `source.cache` | bool | true | Cache downloaded files locally. Disable only for tiny or always-fresh sources. |
 | `source.max_nesting_depth` | int | 5 | Maximum recursion depth for struct unnesting. 0 disables unnesting. |
+| `source.max_download_bytes` | int | 2000000000 | Reject an http(s) download whose declared (Content-Length) or actual streamed size exceeds this many bytes. Guards against an unbounded or misconfigured remote response. |
 
 ## `[columns]` — Logical roles for specific columns.
 

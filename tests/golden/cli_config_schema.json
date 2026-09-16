@@ -572,7 +572,7 @@
             }
           ],
           "default": null,
-          "description": "Name of the environment variable that holds the auth credential. The value is read at runtime and never stored in the config or logs.",
+          "description": "Name of the environment variable that holds the auth credential. For auth='bearer', the token value. For auth='basic', 'user:password' in plain text -- it is base64-encoded automatically to build the header; do not pre-encode it. Read at runtime and never stored in the config or logs.",
           "title": "Auth Env Var"
         },
         "cache": {
@@ -608,6 +608,13 @@
           ],
           "title": "Format",
           "type": "string"
+        },
+        "max_download_bytes": {
+          "default": 2000000000,
+          "description": "Reject an http(s) download whose declared (Content-Length) or actual streamed size exceeds this many bytes. Guards against an unbounded or misconfigured remote response.",
+          "exclusiveMinimum": 0,
+          "title": "Max Download Bytes",
+          "type": "integer"
         },
         "max_nesting_depth": {
           "default": 5,

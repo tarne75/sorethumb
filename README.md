@@ -430,6 +430,10 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
   digest. Only load a workspace you created yourself or that came from a
   source you fully trust; never point these at a workspace received from
   someone else without inspecting it first. See [SECURITY.md](SECURITY.md).
+- Fetching `source.uri` over http(s) is hardened against the obvious cases
+  (a redirect pivoting to a cloud metadata endpoint or another internal
+  host, an unbounded response), not a general-purpose sandbox for an
+  untrusted remote server — see [SECURITY.md](SECURITY.md).
 
 ---
 

@@ -51,7 +51,7 @@ from sorethumb.io.fingerprint import (
 )
 from sorethumb.io.nested import unnest_all
 from sorethumb.io.readers import read_frame
-from sorethumb.io.source import resolve_source
+from sorethumb.io.source import redact_source_uri, resolve_source
 from sorethumb.profiling.plan import FeaturePlan, build_feature_plan
 from sorethumb.report.html import GroupSection, RunMeta, render_report
 from sorethumb.scoring.calibrate import Calibrator
@@ -103,6 +103,20 @@ def _strict_warnings(strict: bool) -> Iterator[None]:
     with warnings.catch_warnings():
         warnings.filterwarnings("error", category=SorethumbWarning)
         yield
+
+
+def _redacted_config_json(config: Config) -> str:
+    """Serialise *config* for persistence with source.uri redacted.
+
+    run.config_json is kept forever; a source URI with embedded userinfo
+    (``user:pass@host``) or a signed-download token in its query string must
+    never end up at rest there, on top of the live URI itself (used for the
+    actual download elsewhere, before this is called).
+    """
+    redacted = config.model_copy(
+        update={"source": config.source.model_copy(update={"uri": redact_source_uri(config.source.uri)})}
+    )
+    return redacted.model_dump_json()
 
 
 def _stamp_source_row_id(df: pl.DataFrame) -> pl.DataFrame:
@@ -457,7 +471,7 @@ def run_detection(
 
         ws.store.upsert_dataset(
             dataset_fp=dataset_fp,
-            source_uri=config.source.uri,
+            source_uri=redact_source_uri(config.source.uri),
             schema_fingerprint=schema_fp,
             content_fingerprint=content_fp,
             n_rows=len(df_raw),
@@ -480,7 +494,7 @@ def run_detection(
         # dataset + config + period finds the same ledger entries and can skip
         # already-complete groups (resume behaviour).
         run_id = _make_run_id(dataset_fp, config.config_hash(), period_label, snapshot_fp)
-        config_json = config.model_dump_json()
+        config_json = _redacted_config_json(config)
         ws.store.insert_run(
             run_id=run_id,
             dataset_fp=dataset_fp,
@@ -728,7 +742,7 @@ def score_forward(
         snapshot_fp = snapshot_fingerprint(content_fp, schema_fp)
         ws.store.upsert_dataset(
             dataset_fp=dataset_fp,
-            source_uri=config.source.uri,
+            source_uri=redact_source_uri(config.source.uri),
             schema_fingerprint=schema_fp,
             content_fingerprint=content_fp,
             n_rows=len(df_raw),
@@ -753,7 +767,7 @@ def score_forward(
         ws.store.insert_run(
             run_id=new_run_id,
             dataset_fp=dataset_fp,
-            config_json=config.model_dump_json(),
+            config_json=_redacted_config_json(config),
             seed=config.run.seed,
             source_run_id=source_run_id,
         )

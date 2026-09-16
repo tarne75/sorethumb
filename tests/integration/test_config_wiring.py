@@ -400,7 +400,7 @@ def test_source_cache_false_never_persists_a_fingerprint_dir(
 
     n = {"i": 0}
 
-    def _fake_download(_url: str, _headers: dict, dest: Path) -> None:
+    def _fake_download(_url: str, _headers: dict, dest: Path, **_kwargs: object) -> None:
         n["i"] += 1
         dest.write_bytes(f"a,b\n{n['i']},{n['i']}\n".encode())
 
@@ -421,3 +421,48 @@ def test_source_cache_false_never_persists_a_fingerprint_dir(
     first = p_off.read_text()
     p_off2 = src.resolve_source(cfg_off, off_dir)
     assert p_off2.read_text() != first
+
+
+# ---------------------------------------------------------------------------
+# source.uri redaction in persisted state (P2-5)
+# ---------------------------------------------------------------------------
+
+
+def test_source_uri_credentials_and_signed_query_never_reach_persisted_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A source URI with embedded userinfo and a signed-download token must
+    not end up verbatim in dataset.source_uri or run.config_json -- both are
+    kept forever, unlike the live in-memory Config used for the actual
+    download (already mocked away here; this test is about what gets
+    written to disk, not the download itself)."""
+    csv_path = tmp_path / "data.csv"
+    workdir = tmp_path / "ws"
+    cfg = make_config(csv_path, workdir)
+    secret_uri = "https://alice:s3cret-password@example.com/data.csv?sig=SECRETSIGNATURE&fmt=csv"
+    cfg = cfg.model_copy(update={"source": SourceConfig(uri=secret_uri, format="csv")})
+
+    monkeypatch.setattr(_pipeline, "resolve_source", lambda *_a, **_kw: csv_path)
+    _write_csv(csv_path, n_rows=30)
+
+    result = run_detection(cfg, no_report=True)
+    assert result.n_succeeded == 1
+
+    from sorethumb import Workspace
+
+    with Workspace.open(workdir) as ws:
+        run_row = ws.store.get_run(result.run_id)
+        assert run_row is not None
+        config_json = run_row["config_json"]
+        dataset_rows = ws.store._conn.execute("SELECT source_uri FROM dataset").fetchall()
+
+    assert "s3cret-password" not in config_json
+    assert "SECRETSIGNATURE" not in config_json
+    assert "alice" not in config_json  # userinfo entirely gone, not just the password half
+    assert "example.com" in config_json  # host/path preserved -- only the secrets are stripped
+
+    assert len(dataset_rows) == 1
+    source_uri = dataset_rows[0]["source_uri"]
+    assert "s3cret-password" not in source_uri
+    assert "SECRETSIGNATURE" not in source_uri
+    assert "example.com" in source_uri
