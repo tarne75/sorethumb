@@ -50,6 +50,57 @@ _TIME_DERIVATIVE_ALIASES: dict[str, str] = {
     "quarter": "__quarter",
 }
 
+_ALL_TIME_DERIVATIVES = frozenset({"hour", "dayofweek", "day", "month", "year", "quarter"})
+
+
+def valid_time_derivatives_for_dtype(dtype_str: str) -> frozenset[str]:
+    """Which of the configured time derivatives are legal for *dtype_str*.
+
+    Confirmed empirically against polars' ``.dt`` accessor, not derivable
+    from the dtype name alone: ``Time`` supports only ``hour`` (every
+    calendar accessor raises ``InvalidOperationError``); ``Duration``
+    supports none of them at all. Order matters -- ``Datetime`` must be
+    checked before ``Date`` since "Datetime...".startswith("Date") is True.
+    """
+    if dtype_str.startswith("Datetime"):
+        return _ALL_TIME_DERIVATIVES
+    if dtype_str.startswith("Date"):
+        return _ALL_TIME_DERIVATIVES - {"hour"}
+    if dtype_str.startswith("Time"):
+        return frozenset({"hour"})
+    if dtype_str.startswith("Duration"):
+        return frozenset()
+    return _ALL_TIME_DERIVATIVES
+
+
+def _disambiguate_reserved_name(base: str, taken: set[str]) -> str:
+    """Return *base*, or *base* with a numeric suffix, until it is not in *taken*."""
+    name = base
+    suffix = 1
+    while name in taken:
+        name = f"{base}__{suffix}"
+        suffix += 1
+    return name
+
+
+def resolve_one_hot_reserved_names(col: str, cats: list[str], emit_indicator: bool) -> tuple[str, str | None]:
+    """Return (other_name, indicator_name) for a one-hot column's reserved features.
+
+    Per-category dummies are named ``f"{col}__{cat}"``. A category value
+    literally equal to ``"__other"`` or ``"is_missing"`` would otherwise make
+    the catch-all bucket or missing-indicator name collide with a real
+    per-category dummy sharing that same string. Disambiguate by appending a
+    numeric suffix until each reserved name is free of every per-category
+    name (and of each other).
+    """
+    taken = {f"{col}__{cat}" for cat in cats}
+    other_name = _disambiguate_reserved_name(f"{col}____other", taken)
+    indicator_name = None
+    if emit_indicator:
+        taken.add(other_name)
+        indicator_name = _disambiguate_reserved_name(f"{col}__is_missing", taken)
+    return other_name, indicator_name
+
 
 @dataclass
 class ColumnDecision:
@@ -422,12 +473,21 @@ def _features_for_column(
         return feats
 
     if treatment == Treatment.one_hot:
-        for cat in one_hot_cats.get(col, []):
+        cats = one_hot_cats.get(col, [])
+        other_name, indicator_name = resolve_one_hot_reserved_names(col, cats, emit_indicator)
+        for cat in cats:
             feats.append(f"{col}__{cat}")
-        feats.append(f"{col}____other")
+        feats.append(other_name)
+        if indicator_name is not None:
+            feats.append(indicator_name)
+        return feats
 
-    elif treatment == Treatment.derive_time:
+    if treatment == Treatment.derive_time:
+        dtype_str = str(schema.get(col, pl.Null))
+        valid = valid_time_derivatives_for_dtype(dtype_str)
         for deriv in features_config.time_derivatives:
+            if deriv not in valid:
+                continue
             suffix = _TIME_DERIVATIVE_ALIASES.get(deriv, f"__{deriv}")
             feats.append(f"{col}{suffix}")
 

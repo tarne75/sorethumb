@@ -69,7 +69,14 @@ def fit_features(df: pl.DataFrame, plan: FeaturePlan, config: Config) -> Feature
     - correlation_drop_list
     - pca_components, pca_mean, pca_explained_variance_ratio
     - frequency_maps extended for any width-demoted columns
+
+    *plan* is cleared of every fitted artefact first: correlation_reduction
+    or pca being off for *this* call must not leave a previous call's
+    correlation_drop_list/pca_* sitting on the plan, silently applied by a
+    later apply_feature_plan() as if they still described the current fit.
     """
+    _clear_fitted_artefacts(plan)
+
     plan.scaler_type = config.features.scaler
     plan.output_dtype = config.features.dtype
 
@@ -97,8 +104,11 @@ def fit_features(df: pl.DataFrame, plan: FeaturePlan, config: Config) -> Feature
         plan, demoted, df.schema, config.features
     )
 
+    _assert_width_within_budget(plan.output_features, config.features.max_feature_width)
+
     # Build encoded polars frame
     enc_df = _encode(df, plan, demoted, extra_freq)
+    _assert_encoded_frame_is_usable(enc_df)
 
     # Pre-flight memory check
     n_rows, n_cols = len(enc_df), len(enc_df.columns)
@@ -135,6 +145,12 @@ def fit_features(df: pl.DataFrame, plan: FeaturePlan, config: Config) -> Feature
     feature_names = scaled_df.columns
     matrix = _to_matrix(scaled_df, config.features.dtype)
 
+    # Sanitize before PCA, not just after: a non-finite value here (e.g. an
+    # empty-list row's __mean/__min/__max going through polars null -> numpy
+    # NaN on the to_numpy() conversion above) would otherwise reach sklearn's
+    # PCA fit directly, which does not handle NaN/Inf gracefully.
+    matrix = _sanitize(matrix, config.features.dtype)
+
     # Snapshot the matrix's exact column order/identity right before the
     # optional PCA step below — this, not plan.output_features (which
     # predates demotion and correlation-drop), is what pca_components'
@@ -151,8 +167,10 @@ def fit_features(df: pl.DataFrame, plan: FeaturePlan, config: Config) -> Feature
         n_components = components.shape[0]
         matrix = apply_pca(matrix, components, mean, n_features, n_components)
         feature_names = [f"pc_{i}" for i in range(matrix.shape[1])]
-
-    matrix = _sanitize(matrix, config.features.dtype)
+        # Defensive second pass: legitimate finite input can't make PCA
+        # itself produce non-finite output, but this is cheap insurance
+        # against a numerically degenerate (near-singular) fit.
+        matrix = _sanitize(matrix, config.features.dtype)
 
     return FeatureSpace(
         matrix=matrix,
@@ -195,6 +213,7 @@ def apply_feature_plan(df: pl.DataFrame, plan: FeaturePlan) -> FeatureSpace:
     row_ids = _extract_row_ids(df)
 
     enc_df = _encode(df, plan, plan.demoted_columns, None)
+    _assert_encoded_frame_is_usable(enc_df)
     if plan.correlation_drop_list:
         # Drop before scaling, mirroring fit_features: when correlation reduction
         # ran, plan.scaler_params was refit on exactly the surviving columns, so
@@ -204,6 +223,8 @@ def apply_feature_plan(df: pl.DataFrame, plan: FeaturePlan) -> FeatureSpace:
 
     feature_names = scaled_df.columns
     matrix = _to_matrix(scaled_df, plan.output_dtype)
+    # Sanitize before PCA -- see the matching comment in fit_features.
+    matrix = _sanitize(matrix, plan.output_dtype)
 
     if plan.pca_components is not None and plan.pca_mean is not None:
         components = np.array(plan.pca_components, dtype=np.float64)
@@ -212,8 +233,7 @@ def apply_feature_plan(df: pl.DataFrame, plan: FeaturePlan) -> FeatureSpace:
         n_components = components.shape[0]
         matrix = apply_pca(matrix, components, mean, n_features, n_components)
         feature_names = [f"pc_{i}" for i in range(matrix.shape[1])]
-
-    matrix = _sanitize(matrix, plan.output_dtype)
+        matrix = _sanitize(matrix, plan.output_dtype)  # defensive second pass
 
     return FeatureSpace(
         matrix=matrix,
@@ -229,6 +249,57 @@ def apply_feature_plan(df: pl.DataFrame, plan: FeaturePlan) -> FeatureSpace:
 # ---------------------------------------------------------------------------
 
 
+def _clear_fitted_artefacts(plan: FeaturePlan) -> None:
+    """Reset every features/build.py-populated field before a (re-)fit.
+
+    correlation_reduction or pca being off for *this* call must not leave a
+    previous call's correlation_drop_list/pca_* sitting on the plan, applied
+    by a later apply_feature_plan() as if it still described the current fit.
+    """
+    plan.correlation_drop_list = []
+    plan.pca_components = None
+    plan.pca_mean = None
+    plan.pca_explained_variance_ratio = None
+    plan.pre_pca_feature_names = None
+
+
+def _assert_width_within_budget(output_features: list[str], max_feature_width: int) -> None:
+    """Fail loudly if the plan's width still exceeds the budget after demotion.
+
+    compute_demotions() only ever demotes one-hot columns; if that alone
+    isn't enough (e.g. many non-one-hot-derived features -- array
+    derivatives, time derivatives, indicators -- push width over the budget
+    on their own), it silently returns having done its best. Without this,
+    the pipeline would quietly ship a matrix wider than configured.
+    """
+    width = len(output_features)
+    if width > max_feature_width:
+        raise PlanError(
+            f"Feature matrix has {width} columns even after demoting every "
+            f"eligible one-hot column to frequency encoding, exceeding "
+            f"features.max_feature_width={max_feature_width}. Lower "
+            "one_hot_max_cardinality, drop more columns, disable unneeded "
+            "derived features (array/time derivatives, missing indicators), "
+            "or raise max_feature_width."
+        )
+
+
+def _assert_encoded_frame_is_usable(enc_df: pl.DataFrame) -> None:
+    """Fail closed on an empty encoded frame no detector could train on.
+
+    Every input column ignored/dropped/reduced to nothing (e.g. an
+    all-identifier or all-high-null schema) would otherwise reach sklearn as
+    a (n_rows, 0) array, failing deep inside with a confusing error instead
+    of a clear one naming the actual cause.
+    """
+    if len(enc_df.columns) == 0:
+        raise PlanError(
+            "The encoded feature matrix has zero columns -- every input column was "
+            "dropped, ignored, or reduced to nothing by the current configuration. "
+            "Check columns.ignore, profiling thresholds, and features.* settings."
+        )
+
+
 def _encode(
     df: pl.DataFrame,
     plan: FeaturePlan,
@@ -239,10 +310,39 @@ def _encode(
     exprs = build_encoding_exprs(df.schema, plan, demoted, extra_freq)
     if not exprs:
         return pl.DataFrame()
+    _assert_no_duplicate_output_names(exprs, plan)
     encoded = df.select(exprs)
     # Cast everything to Float64 so the scaler operates uniformly
     cast_exprs = [pl.col(c).cast(pl.Float64) for c in encoded.columns]
     return encoded.select(cast_exprs)
+
+
+def _assert_no_duplicate_output_names(exprs: list[pl.Expr], plan: FeaturePlan) -> None:
+    """Fail closed, with the colliding source columns named.
+
+    This runs before ``select`` would otherwise raise polars' own
+    less-actionable ``DuplicateError``. The one-hot "__other"/"__is_missing"
+    sentinel collisions are resolved
+    rather than merely detected (see
+    ``profiling.plan.resolve_one_hot_reserved_names``); this is the residual
+    defence-in-depth net for any other way two *different* source columns'
+    independently-derived feature names could still collide (e.g. a column
+    literally named to mimic another column's derived-feature convention).
+    """
+    seen: dict[str, str] = {}
+    dupes: list[str] = []
+    for expr in exprs:
+        name = expr.meta.output_name()
+        original = plan.derived_to_original.get(name, "?")
+        if name in seen and seen[name] != original:
+            dupes.append(f"{name!r} (from both {seen[name]!r} and {original!r})")
+        seen[name] = original
+    if dupes:
+        raise PlanError(
+            f"Encoded feature matrix would have {len(dupes)} duplicate generated "
+            f"column name(s), produced by different source columns: {dupes}. "
+            "Rename one of the colliding source columns to resolve this."
+        )
 
 
 def _to_matrix(df: pl.DataFrame, dtype_str: str) -> np.ndarray:

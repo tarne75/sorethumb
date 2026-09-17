@@ -24,7 +24,12 @@ import polars as pl
 
 from sorethumb.errors import FeatureWidthWarning
 from sorethumb.profiling.classify import Treatment
-from sorethumb.profiling.plan import ColumnDecision, FeaturePlan
+from sorethumb.profiling.plan import (
+    ColumnDecision,
+    FeaturePlan,
+    resolve_one_hot_reserved_names,
+    valid_time_derivatives_for_dtype,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -108,19 +113,17 @@ def compute_demotions(plan: FeaturePlan, max_feature_width: int) -> set[str]:
 # ---------------------------------------------------------------------------
 
 
-def _missing_indicator_expr(col: str) -> pl.Expr:
-    return pl.col(col).is_null().cast(pl.Int8).alias(f"{col}__is_missing")
+def _missing_indicator_expr(col: str, name: str | None = None) -> pl.Expr:
+    return pl.col(col).is_null().cast(pl.Int8).alias(name or f"{col}__is_missing")
 
 
-def _one_hot_exprs(col: str, cats: list[str]) -> list[pl.Expr]:
-    """One dummy per category, plus __other for unseen non-null values."""
+def _one_hot_exprs(col: str, cats: list[str], other_name: str) -> list[pl.Expr]:
+    """One dummy per category, plus *other_name* for unseen non-null values."""
     exprs: list[pl.Expr] = []
     for cat in cats:
         exprs.append((pl.col(col) == pl.lit(cat)).cast(pl.Int8).fill_null(0).alias(f"{col}__{cat}"))
-    # __other: 1 when value is present but not in any known category
-    exprs.append(
-        (pl.col(col).is_not_null() & ~pl.col(col).is_in(cats)).cast(pl.Int8).alias(f"{col}____other")
-    )
+    # other_name: 1 when value is present but not in any known category
+    exprs.append((pl.col(col).is_not_null() & ~pl.col(col).is_in(cats)).cast(pl.Int8).alias(other_name))
     return exprs
 
 
@@ -136,11 +139,11 @@ def _frequency_expr(col: str, freq_map: dict[str, float]) -> pl.Expr:
 
 def _time_derivative_exprs(col: str, derivatives: list[str], dtype_str: str) -> list[pl.Expr]:
     """Extract configured time derivatives from a temporal column."""
-    is_date_only = dtype_str.startswith("Date") and not dtype_str.startswith("Datetime")
+    valid = valid_time_derivatives_for_dtype(dtype_str)
     exprs: list[pl.Expr] = []
     for deriv in derivatives:
-        if deriv == "hour" and is_date_only:
-            continue  # Date has no hour component
+        if deriv not in valid:
+            continue  # not a legal accessor for this temporal dtype (e.g. hour on Date)
         expr_fn = _DERIVATIVE_EXPRS.get(deriv)
         if expr_fn is None:
             logger.warning("Unknown time derivative '%s'; skipping.", deriv)
@@ -222,6 +225,14 @@ def build_encoding_exprs(
                 exprs.append(_missing_indicator_expr(col))
             continue
 
+        if treatment == Treatment.one_hot:
+            cats = plan.one_hot_categories.get(col, [])
+            other_name, indicator_name = resolve_one_hot_reserved_names(col, cats, dec.emit_missing_indicator)
+            exprs.extend(_one_hot_exprs(col, cats, other_name))
+            if indicator_name is not None:
+                exprs.append(_missing_indicator_expr(col, indicator_name))
+            continue
+
         if treatment == Treatment.cast_int:
             exprs.append(pl.col(col).cast(pl.Int8).fill_null(0).alias(col))
 
@@ -235,10 +246,6 @@ def build_encoding_exprs(
 
         elif treatment == Treatment.derive_array:
             exprs.extend(_array_derive_exprs(col, schema))
-
-        elif treatment == Treatment.one_hot:
-            cats = plan.one_hot_categories.get(col, [])
-            exprs.extend(_one_hot_exprs(col, cats))
 
         elif treatment == Treatment.frequency:
             exprs.append(_frequency_expr(col, freq_maps.get(col, {})))

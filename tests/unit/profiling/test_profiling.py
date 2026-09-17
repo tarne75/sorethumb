@@ -267,6 +267,66 @@ def test_check_identifier_no_pattern_returns_none() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Classification: numeric identifier detection
+# ---------------------------------------------------------------------------
+
+
+def test_numeric_dense_sequence_classified_identifier_conservative() -> None:
+    """A gapless, fully-unique integer sequence (e.g. an auto-increment id)
+    is identifier_like even in the default conservative mode, which the
+    string-only _check_identifier never sees for a numeric dtype.
+    """
+    df = pl.DataFrame({"customer_id": list(range(1, 101))})
+    p = profile_columns(df, _default_profiling())[0]
+    col_class, reason = _classify(p)
+    assert col_class == ColumnClass.identifier_like
+    assert "dense unique integer sequence" in reason
+
+
+def test_numeric_measurement_column_not_classified_identifier() -> None:
+    """An ordinary numeric column (gaps, repeats) must stay 'numeric'."""
+    df = pl.DataFrame({"amount": [10.5, 20.0, 10.5, 30.25, 40.0] * 20})
+    p = profile_columns(df, _default_profiling())[0]
+    col_class, _ = _classify(p)
+    assert col_class == ColumnClass.numeric
+
+
+def test_numeric_sequence_with_gap_not_classified_identifier() -> None:
+    """A sequence with a gap is not dense, so it must stay 'numeric' in
+    conservative mode even though every value is unique.
+    """
+    vals = list(range(1, 51)) + list(range(52, 102))  # missing 51, still all-unique
+    df = pl.DataFrame({"x": [float(v) for v in vals]})
+    p = profile_columns(df, _default_profiling())[0]
+    col_class, _ = _classify(p)
+    assert col_class == ColumnClass.numeric
+
+
+def test_numeric_identifier_aggressive_mode_uses_cardinality_ratio() -> None:
+    """Aggressive mode flags any high-cardinality numeric column, dense or not."""
+    vals = [float(v) for v in range(1, 51)] + [1.0] * 50  # 50 unique of 100 rows -> ratio 0.5
+    df = pl.DataFrame({"x": vals})
+    p = profile_columns(df, _default_profiling())[0]
+    col_class, reason = _classify(p, identifier_detection="aggressive", identifier_cardinality_ratio=0.4)
+    assert col_class == ColumnClass.identifier_like
+    assert "aggressive" in reason
+
+
+def test_numeric_identifier_detection_off() -> None:
+    df = pl.DataFrame({"customer_id": list(range(1, 101))})
+    p = profile_columns(df, _default_profiling())[0]
+    col_class, _ = _classify(p, identifier_detection="off")
+    assert col_class == ColumnClass.numeric
+
+
+def test_numeric_protected_column_not_classified_identifier() -> None:
+    df = pl.DataFrame({"row_num": list(range(1, 101))})
+    p = profile_columns(df, _default_profiling())[0]
+    col_class, _ = classify_column(p, _default_profiling(), _default_columns(), {"row_num"})
+    assert col_class != ColumnClass.identifier_like
+
+
+# ---------------------------------------------------------------------------
 # Classification: ignore patterns (_is_ignored)
 # ---------------------------------------------------------------------------
 
@@ -328,6 +388,18 @@ def test_low_cardinality_string_classified_categorical() -> None:
     assert col_class == ColumnClass.categorical
 
 
+def test_numeric_looking_string_stays_categorical_not_auto_cast() -> None:
+    """A String column whose values happen to look numeric ("1", "2", ...)
+    is classified purely by dtype -- it is categorical/one-hot, not silently
+    treated as a numeric column via value inspection.
+    """
+    df = pl.DataFrame({"code": ["1", "2", "3", "4"] * 25})
+    p = profile_columns(df, _default_profiling())[0]
+    col_class, _ = _classify(p)
+    assert col_class == ColumnClass.categorical
+    assert col_class != ColumnClass.numeric
+
+
 def test_numeric_float_classified_numeric() -> None:
     # 5 distinct values > near_constant_distinct=3 avoids near_constant
     df = pl.DataFrame({"x": [1.0, 2.0, 3.0, 4.0, 5.0]})
@@ -367,6 +439,25 @@ def test_binary_dtype_classified_unsupported() -> None:
     col_class, reason = _classify(p)
     assert col_class == ColumnClass.unsupported
     assert "unsupported" in reason
+
+
+def test_categorical_dtype_classified_categorical() -> None:
+    """str(pl.Categorical) == 'Categorical', which != str(pl.String) -- without
+    an explicit dtype check this silently fell through to 'unsupported'.
+    """
+    df = pl.DataFrame({"cat": ["a", "b", "c", "d"] * 25}, schema={"cat": pl.Categorical})
+    p = profile_columns(df, _default_profiling())[0]
+    col_class, _ = _classify(p)
+    assert col_class == ColumnClass.categorical
+
+
+def test_enum_dtype_classified_categorical() -> None:
+    """str(pl.Enum(...)) starts with 'Enum(', which also != str(pl.String)."""
+    dtype = pl.Enum(["a", "b", "c", "d"])
+    df = pl.DataFrame({"cat": ["a", "b", "c", "d"] * 25}, schema={"cat": dtype})
+    p = profile_columns(df, _default_profiling())[0]
+    col_class, _ = _classify(p)
+    assert col_class == ColumnClass.categorical
 
 
 # ---------------------------------------------------------------------------

@@ -37,7 +37,13 @@ from sorethumb.features.reduce import apply_pca, fit_pca
 from sorethumb.features.scale import apply_scaler, fit_scaler
 from sorethumb.features.space import FeatureSpace
 from sorethumb.profiling.classify import ColumnClass, Treatment
-from sorethumb.profiling.plan import ColumnDecision, FeaturePlan, build_feature_plan
+from sorethumb.profiling.plan import (
+    ColumnDecision,
+    FeaturePlan,
+    build_feature_plan,
+    resolve_one_hot_reserved_names,
+    valid_time_derivatives_for_dtype,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -80,7 +86,7 @@ def _make_cat_df() -> pl.DataFrame:
 def test_one_hot_exprs_basic():
     df = pl.DataFrame({"col": ["a", "b", "c", "a", None]})
     cats = ["a", "b"]
-    exprs = _one_hot_exprs("col", cats)
+    exprs = _one_hot_exprs("col", cats, "col____other")
     result = df.select(exprs)
     assert result["col__a"].to_list() == [1, 0, 0, 1, 0]
     assert result["col__b"].to_list() == [0, 1, 0, 0, 0]
@@ -90,10 +96,55 @@ def test_one_hot_exprs_basic():
 def test_one_hot_null_is_all_zeros():
     df = pl.DataFrame({"col": [None, "a"]})
     cats = ["a"]
-    result = df.select(_one_hot_exprs("col", cats))
+    result = df.select(_one_hot_exprs("col", cats, "col____other"))
     # null row → all zeros (not routed to __other)
     assert result["col__a"].to_list() == [0, 1]
     assert result["col____other"].to_list() == [0, 0]
+
+
+def test_resolve_one_hot_reserved_names_no_collision():
+    other_name, indicator_name = resolve_one_hot_reserved_names("col", ["a", "b"], emit_indicator=True)
+    assert other_name == "col____other"
+    assert indicator_name == "col__is_missing"
+
+
+def test_resolve_one_hot_reserved_names_other_collision():
+    # A real category literally equal to "__other" makes f"{col}__{cat}" collide
+    # with the catch-all bucket's own f"{col}____other" name.
+    other_name, indicator_name = resolve_one_hot_reserved_names("col", ["a", "__other"], emit_indicator=True)
+    assert other_name != "col____other"
+    assert other_name not in {"col__a", "col____other"}
+    assert indicator_name == "col__is_missing"
+
+
+def test_resolve_one_hot_reserved_names_indicator_collision():
+    # A real category literally equal to "is_missing" collides with the
+    # missing-indicator name.
+    other_name, indicator_name = resolve_one_hot_reserved_names(
+        "col", ["a", "is_missing"], emit_indicator=True
+    )
+    assert other_name == "col____other"
+    assert indicator_name != "col__is_missing"
+    assert indicator_name not in {"col__a", "col__is_missing", other_name}
+
+
+def test_resolve_one_hot_reserved_names_no_indicator_when_disabled():
+    other_name, indicator_name = resolve_one_hot_reserved_names("col", ["a"], emit_indicator=False)
+    assert other_name == "col____other"
+    assert indicator_name is None
+
+
+def test_one_hot_collision_end_to_end_via_fit_features():
+    """A category literally equal to '__other' must not silently merge with
+    the catch-all bucket's own column in the actually-fitted feature matrix.
+    """
+    df = pl.DataFrame({"cat": ["a", "b", "c", "__other", "a", None] * 5})
+    config = _make_config(missing_indicators=True, one_hot_max_cardinality=20)
+    plan = build_feature_plan(df, config)
+    space = fit_features(df, plan, config)
+    assert len(space.feature_names) == len(set(space.feature_names))
+    assert "cat__a" in space.feature_names
+    assert "cat__is_missing" in space.feature_names
 
 
 def test_frequency_expr_known_value():
@@ -171,6 +222,72 @@ def test_time_derivative_exprs_unknown_derivative():
         exprs = _time_derivative_exprs("ts_col", ["hour", "no_such_deriv", "month"], "Datetime")
     # "no_such_deriv" should be skipped — only hour and month produce exprs
     assert len(exprs) == 2
+
+
+def test_valid_time_derivatives_for_dtype():
+    assert valid_time_derivatives_for_dtype("Datetime[μs]") == {
+        "hour",
+        "dayofweek",
+        "day",
+        "month",
+        "year",
+        "quarter",
+    }
+    assert valid_time_derivatives_for_dtype("Date") == {"dayofweek", "day", "month", "year", "quarter"}
+    assert valid_time_derivatives_for_dtype("Time") == {"hour"}
+    assert valid_time_derivatives_for_dtype("Duration[μs]") == set()
+
+
+def test_time_derivative_exprs_time_dtype_only_hour():
+    """Time has no calendar fields; only 'hour' is a legal accessor."""
+    import datetime
+
+    df = pl.DataFrame({"t": [datetime.time(14, 30, 0)]})
+    exprs = _time_derivative_exprs("t", ["hour", "day", "month", "year"], "Time")
+    names = [e.meta.output_name() for e in exprs]
+    assert names == ["t__hour"]
+    result = df.select(exprs)
+    assert result["t__hour"][0] == 14
+
+
+def test_time_derivative_exprs_duration_dtype_produces_nothing():
+    """Duration supports none of the configured calendar derivatives."""
+    import datetime
+
+    df = pl.DataFrame({"dur": [datetime.timedelta(seconds=3600)]})
+    exprs = _time_derivative_exprs("dur", ["hour", "day", "month", "year"], "Duration[μs]")
+    assert exprs == []
+    # Must not raise selecting zero expressions either.
+    assert df.select(exprs).columns == []
+
+
+def test_derive_time_full_pipeline_time_dtype():
+    """A Time-typed sole temporal column must not crash fit_features and
+    must only emit its one legal derivative (hour).
+    """
+    import datetime
+
+    df = pl.DataFrame({"t": [datetime.time(h, 0, 0) for h in range(24)] * 3})
+    config = _make_config()
+    plan = build_feature_plan(df, config)
+    space = fit_features(df, plan, config)
+    assert "t__hour" in space.feature_names
+    assert not any(f.startswith("t__") and f != "t__hour" for f in space.feature_names)
+
+
+def test_derive_time_full_pipeline_duration_dtype():
+    """A Duration-typed sole temporal column has no legal calendar
+    derivatives at all; the column contributes nothing but its indicator.
+    """
+    import datetime
+
+    values = [datetime.timedelta(seconds=i * 100) for i in range(29)] + [None]
+    df = pl.DataFrame({"dur": values})
+    config = _make_config()
+    plan = build_feature_plan(df, config)
+    space = fit_features(df, plan, config)
+    assert not any(f.startswith("dur__") and f != "dur__is_missing" for f in space.feature_names)
+    assert "dur__is_missing" in space.feature_names
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +578,34 @@ def test_drop_correlated_single_column():
     assert trimmed.columns == ["only"]
 
 
+def test_drop_correlated_non_transitive_chain_groups_via_union_find():
+    """A-B and B-C are individually above threshold but A-C is not: the
+    union-find still treats {A, B, C} as one connected component (via the
+    A-B and B-C edges) and keeps only the first by column order, rather than
+    incorrectly keeping C on the grounds that A-C alone isn't correlated.
+    """
+    rng = np.random.default_rng(3)
+    n = 2000
+    a = rng.normal(size=n)
+    nb = rng.normal(size=n)
+    nc = rng.normal(size=n)
+    s_ab, t_bc = 0.97, 0.97
+    b = s_ab * a + np.sqrt(1 - s_ab**2) * nb
+    c = t_bc * b + np.sqrt(1 - t_bc**2) * nc
+
+    r_ab = float(np.corrcoef(a, b)[0, 1])
+    r_bc = float(np.corrcoef(b, c)[0, 1])
+    r_ac = float(np.corrcoef(a, c)[0, 1])
+    assert r_ab >= 0.95
+    assert r_bc >= 0.95
+    assert r_ac < 0.95  # the non-transitive part: not directly correlated enough
+
+    df = pl.DataFrame({"a": a, "b": b, "c": c})
+    trimmed, dropped = drop_correlated(df, threshold=0.95)
+    assert trimmed.columns == ["a"]
+    assert set(dropped) == {"b", "c"}
+
+
 def test_correlated_pairs_returns_frame():
     n = 200
     x = np.linspace(0, 1, n)
@@ -515,6 +660,21 @@ def test_fit_pca_k_cap():
     components, _, _ = fit_pca(matrix, config)
     # k = max(1, min(100, 4-1)) = 3
     assert components.shape[0] == 3
+
+
+def test_fit_pca_k_capped_by_n_samples():
+    """k must also be capped by n_samples - 1: sklearn hard-errors when
+    n_components exceeds min(n_samples, n_features), which the old
+    n_features-1-only cap did not prevent on a wide, short matrix.
+    """
+    rng = np.random.default_rng(0)
+    matrix = rng.normal(size=(5, 20)).astype(np.float64)  # n_samples=5 << n_features=20
+    config = FeaturesConfig(pca=True, pca_max_components=100, pca_min_explained_variance=0.0)
+    components, mean, evr = fit_pca(matrix, config)
+    # k = max(1, min(100, 20-1, 5-1)) = 4
+    assert components.shape == (4, 20)
+    assert mean.shape == (20,)
+    assert evr.shape == (4,)
 
 
 def test_fit_pca_low_variance_warns():
@@ -833,7 +993,9 @@ def test_fit_features_dtype_float64():
 
 def test_memory_budget_exceeded_raises():
     n = 100
-    df = pl.DataFrame({f"col_{i}": [float(j) for j in range(n)] for i in range(5)})
+    # +0.5 keeps these non-integer-valued so they aren't misread as a dense
+    # unique integer sequence by the numeric-identifier heuristic.
+    df = pl.DataFrame({f"col_{i}": [float(j) + 0.5 for j in range(n)] for i in range(5)})
     # Bypass pydantic ge=256 constraint to test the budget logic with a tiny limit
     run = RunConfig.model_construct(
         workdir="/tmp/test",
@@ -864,19 +1026,60 @@ def test_memory_budget_exceeded_raises():
 
 
 def test_missing_indicators_emitted():
-    df = pl.DataFrame({"num": [1.0, None, None, None, None, 1.0]})
+    df = pl.DataFrame({"num": [1.0, 2.0, None, 4.0, None, 6.0]})
     config = _make_config(missing_indicators=True)
     plan = build_feature_plan(df, config)
     space = fit_features(df, plan, config)
     assert "num__is_missing" in space.feature_names
+    assert "num" in space.feature_names
 
 
 def test_missing_indicators_suppressed():
-    df = pl.DataFrame({"num": [1.0, None, None, None, None, 1.0]})
+    df = pl.DataFrame({"num": [1.0, 2.0, None, 4.0, None, 6.0]})
     config = _make_config(missing_indicators=False)
     plan = build_feature_plan(df, config)
     space = fit_features(df, plan, config)
     assert "num__is_missing" not in space.feature_names
+    assert "num" in space.feature_names
+
+
+def test_fit_features_rejects_empty_encoded_matrix():
+    """A constant-only column with indicators disabled leaves zero output
+    features; this must fail closed rather than hand back an empty matrix.
+    """
+    df = pl.DataFrame({"num": [1.0, None, None, None, None, 1.0]})
+    config = _make_config(missing_indicators=False)
+    plan = build_feature_plan(df, config)
+    with pytest.raises(PlanError, match="zero columns"):
+        fit_features(df, plan, config)
+
+
+def test_apply_feature_plan_rejects_empty_encoded_matrix():
+    """Defence-in-depth: a plan whose decisions encode to zero columns (e.g.
+    hand-edited or corrupted persisted state) must fail closed at apply time
+    too, not just at fit time.
+    """
+    fit_df = pl.DataFrame({"num": [1.0, 2.0, None, 4.0, None, 6.0]})
+    config = _make_config(missing_indicators=False)
+    plan = build_feature_plan(fit_df, config)
+    fit_features(fit_df, plan, config)
+
+    plan.decisions[0].treatment = Treatment.drop
+    plan.decisions[0].emit_missing_indicator = False
+
+    with pytest.raises(PlanError, match="zero columns"):
+        apply_feature_plan(fit_df, plan)
+
+
+def test_categorical_dtype_column_end_to_end_via_fit_features():
+    """A Categorical-dtype column must be one-hot encoded, not silently
+    dropped as 'unsupported' (str(pl.Categorical) != str(pl.String)).
+    """
+    df = pl.DataFrame({"cat": ["a", "b", "c", "d", "e"] * 20}, schema={"cat": pl.Categorical})
+    config = _make_config(one_hot_max_cardinality=20)
+    plan = build_feature_plan(df, config)
+    space = fit_features(df, plan, config)
+    assert any("cat__" in f for f in space.feature_names)
 
 
 def test_one_hot_categories_in_output():

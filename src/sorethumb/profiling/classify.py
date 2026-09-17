@@ -8,7 +8,9 @@ Classification priority (first rule that matches wins):
   5. high_null     — null_ratio > profiling.null_ratio_drop
   6. boolean       — pl.Boolean dtype
   7. temporal      — Date / Datetime / Time / Duration dtype
-  8. numeric       — numeric dtype (integers and floats)
+  8. numeric       — numeric dtype (integers and floats); a dense unique
+                     integer sequence (or, in aggressive mode, any high
+                     cardinality_ratio) is classified identifier_like instead
   9. array_derived — List dtype (handled later by derive_array_features)
  10. identifier_like — high-cardinality string matching UUID / hex / int sequence
  11. free_text     — mean value length > profiling.free_text_mean_length
@@ -35,6 +37,8 @@ _UUID_RE = re.compile(
 )
 _LONG_HEX_RE = re.compile(r"^[0-9a-f]{16,}$", re.IGNORECASE)
 
+_MIN_ROWS_FOR_NUMERIC_IDENTIFIER = 20
+
 _NUMERIC_DTYPE_STRS = frozenset(
     {
         str(pl.Int8),
@@ -50,6 +54,18 @@ _NUMERIC_DTYPE_STRS = frozenset(
     }
 )
 _TEMPORAL_DTYPE_PREFIXES = ("Date", "Time", "Datetime", "Duration")
+
+
+def _is_categorical_dtype(dtype_str: str) -> bool:
+    """Return True for polars Categorical/Enum, which stringify as 'Categorical' or 'Enum(...)'.
+
+    Neither equals ``str(pl.String)``, so without this check both silently
+    fell through to ``unsupported`` -> dropped, even though every operation
+    the categorical/one-hot/frequency path relies on (unique, value_counts,
+    equality comparison, is_in, replace_strict) already works on them
+    unchanged.
+    """
+    return dtype_str == "Categorical" or dtype_str.startswith(("Categorical(", "Enum("))
 
 
 class ColumnClass(str, Enum):
@@ -145,15 +161,29 @@ def classify_column(
 
     # 8–9: remaining dtype-based checks
     if dtype in _NUMERIC_DTYPE_STRS:
+        # 8a. Numeric identifier-like (e.g. an auto-increment customer_id):
+        # the string identifier check never sees this, since profile.examples
+        # is only collected for pl.String columns.
+        if col not in protected_columns and config.identifier_detection != "off":
+            id_class, reason = _check_numeric_identifier(profile, config)
+            if id_class is not None:
+                return id_class, reason
         return ColumnClass.numeric, f"numeric dtype ({dtype})"
 
     if _is_list(dtype):
         return ColumnClass.array_derived, f"List dtype ({dtype})"
 
-    if dtype != str(pl.String):
+    is_string_like = dtype == str(pl.String) or _is_categorical_dtype(dtype)
+    if not is_string_like:
         return ColumnClass.unsupported, f"unsupported dtype ({dtype})"
 
-    # Remaining rules apply to string columns only
+    # Remaining rules apply to string-like columns (String, Categorical, Enum).
+    # profile.mean_length/examples are only populated for exact pl.String, so
+    # the free-text check and the conservative identifier pattern check are
+    # no-ops for Categorical/Enum -- they fall straight through to
+    # categorical, which is correct: a Categorical/Enum column is already a
+    # closed set of labels, never free text, and its aggressive-mode
+    # cardinality-ratio identifier check still applies below.
 
     # 10. Identifier-like (protected columns are exempt)
     if col not in protected_columns and config.identifier_detection != "off":
@@ -169,7 +199,7 @@ def classify_column(
         )
 
     # 12 & 13. Categorical
-    return ColumnClass.categorical, f"string with cardinality_ratio={profile.cardinality_ratio:.4f}"
+    return ColumnClass.categorical, f"{dtype} with cardinality_ratio={profile.cardinality_ratio:.4f}"
 
 
 def treatment_for(
@@ -276,4 +306,49 @@ def _check_identifier(
                 f"long-hex pattern detected in sample (n={len(sample)})",
             )
 
+    return None, ""
+
+
+def _check_numeric_identifier(
+    profile: ColumnProfile,
+    config: ProfilingConfig,
+) -> tuple[ColumnClass | None, str]:
+    """Return (ColumnClass.identifier_like, reason) if a numeric column looks like an ID.
+
+    ``_check_identifier`` relies on ``profile.examples``/UUID-hex pattern
+    matching, which is only collected for ``pl.String`` columns -- an
+    auto-increment numeric column (e.g. a numeric ``customer_id``) never hits
+    it. Aggressive mode reuses the same cardinality-ratio threshold as the
+    string check; conservative mode only flags an unambiguous dense, gapless,
+    unique integer sequence (never a heuristic on an ordinary numeric
+    measurement column).
+    """
+    if config.identifier_detection == "aggressive":
+        if profile.cardinality_ratio > config.identifier_cardinality_ratio:
+            return (
+                ColumnClass.identifier_like,
+                f"aggressive mode: cardinality_ratio={profile.cardinality_ratio:.4f} > "
+                f"{config.identifier_cardinality_ratio}",
+            )
+        return None, ""
+
+    if (
+        profile.null_count == 0
+        # A short, coincidentally-sequential numeric column (a handful of
+        # measurements that happen to be 1, 2, 3, ...) is not evidence of an
+        # identifier; require enough rows that a dense unique run is
+        # actually informative.
+        and profile.non_null_count >= _MIN_ROWS_FOR_NUMERIC_IDENTIFIER
+        and profile.n_unique == profile.non_null_count
+        and profile.min_val is not None
+        and profile.max_val is not None
+        and float(profile.min_val).is_integer()
+        and float(profile.max_val).is_integer()
+        and (profile.max_val - profile.min_val + 1) == profile.n_unique
+    ):
+        return (
+            ColumnClass.identifier_like,
+            f"conservative mode: dense unique integer sequence "
+            f"[{profile.min_val:.0f}, {profile.max_val:.0f}] with n_unique={profile.n_unique}",
+        )
     return None, ""

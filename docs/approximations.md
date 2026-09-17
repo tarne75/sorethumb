@@ -79,6 +79,20 @@ KMeans, One-Class SVM) produce materially identical results at both precisions o
 tabular anomaly detection tasks. If your use case requires `float64` precision, set
 `features.dtype = "float64"` in config.
 
+## Time derivatives — ordinal, not cyclical
+
+`features.time_derivatives` (hour, dayofweek, day, month, year, quarter) are emitted as
+plain integers, not a sin/cos cyclical encoding. This means the natural adjacency of, e.g.,
+`hour=23` and `hour=0` is invisible to every detector: they are 23 apart in feature space,
+not 1. For detectors sensitive to Euclidean/Mahalanobis distance (KMeans, OneClassSVM),
+midnight-adjacent anomalies can be scored as more unusual than they are. This is a
+deliberate scope decision, not an oversight: cyclical encoding doubles the derivative's
+width (one feature becomes two: `sin`, `cos`), interacts with scaling and correlation
+reduction (the two components are related, not independent, and would need to bypass
+robust/standard scaling to stay a unit circle), and is a real new feature rather than a
+fix to an invalid state. If cyclical adjacency matters for a given dataset, derive
+`sin(2*pi*hour/24)`/`cos(2*pi*hour/24)`-style columns upstream before feeding data in.
+
 ## `auto` contamination — median of natural flag rates
 
 When `scoring.contamination = "auto"`, the review budget is derived as the median

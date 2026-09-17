@@ -5,9 +5,11 @@ in feature space, which is interpretable. With PCA on, attribution values are in
 space and must be back-projected — adding a whole class of possible back-projection bugs and
 making explanations harder to reason about. See M4/explain/ for the back-projection logic.
 
-k is capped at n_features - 1: after centering, the last principal component is degenerate
-(the covariance matrix has rank n_features - 1 at most). Including it can tip a borderline
-matrix into a LinAlgError with an unhelpful message; the cap prevents that.
+k is capped at n_features - 1 and at n_samples - 1: after centering, the covariance matrix
+has rank at most min(n_features, n_samples) - 1. sklearn's PCA hard-errors if n_components
+exceeds min(n_samples, n_features); the n_samples - 1 cap keeps k below that ceiling even on
+a fit with fewer rows than features (e.g. a small group-by slice), instead of letting sklearn
+raise deep inside with a confusing message.
 
 The components_ shape from sklearn is (n_components, n_features). We assert this against the
 plan's recorded n_features and n_components rather than guessing orientation from a bare
@@ -43,7 +45,8 @@ def fit_pca(
     from sklearn.decomposition import PCA  # noqa: PLC0415
 
     n_features = matrix.shape[1]
-    k = max(1, min(config.pca_max_components, n_features - 1))
+    n_samples = matrix.shape[0]
+    k = max(1, min(config.pca_max_components, n_features - 1, n_samples - 1))
 
     try:
         pca = PCA(n_components=k, random_state=seed)
