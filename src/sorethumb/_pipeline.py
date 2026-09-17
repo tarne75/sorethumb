@@ -32,6 +32,7 @@ import polars as pl
 from sorethumb.config import Config, SourceConfig
 from sorethumb.detectors import registry
 from sorethumb.errors import (
+    ReportGenerationWarning,
     SampleTruncatedWarning,
     SchemaError,
     SlowStageWarning,
@@ -165,6 +166,45 @@ def _open_in_browser(path: Path) -> None:
         logger.debug("report.open_after: could not open %s in a browser.", path, exc_info=True)
 
 
+def _render_report_and_get_status(
+    ws: Workspace,
+    run_id: str,
+    config: Config,
+    issued_warnings: list[str],
+) -> tuple[Path | None, str]:
+    """Render the report for *run_id*; return ``(report_path, status)``.
+
+    *status* is ``"success"`` or ``"failed"`` -- never ``"skipped"``, which
+    is decided by the caller (no_report, or no groups to report on) before
+    ever reaching this function. render_report_for_run already logs the
+    underlying exception (it never raises); the only thing missing before
+    this was any signal reaching the caller that it happened at all.
+
+    A failure is never promoted to an exception by ``run.strict``, unlike
+    other SorethumbWarning subclasses -- see ReportGenerationWarning's own
+    docstring: detection and scoring already completed successfully by the
+    time this runs, so this is a presentation-layer concern, not a signal
+    that the results themselves are suspect.
+    """
+    report_path = render_report_for_run(ws, run_id, formats=config.report.formats)
+    if report_path is not None:
+        if config.report.open_after:
+            _open_in_browser(report_path)
+        return report_path, "success"
+
+    msg = (
+        f"Report generation failed for run {run_id!r} (requested formats "
+        f"{config.report.formats}); detection and scoring completed "
+        "successfully -- only the report artefact is missing. See the log "
+        "for the underlying exception."
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("always", ReportGenerationWarning)
+        warnings.warn(msg, ReportGenerationWarning, stacklevel=2)
+    issued_warnings.append(msg)
+    return None, "failed"
+
+
 # ---------------------------------------------------------------------------
 # Public result types
 # ---------------------------------------------------------------------------
@@ -211,6 +251,12 @@ class RunResult:
     # Content+schema fingerprint of the snapshot this run saw. dataset_fp is the
     # stable logical id; snapshot_fp versions it.
     snapshot_fp: str = ""
+    # "success": report_path names a real, just-(re)rendered artifact.
+    # "failed": a report was requested and every group succeeded, but
+    #   rendering itself raised -- report_path is None despite there being
+    #   results to report on. Never conflate this with "skipped".
+    # "skipped": no_report=True, or there were no groups to report on.
+    report_status: str = "skipped"
 
     # Convenience helpers
 
@@ -620,10 +666,9 @@ def run_detection(
 
         # ── 8. Render report ─────────────────────────────────────────────
         report_path: Path | None = None
+        report_status = "skipped"
         if not no_report and group_results:
-            report_path = render_report_for_run(ws, run_id)
-            if report_path is not None and config.report.open_after:
-                _open_in_browser(report_path)
+            report_path, report_status = _render_report_and_get_status(ws, run_id, config, issued_warnings)
 
         finished_at = datetime.now(UTC).isoformat()
         return RunResult(
@@ -639,6 +684,7 @@ def run_detection(
             started_at=started_at,
             finished_at=finished_at,
             warnings_issued=issued_warnings,
+            report_status=report_status,
         )
 
 
@@ -833,10 +879,11 @@ def score_forward(
             ws.store.mark_run_complete(new_run_id)
 
         report_path: Path | None = None
+        report_status = "skipped"
         if not no_report and group_results:
-            report_path = render_report_for_run(ws, new_run_id)
-            if report_path is not None and config.report.open_after:
-                _open_in_browser(report_path)
+            report_path, report_status = _render_report_and_get_status(
+                ws, new_run_id, config, issued_warnings
+            )
 
         return RunResult(
             run_id=new_run_id,
@@ -851,6 +898,7 @@ def score_forward(
             started_at=started_at,
             finished_at=datetime.now(UTC).isoformat(),
             warnings_issued=issued_warnings,
+            report_status=report_status,
         )
 
 

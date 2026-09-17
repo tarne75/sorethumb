@@ -105,8 +105,9 @@ def render_report(
     # Tab nav
     body_parts.append(_tab_nav(groups))
 
+    csv_written = "csv" in fmts
     for i, grp in enumerate(groups):
-        body_parts.append(_group_section(grp, i))
+        body_parts.append(_group_section(grp, i, csv_written=csv_written))
 
     html_content = _page(run_meta.run_id, "\n".join(body_parts))
     out_path = out_dir / "index.html"
@@ -264,11 +265,18 @@ def _tab_nav(groups: list[GroupSection]) -> str:
     return "\n".join(parts)
 
 
-def _group_section(grp: GroupSection, idx: int) -> str:
+def _group_section(grp: GroupSection, idx: int, *, csv_written: bool) -> str:
     parts: list[str] = []
 
-    # Records tab
-    csv_link = f'<p class="csv-link"><a href="./{html.escape(grp.group_key)}.csv">Download CSV</a> (moving this HTML without its sibling CSVs breaks this link)</p>'
+    # Records tab. The CSV download link is only rendered when a CSV was
+    # actually written for this report (report.formats included "csv") --
+    # otherwise it links to a sibling file that was never written.
+    csv_link = (
+        f'<p class="csv-link"><a href="./{html.escape(grp.group_key)}.csv">Download CSV</a> '
+        "(moving this HTML without its sibling CSVs breaks this link)</p>"
+        if csv_written
+        else ""
+    )
     records_html = _df_to_table(grp.records) if len(grp.records) > 0 else "<p>No anomalies flagged.</p>"
     parts.append(
         f'<div class="tab-panel active" data-group="{idx}" data-tab="records">{csv_link}{records_html}</div>'

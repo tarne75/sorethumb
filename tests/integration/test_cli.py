@@ -160,6 +160,34 @@ def test_run_dry_run_registers_dataset_and_run_but_fits_nothing(workspace):
     assert list((workdir / "models").rglob("*.joblib")) == []
 
 
+def test_run_exits_nonzero_and_reports_status_when_report_generation_fails(
+    workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2-8: a report-rendering exception used to be invisible from the CLI
+    -- exit code 0, nothing printed about it, report_status not even a
+    field. Detection/scoring succeeding must still surface a failed report
+    explicitly, in both the text summary and --json, and as a non-zero exit."""
+    import sorethumb._pipeline as pipeline_mod
+
+    def _boom(*_a: object, **_kw: object) -> None:
+        raise RuntimeError("renderer exploded")
+
+    monkeypatch.setattr(pipeline_mod, "render_report", _boom)
+
+    _, toml_path, _ = workspace
+    result = runner.invoke(app, ["run", "--config", str(toml_path)])
+    output = result.stdout + (result.stderr or "")
+    assert result.exit_code == 1
+    assert "Report generation failed" in output
+
+    json_result = runner.invoke(app, ["run", "--config", str(toml_path), "--force", "--json"])
+    assert json_result.exit_code == 1
+    payload = json.loads(json_result.stdout)
+    assert payload["report_status"] == "failed"
+    assert payload["report_path"] is None
+    assert payload["n_failed"] == 0  # detection/scoring itself did not fail
+
+
 def test_run_with_groups(workspace_grouped):
     _, toml_path, workdir = workspace_grouped
     result = runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])

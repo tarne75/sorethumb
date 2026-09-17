@@ -139,3 +139,16 @@ class ZeroAnomalyWarning(SorethumbWarning):
     silent failure, with composite/union or an explicit contamination named
     as alternatives to consider.
     """
+
+
+class ReportGenerationWarning(SorethumbWarning):
+    """Report rendering failed after detection/scoring already succeeded.
+
+    Deliberately never promoted by ``run.strict``, unlike every other
+    warning here: detection and scoring already completed and were
+    persisted correctly by the time this fires, so a rendering problem is a
+    presentation-layer concern layered on top of already-valid results, not
+    a signal that the results themselves are suspect. RunResult.report_status
+    ("success" | "failed" | "skipped") is the authoritative, structured
+    record of this outcome; this warning exists for visibility alongside it.
+    """

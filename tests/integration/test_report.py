@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import html as html_mod
+import json
 from pathlib import Path
 
 import numpy as np
@@ -351,6 +352,43 @@ class TestRenderReport:
         assert path.read_bytes() == original
         assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
 
+    # -----------------------------------------------------------------
+    # format selection (P2-8): only the requested formats are written,
+    # and the HTML never links to a sibling file it didn't write.
+    # -----------------------------------------------------------------
+
+    def test_html_only_writes_no_csv_and_no_download_link(self, tmp_path: Path):
+        key = "htmlonlykey123ab"
+        grp = _group(key=key)
+        path = render_report(_RUN_META, [grp], tmp_path, formats=["html"])
+        assert path.name == "index.html"
+        assert not (tmp_path / f"{key}.csv").exists()
+        assert not (tmp_path / "index.json").exists()
+        content = path.read_text(encoding="utf-8")
+        assert "Download CSV" not in content
+        assert f"{key}.csv" not in content
+
+    def test_csv_only_writes_no_html_or_json(self, tmp_path: Path):
+        key = "csvonlykey1234ab"
+        grp = _group(key=key)
+        result = render_report(_RUN_META, [grp], tmp_path, formats=["csv"])
+        assert (tmp_path / f"{key}.csv").exists()
+        assert not (tmp_path / "index.html").exists()
+        assert not (tmp_path / "index.json").exists()
+        # Docstring contract: html, else json, else out_dir itself.
+        assert result == tmp_path
+
+    def test_json_only_writes_no_html_or_csv(self, tmp_path: Path):
+        key = "jsononlykey123ab"
+        grp = _group(key=key)
+        result = render_report(_RUN_META, [grp], tmp_path, formats=["json"])
+        assert result.name == "index.json"
+        assert result.exists()
+        assert not (tmp_path / "index.html").exists()
+        assert not (tmp_path / f"{key}.csv").exists()
+        payload = json.loads(result.read_text(encoding="utf-8"))
+        assert payload["groups"][0]["group_key"] == key
+
 
 # ---------------------------------------------------------------------------
 # analysis/contrast.py
@@ -495,6 +533,64 @@ def test_render_report_for_run_rebuilds_a_deleted_report(tmp_path: Path) -> None
     assert out.exists()
     assert out.read_text(encoding="utf-8") == original
     assert list(report_dir.glob("*.csv"))  # group CSV siblings rebuilt too
+
+
+def test_run_detection_marks_report_failed_on_renderer_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2-8: a renderer exception used to vanish into a WARNING-level log
+    line, with RunResult.report_path silently None and nothing else --
+    "success"-shaped from the caller's point of view. Detection/scoring must
+    still be reported as having succeeded; the report failure must be
+    explicit and named, not just an absent path."""
+    import sorethumb._pipeline as pipeline_mod
+
+    def _boom(*_a: object, **_kw: object) -> None:
+        raise RuntimeError("renderer exploded")
+
+    monkeypatch.setattr(pipeline_mod, "render_report", _boom)
+
+    csv = tmp_path / "data.csv"
+    write_planted_csv(csv, n_normal=200, n_anomaly=5, seed=3)
+    workdir = tmp_path / "ws"
+    cfg = make_config(csv, workdir, contamination=0.03)
+
+    result = run_detection(cfg, no_report=False)
+
+    assert result.n_succeeded == 1
+    assert result.n_failed == 0
+    assert result.report_path is None
+    assert result.report_status == "failed"
+    assert any("Report generation failed" in w for w in result.warnings_issued)
+
+
+def test_render_report_for_run_tolerates_a_missing_group_results_file(tmp_path: Path) -> None:
+    """A group whose results Parquet is missing (deleted, or never written)
+    is a data-availability gap for that one group, not a rendering failure
+    -- render_report_for_run must still succeed, rendering that group as
+    having no anomalies, exactly like GroupSection's own default."""
+    from sorethumb import Workspace, render_report_for_run
+
+    csv = tmp_path / "data.csv"
+    write_planted_csv(csv, n_normal=200, n_anomaly=5, seed=4)
+    workdir = tmp_path / "ws"
+    cfg = make_config(csv, workdir, contamination=0.03)
+
+    result = run_detection(cfg, no_report=True)
+    assert result.n_succeeded == 1
+    group_key = result.groups[0].group_key
+    results_parquet = result.groups[0].results_path
+    assert results_parquet is not None
+    assert results_parquet.exists()
+    results_parquet.unlink()
+
+    with Workspace.open(workdir) as ws:
+        out = render_report_for_run(ws, result.run_id)
+
+    assert out is not None
+    content = out.read_text(encoding="utf-8")
+    assert group_key in content
+    assert "No anomalies flagged" in content
 
 
 def test_report_surfaces_planted_row_ids_and_reasons(tmp_path: Path) -> None:

@@ -754,14 +754,11 @@ def run(
 
     if json_output:
         typer.echo(json.dumps(_run_result_to_dict(result), default=str))
-        raise typer.Exit(1 if result.n_failed else 0)
+        raise typer.Exit(_exit_code_for(result))
 
     _print_run_summary(result)
 
-    if result.report_path:
-        console.print(f"\n[green]Report:[/green] {result.report_path}")
-
-    raise typer.Exit(1 if result.n_failed else 0)
+    raise typer.Exit(_exit_code_for(result))
 
 
 # ---------------------------------------------------------------------------
@@ -809,12 +806,12 @@ def score(
 
     if json_output:
         typer.echo(json.dumps(_run_result_to_dict(result), default=str))
-        raise typer.Exit(1 if result.n_failed else 0)
+        raise typer.Exit(_exit_code_for(result))
 
     _print_run_summary(result)
     if any(g.drifted for g in result.groups):
         console.print("[yellow]note:[/yellow] one or more groups showed schema/version drift.")
-    raise typer.Exit(1 if result.n_failed else 0)
+    raise typer.Exit(_exit_code_for(result))
 
 
 # ---------------------------------------------------------------------------
@@ -1693,6 +1690,16 @@ def benchmark(
 # ---------------------------------------------------------------------------
 
 
+def _exit_code_for(result: RunResult) -> int:
+    """1 if any group failed, or a requested report failed to render; 0 otherwise.
+
+    A report failure never means the detection/scoring results are wrong --
+    but the user explicitly asked for a report and didn't get one, and a
+    silent success-shaped exit code would hide that.
+    """
+    return 1 if (result.n_failed or result.report_status == "failed") else 0
+
+
 def _print_run_summary(result: RunResult) -> None:
     status_color = "red" if result.n_failed else "green"
     console.print(
@@ -1751,6 +1758,14 @@ def _print_run_summary(result: RunResult) -> None:
             if g.status == "failed":
                 console.print(f"    {g.group_label}: {g.error}")
 
+    if result.report_status == "success":
+        console.print(f"\n[green]Report:[/green] {result.report_path}")
+    elif result.report_status == "failed":
+        err_console.print(
+            "\n[red bold]Report generation failed[/red bold] -- detection and scoring "
+            "completed successfully; see the log for the underlying exception."
+        )
+
 
 def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
     return {
@@ -1764,6 +1779,7 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
         "n_failed": result.n_failed,
         "n_anomalies": result.n_anomalies,
         "report_path": str(result.report_path) if result.report_path else None,
+        "report_status": result.report_status,
         "started_at": result.started_at,
         "finished_at": result.finished_at,
         "warnings_issued": result.warnings_issued,
