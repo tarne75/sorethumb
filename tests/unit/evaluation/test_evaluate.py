@@ -174,6 +174,60 @@ def test_float32_inputs_accepted():
 
 
 # ---------------------------------------------------------------------------
+# Input validation (P2-9): fail closed rather than silently corrupt a metric
+# or crash deep inside sklearn with a confusing error.
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_scores_rejects_2d_scores():
+    scores = np.zeros((10, 2))
+    labels = np.zeros(10, dtype=int)
+    with pytest.raises(ValueError, match="1-D"):
+        evaluate_scores(scores, labels)
+
+
+def test_evaluate_scores_rejects_2d_labels():
+    scores = np.zeros(10)
+    labels = np.zeros((10, 1), dtype=int)
+    with pytest.raises(ValueError, match="1-D"):
+        evaluate_scores(scores, labels)
+
+
+def test_evaluate_scores_rejects_mismatched_length():
+    scores = np.zeros(10)
+    labels = np.zeros(9, dtype=int)
+    with pytest.raises(ValueError, match="equal length"):
+        evaluate_scores(scores, labels)
+
+
+def test_evaluate_scores_rejects_empty_input():
+    with pytest.raises(ValueError, match="non-empty"):
+        evaluate_scores(np.array([]), np.array([]))
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf")])
+def test_evaluate_scores_rejects_non_finite_scores(bad_value):
+    scores = np.array([0.1, 0.2, bad_value, 0.4])
+    labels = np.array([0, 1, 0, 1])
+    with pytest.raises(ValueError, match="finite"):
+        evaluate_scores(scores, labels)
+
+
+def test_evaluate_scores_rejects_non_binary_labels():
+    scores = np.array([0.1, 0.2, 0.3, 0.4])
+    labels = np.array([0, 1, 2, 1])
+    with pytest.raises(ValueError, match="binary"):
+        evaluate_scores(scores, labels)
+
+
+@pytest.mark.parametrize("bad_contamination", [0.0, 1.0, -0.1, 1.5])
+def test_evaluate_scores_rejects_out_of_range_contamination(bad_contamination):
+    scores, labels = _random_scores()
+    with pytest.raises(ValueError, match="contamination"):
+        evaluate_scores(scores, labels, contamination=bad_contamination)
+
+
+# ---------------------------------------------------------------------------
 # benchmark module: synthetic datasets and formatters
 # ---------------------------------------------------------------------------
 
@@ -237,6 +291,33 @@ def test_dataset_entry_has_licence():
     for ds in DATASETS:
         assert ds.licence, f"{ds.name} has no licence"
         assert ds.provenance, f"{ds.name} has no provenance"
+
+
+def test_covtype_loader_restricts_to_class_2_vs_class_4(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """P2-9: the documented ODDS formulation for Covtype is class 2 (normal,
+    majority within this pair) versus class 4 (anomaly, rare) -- every other
+    cover type (1, 3, 5, 6, 7) must be dropped from the dataset entirely, not
+    silently folded into "normal" by a bare `target == 4` comparison."""
+    from sorethumb.evaluate.benchmark import DATASETS
+
+    covtype_entry = next(d for d in DATASETS if d.name == "covtype")
+
+    fake_data = np.arange(7 * 3, dtype=np.float64).reshape(7, 3)
+    fake_target = np.array([1, 2, 2, 3, 4, 4, 5])
+
+    class _FakeBunch:
+        data = fake_data
+        target = fake_target
+
+    monkeypatch.setattr("sklearn.datasets.fetch_covtype", lambda **_kwargs: _FakeBunch())
+
+    X, y = covtype_entry.load(tmp_path)
+
+    assert X.shape[0] == 4  # only the 4 rows with target in {2, 4} survive
+    assert set(y.tolist()) == {0, 1}
+    assert y.sum() == 2  # the two target==4 rows
+    np.testing.assert_array_equal(X, fake_data[[1, 2, 4, 5]])
+    np.testing.assert_array_equal(y, [0, 0, 1, 1])
 
 
 # ---------------------------------------------------------------------------

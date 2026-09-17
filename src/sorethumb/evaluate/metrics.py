@@ -41,6 +41,36 @@ class Metrics:
         )
 
 
+def _validate_evaluate_inputs(scores_arr: np.ndarray, labels_raw: np.ndarray, contamination: float) -> None:
+    """Validate evaluate_scores input.
+
+    Fails closed rather than letting a malformed input silently corrupt a
+    metric or crash deep inside sklearn with a confusing error.
+    """
+    if scores_arr.ndim != 1:
+        msg = f"scores must be 1-D; got shape {scores_arr.shape}"
+        raise ValueError(msg)
+    if labels_raw.ndim != 1:
+        msg = f"labels must be 1-D; got shape {labels_raw.shape}"
+        raise ValueError(msg)
+    if len(scores_arr) == 0:
+        msg = "scores/labels must be non-empty"
+        raise ValueError(msg)
+    if len(scores_arr) != len(labels_raw):
+        msg = f"scores and labels must have equal length; got {len(scores_arr)} and {len(labels_raw)}"
+        raise ValueError(msg)
+    if not np.all(np.isfinite(scores_arr)):
+        msg = "scores must be finite (no NaN/±Inf)"
+        raise ValueError(msg)
+    bad_labels = sorted(set(labels_raw.tolist()) - {0.0, 1.0})
+    if bad_labels:
+        msg = f"labels must be binary (0/1); found other value(s): {bad_labels}"
+        raise ValueError(msg)
+    if not (0.0 < contamination < 1.0):
+        msg = f"contamination must be in (0, 1); got {contamination}"
+        raise ValueError(msg)
+
+
 def evaluate_scores(
     scores: Any,
     labels: Any,
@@ -51,21 +81,29 @@ def evaluate_scores(
     Parameters
     ----------
     scores:
-        1-D array-like of anomaly scores (higher = more anomalous).
+        1-D array-like of finite anomaly scores (higher = more anomalous).
     labels:
-        1-D array-like of ground-truth labels (1 = anomaly, 0 = normal).
+        1-D array-like of binary (0/1) ground-truth labels (1 = anomaly).
     contamination:
         Fraction of rows to flag as anomalous for threshold-dependent metrics
-        (a review-budget operating point). Choose this independently of the
-        labels' true positive rate. Setting it to ``y.mean()`` makes
-        ``k = round(n_total * contamination)`` equal ``n_positives`` exactly,
-        which forces ``precision_at_k == recall_at_k == f1_at_contamination``
-        (all three reduce to ``n_true_at_k / n_positives``) — three names for
-        one number, not three signals.
+        (a review-budget operating point), in (0, 1). Choose this
+        independently of the labels' true positive rate. Setting it to
+        ``y.mean()`` makes ``k = round(n_total * contamination)`` equal
+        ``n_positives`` exactly, which forces ``precision_at_k ==
+        recall_at_k == f1_at_contamination`` (all three reduce to
+        ``n_true_at_k / n_positives``) — three names for one number, not
+        three signals.
 
     Returns
     -------
     Metrics dataclass with ROC-AUC, AP, P@k, R@k, and F1 at contamination.
+
+    Raises
+    ------
+    ValueError
+        scores/labels are not 1-D, not the same length, empty, contain a
+        non-finite score, contain a label other than 0/1, or contamination
+        is not in (0, 1).
 
     """
     from sklearn.metrics import (  # noqa: PLC0415
@@ -75,7 +113,9 @@ def evaluate_scores(
     )
 
     scores_arr = np.asarray(scores, dtype=float)
-    labels_arr = np.asarray(labels, dtype=int)
+    labels_raw = np.asarray(labels, dtype=float)
+    _validate_evaluate_inputs(scores_arr, labels_raw, contamination)
+    labels_arr = labels_raw.astype(int)
 
     n_total = len(scores_arr)
     n_positives = int(labels_arr.sum())

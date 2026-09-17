@@ -144,10 +144,15 @@ class SklearnEntry(DatasetEntry):
                 data_home=str(cache_dir),
                 as_frame=False,
             )
-            X = bunch.data.astype(np.float32)
-            # Class 2 is the majority (normal); class 4 is rare (treat as anomaly).
-            # This is the standard ODDS formulation.
-            y = np.where(bunch.target == 4, 1, 0).astype(int)
+            # The standard ODDS formulation restricts the dataset to class 2
+            # (Lodgepole Pine, the normal majority within this pair) versus
+            # class 4 (Cottonwood/Willow, the rare anomaly) -- every other
+            # cover type (1, 3, 5, 6, 7) is out of scope for this benchmark
+            # and must be dropped, not silently folded into "normal" by a
+            # bare `target == 4` comparison.
+            pair_mask = (bunch.target == 2) | (bunch.target == 4)
+            X = bunch.data[pair_mask].astype(np.float32)
+            y = np.where(bunch.target[pair_mask] == 4, 1, 0).astype(int)
         else:
             raise ValueError(f"Unknown sklearn dataset: {self.sklearn_name!r}")
 
