@@ -940,6 +940,7 @@ def backfill(
             cfg.history.bootstrap_periods,
             cfg.history.lookback_periods,
             max_periods or cfg.history.max_backfill_periods,
+            roll_non_business=cfg.history.roll_non_business,
         )
         pending = iter_pending_periods(ws.store, dataset_fp, config_hash, backfill_labels, force_period or [])
 

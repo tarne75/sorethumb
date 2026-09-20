@@ -212,6 +212,66 @@ class TestResolveBackfillRange:
         # self.CFG has never completed anything -- cold start, not warm continuation.
         assert len(labels) == 7
 
+    def test_roll_non_business_drops_weekend_labels_from_cold_start(self, ws):
+        """A bootstrap window wide enough to span a weekend must not include
+        Sat/Sun labels when roll_non_business=True, even though only the
+        *reference* is rolled by callers (resolve_period), never the labels
+        resolve_backfill_range walks through internally."""
+        with ws:
+            # 2026-09-21 is a Monday; a 5-day bootstrap window from it spans
+            # Wed(16)..Sun(20) with no filtering, so Sat(19)/Sun(20) would
+            # otherwise leak in.
+            labels = resolve_backfill_range(
+                ws.store,
+                self.DS,
+                self.CFG,
+                "2026-09-21",
+                "day",
+                bootstrap_periods=5,
+                lookback_periods=28,
+                max_backfill_periods=30,
+                roll_non_business=True,
+            )
+        assert labels == ["2026-09-16", "2026-09-17", "2026-09-18"]
+
+    def test_roll_non_business_false_keeps_weekend_labels(self, ws):
+        """Default behaviour (roll_non_business=False) is unchanged: the
+        weekend labels a business-only dataset would never have data for are
+        still returned, same as before this was fixed."""
+        with ws:
+            labels = resolve_backfill_range(
+                ws.store,
+                self.DS,
+                self.CFG,
+                "2026-09-21",
+                "day",
+                bootstrap_periods=5,
+                lookback_periods=28,
+                max_backfill_periods=30,
+            )
+        assert labels == ["2026-09-16", "2026-09-17", "2026-09-18", "2026-09-19", "2026-09-20"]
+
+    def test_roll_non_business_drops_weekend_labels_from_warm_continuation(self, ws):
+        """The warm-continuation branch's start (last_complete + 1) is not
+        itself rolled -- if the last completed period was a Friday, "the day
+        after" is a Saturday. This must still be filtered out, the same as
+        the cold-start case above."""
+        with ws:
+            _seed_totals(ws, self.DS, "run1", "2026-09-18", "gk1", 5, 100, config_hash=self.CFG)  # Friday
+            labels = resolve_backfill_range(
+                ws.store,
+                self.DS,
+                self.CFG,
+                "2026-09-21",  # Monday
+                "day",
+                bootstrap_periods=28,
+                lookback_periods=28,
+                max_backfill_periods=30,
+                roll_non_business=True,
+            )
+        # Without filtering this would be [Sat 19, Sun 20]; both must be dropped.
+        assert labels == []
+
 
 # ---------------------------------------------------------------------------
 # ledger.py — iter_pending_periods / clear_period / periods_missing_groups

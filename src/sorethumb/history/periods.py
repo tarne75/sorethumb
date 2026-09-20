@@ -126,6 +126,29 @@ def period_range(
     return labels
 
 
+def filter_non_business(
+    labels: list[str],
+    granularity: PeriodGranularity,
+    roll_non_business: bool,
+) -> list[str]:
+    """Drop weekend "day" labels from *labels* when roll_non_business is set.
+
+    ``resolve_period`` only rolls a *single* reference point away from a
+    weekend; every other place that walks a range of labels (``period_range``
+    plus ``step_back``/``step_forward``) has no weekday awareness at all, so
+    a range whose start or end lands mid-week but whose *span* crosses a
+    weekend (e.g. a 5-day lookback from a Monday, or "the day after the last
+    completed period" landing on a Friday) still produces Saturday/Sunday
+    labels even when the caller configured roll_non_business=True. This is
+    the uniform fix applied after any such range is assembled: it changes
+    nothing when roll_non_business is False, and is a no-op for granularities
+    other than "day" (weekly/monthly labels are not individual weekdays).
+    """
+    if not roll_non_business or granularity != "day":
+        return labels
+    return [label for label in labels if date.fromisoformat(label).weekday() in _BUSINESS_WEEKDAYS]
+
+
 def _add_months(d: date, n: int) -> date:
     """Return d shifted by n calendar months, always landing on the 1st."""
     total = d.year * 12 + (d.month - 1) + n

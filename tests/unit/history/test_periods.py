@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 import pytest
 
 from sorethumb.history.periods import (
+    filter_non_business,
     period_bounds,
     period_range,
     resolve_period,
@@ -139,3 +140,38 @@ class TestStepNavigation:
     def test_period_range_month_four_periods(self):
         labels = period_range("2026-01-01", "2026-04-01", "month")
         assert labels == ["2026-01-01", "2026-02-01", "2026-03-01", "2026-04-01"]
+
+
+# ---------------------------------------------------------------------------
+# periods.py — filter_non_business
+# ---------------------------------------------------------------------------
+
+
+_A_WEEK = ["2026-09-16", "2026-09-17", "2026-09-18", "2026-09-19", "2026-09-20"]  # Wed..Sun
+
+
+class TestFilterNonBusiness:
+    def test_drops_weekend_labels_when_enabled(self):
+        assert filter_non_business(_A_WEEK, "day", True) == [
+            "2026-09-16",
+            "2026-09-17",
+            "2026-09-18",
+        ]
+
+    def test_no_op_when_disabled(self):
+        assert filter_non_business(_A_WEEK, "day", False) == _A_WEEK
+
+    def test_no_op_for_non_day_granularity(self):
+        """Weekly/monthly labels are not individual weekdays -- filtering by
+        weekday would be meaningless (and wrong: a week label is always a
+        Monday, so date.fromisoformat(...).weekday() would coincidentally
+        "pass" every time, hiding the fact that the check doesn't apply)."""
+        week_labels = ["2026-09-07", "2026-09-14"]
+        assert filter_non_business(week_labels, "week", True) == week_labels
+
+    def test_all_business_days_pass_through_unchanged(self):
+        weekdays = ["2026-09-14", "2026-09-15", "2026-09-16", "2026-09-17", "2026-09-18"]
+        assert filter_non_business(weekdays, "day", True) == weekdays
+
+    def test_empty_list(self):
+        assert filter_non_business([], "day", True) == []

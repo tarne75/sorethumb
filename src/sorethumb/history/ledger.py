@@ -18,7 +18,13 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from sorethumb.history.periods import PeriodGranularity, period_range, step_back, step_forward
+from sorethumb.history.periods import (
+    PeriodGranularity,
+    filter_non_business,
+    period_range,
+    step_back,
+    step_forward,
+)
 
 if TYPE_CHECKING:
     from sorethumb.store.db import Store
@@ -121,6 +127,8 @@ def resolve_backfill_range(
     bootstrap_periods: int,
     lookback_periods: int,
     max_backfill_periods: int,
+    *,
+    roll_non_business: bool = False,
 ) -> list[str]:
     """Return an inclusive list of period labels to backfill under *config_hash*.
 
@@ -134,8 +142,20 @@ def resolve_backfill_range(
     3. Already complete (last_complete >= reference): full lookback_periods scan
                    to pick up any periods that were skipped.
 
-    The result is clamped to max_backfill_periods (most recent). An empty list
-    is a normal outcome when there is nothing to do.
+    ``roll_non_business`` (matching the same config flag ``resolve_period``
+    takes) drops Saturday/Sunday labels from the result. This matters even
+    though the caller's own *reference* was already rolled away from a
+    weekend before being passed in here: none of the three branches above
+    (nor ``period_range``/``step_back``/``step_forward``) have any weekday
+    awareness, so a *span* that crosses a weekend -- a bootstrap/lookback
+    window wide enough to reach back over Sat/Sun, or branch 2's "the day
+    after the last completed period" landing on a Friday -- still produces
+    weekend labels even with roll_non_business configured. Applied once,
+    uniformly, after all three branches, rather than duplicated per branch.
+
+    The result is clamped to max_backfill_periods (most recent) after the
+    weekend filter, so the clamp always counts real (business-day) periods.
+    An empty list is a normal outcome when there is nothing to do.
     """
     end_label = step_back(reference_label, granularity, 1)
     last_complete = last_complete_period(store, dataset_fp, config_hash)
@@ -177,6 +197,8 @@ def resolve_backfill_range(
             start,
             end_label,
         )
+
+    labels = filter_non_business(labels, granularity, roll_non_business)
 
     if len(labels) > max_backfill_periods:
         labels = labels[-max_backfill_periods:]
