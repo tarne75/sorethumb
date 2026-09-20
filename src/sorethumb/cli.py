@@ -1644,45 +1644,105 @@ def benchmark(
         typer.Option(
             "--seeds",
             help=(
-                "Repeat each (dataset, detector) pair over this many seeds and "
-                "report mean ± std, instead of a single lucky/unlucky draw."
+                "Legacy real-dataset/synthetic suite: repeat each (dataset, detector) pair over "
+                "this many seeds and report mean ± std, instead of a single lucky/unlucky draw."
             ),
         ),
     ] = 5,
+    pipeline_seeds: Annotated[
+        int,
+        typer.Option(
+            "--pipeline-seeds",
+            help=(
+                "Full-pipeline scenario suite: repeat each (scenario, ablation) cell over this "
+                "many seeds and report mean ± 95% CI."
+            ),
+        ),
+    ] = 3,
+    legacy: Annotated[
+        bool,
+        typer.Option(
+            "--legacy/--no-legacy",
+            help=(
+                "Run the real-dataset (KDDCup99/Covtype) + bare-detector synthetic suite "
+                "(requires the [benchmark] extra)."
+            ),
+        ),
+    ] = True,
+    pipeline: Annotated[
+        bool,
+        typer.Option(
+            "--pipeline/--no-pipeline",
+            help=(
+                "Run the full-pipeline mixed numeric+categorical scenario suite "
+                "(point/local/contextual/clustered/masking/swamping/varying-density)."
+            ),
+        ),
+    ] = True,
 ) -> None:
-    """Run the evaluation harness (requires the [benchmark] extra)."""
+    """Run the evaluation harness and refresh the README's benchmark tables.
+
+    Two independent suites, both on by default: --pipeline (mixed-type
+    synthetic scenarios through the real feature pipeline, no extra
+    dependencies) and --legacy (real-dataset + bare-detector synthetic,
+    requires the [benchmark] extra). Disable either with --no-pipeline /
+    --no-legacy for a faster, narrower run.
+    """
     _setup_logging(log_level or "INFO")
-    try:
-        import datasets  # noqa: PLC0415, F401
-    except ImportError:
-        err_console.print(
-            "[red]The benchmark extra is not installed.[/red]\n"
-            "Install with: uv pip install 'sorethumb[benchmark]'"
-        )
-        raise typer.Exit(3) from None
-
-    from sorethumb.evaluate.benchmark import (  # noqa: PLC0415
-        BenchmarkConfig,
-        generate_metadata,
-        inject_into_readme,
-        run_benchmark,
-        write_outputs,
-    )
-
-    cfg = BenchmarkConfig(n_seeds=seeds)
-    metadata = generate_metadata()
-    console.print(f"[bold]Running benchmark harness ({seeds} seed(s) per pair)…[/bold]")
-    rows = run_benchmark(cfg)
-
     readme_path = Path(__file__).parent.parent.parent / "README.md"
-    if inject_into_readme(rows, readme_path, metadata):
-        console.print(f"[green]Benchmark table injected into {readme_path}[/green]")
+    total_rows = 0
 
-    md_path, csv_path = write_outputs(rows, Path("benchmark_results"), metadata)
-    console.print(f"Results written to {md_path} and {csv_path}")
-    console.print(
-        f"\n[bold]Done.[/bold] {len(rows)} result(s) across {len({r.dataset for r in rows})} dataset(s)."
-    )
+    if legacy:
+        try:
+            import datasets  # noqa: PLC0415, F401
+        except ImportError:
+            err_console.print(
+                "[red]The benchmark extra is not installed; skipping the legacy suite.[/red]\n"
+                "Install with: uv pip install 'sorethumb[benchmark]', or pass --no-legacy."
+            )
+        else:
+            from sorethumb.evaluate.benchmark import (  # noqa: PLC0415
+                BenchmarkConfig,
+                generate_metadata,
+                inject_into_readme,
+                run_benchmark,
+                write_outputs,
+            )
+
+            cfg = BenchmarkConfig(n_seeds=seeds)
+            metadata = generate_metadata()
+            console.print(f"[bold]Running legacy benchmark harness ({seeds} seed(s) per pair)…[/bold]")
+            rows = run_benchmark(cfg)
+            if inject_into_readme(rows, readme_path, metadata):
+                console.print(f"[green]Legacy benchmark table injected into {readme_path}[/green]")
+            md_path, csv_path = write_outputs(rows, Path("benchmark_results"), metadata)
+            console.print(f"Legacy results written to {md_path} and {csv_path}")
+            total_rows += len(rows)
+
+    if pipeline:
+        from sorethumb.evaluate.pipeline_benchmark import (  # noqa: PLC0415
+            PipelineBenchmarkConfig,
+            run_pipeline_benchmark,
+        )
+        from sorethumb.evaluate.pipeline_benchmark import (  # noqa: PLC0415
+            inject_into_readme as inject_pipeline_readme,
+        )
+        from sorethumb.evaluate.pipeline_benchmark import (  # noqa: PLC0415
+            write_outputs as write_pipeline_outputs,
+        )
+
+        console.print(
+            f"[bold]Running full-pipeline scenario benchmark ({pipeline_seeds} seed(s) per cell)…[/bold]"
+        )
+        pcfg = PipelineBenchmarkConfig(n_seeds=pipeline_seeds)
+        prows = run_pipeline_benchmark(pcfg)
+        if inject_pipeline_readme(prows, readme_path):
+            console.print(f"[green]Pipeline benchmark table injected into {readme_path}[/green]")
+        pmd_path, pcsv_path = write_pipeline_outputs(prows, Path("benchmark_results"))
+        console.print(f"Pipeline results written to {pmd_path} and {pcsv_path}")
+        total_rows += len(prows)
+
+    console.print(f"\n[bold]Done.[/bold] {total_rows} result(s).")
 
 
 # ---------------------------------------------------------------------------

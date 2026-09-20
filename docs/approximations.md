@@ -103,3 +103,54 @@ the median of routinely disagree by 2–3×. The run summary and `sorethumb run 
 report each detector's realised rate so the resulting flag count is read as a
 shortlist size, not a measurement. Validation against labelled benchmark datasets
 is ongoing; see the benchmark table in the README.
+
+## Full-pipeline scenario benchmark — sklearn baselines only, no PyOD
+
+`src/sorethumb/evaluate/pipeline_benchmark.py`'s `sklearn:*` comparison rows use
+bare `sklearn.ensemble.IsolationForest` / `sklearn.neighbors.LocalOutlierFactor` /
+`sklearn.svm.OneClassSVM` (already a sorethumb dependency), not PyOD. This is a
+deliberate scope decision, not an oversight: sorethumb's `ecod`/`hbos`/`lof`
+detectors are already independent sklearn-based reimplementations, not PyOD
+wrappers, and PyOD would add real dependency weight (numba/torch-adjacent
+transitive dependencies, similar to the friction already documented for SHAP)
+purely for a comparison baseline. If PyOD-specific comparisons become valuable
+later, add it as its own optional extra rather than a core/benchmark dependency.
+
+## Full-pipeline scenario benchmark — `intersection` combination is not robust to one bad member
+
+`tests/benchmark/test_pipeline_accuracy_floors.py` measured that the pipeline's
+*shipped default* (`scoring.combination = "intersection"`, the default three-
+detector ensemble) scores **worse than random** (ROC-AUC as low as ~0.04) on the
+`local` and `varying_density` scenarios (see `evaluate/scenarios.py`). Root
+cause: `intersection`'s combined score is `min()` across each detector's
+calibrated score (`scoring/combine.py::ScoreEnsemble._combine`) — a principled
+choice for the *flag* decision (only flag when every detector agrees), but it
+means the combined *continuous ranking* is only as good as its single worst
+member. On both scenarios, `OneClassSVM`'s RBF-kernel boundary badly misranks
+points in a low-density gap between clusters or a mixed-density regime
+(individually measured ROC-AUC as low as 0.002), and `min()` lets that one
+detector's bad ranking dominate the ensemble's, even though `isolation_forest`
+alone scores 0.90+ on the same data. `union` (`max()` across detectors) is
+measured to be far more robust on these same two scenarios (ROC-AUC ~0.85) —
+it takes the *best*-performing detector's opinion per row instead of the
+worst's. This is real, measured behaviour of the shipped default on a
+plausible data regime, not a synthetic-data artifact tuned to fail; it is
+surfaced here rather than silently worked around, matching the project's
+practice of documenting known limitations (see `lof`'s clustered-anomaly
+weakness above) instead of asserting something known to be false.
+
+## Full-pipeline scenario benchmark — `contextual` anomalies are near-chance for every combination mode
+
+The `contextual` scenario (a categorical "context" column changes what
+"normal" means for a numeric feature; see `evaluate/scenarios.py`) measures
+consistently at ROC-AUC 0.45–0.49 — chance, not occasionally by seed luck —
+under every combination mode tried (`intersection`, `composite`, `union`,
+and the six-detector `all_detectors` ablation). None of sorethumb's current
+detectors/ensemble strategies learn the conditional "normal depends on
+context" structure from an ordinary categorical feature column (the context
+is deliberately not modelled via `group_by`, which would let a group-aware
+fit trivially solve it — see the scenario's own docstring for why). This is
+a genuine, currently-unaddressed structural gap, not a benchmark bug;
+`tests/benchmark/test_pipeline_accuracy_floors.py` checks only for a
+catastrophic regression here (a real inversion), not for beating random,
+since beating random is not something any current configuration achieves.

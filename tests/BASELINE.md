@@ -456,8 +456,10 @@ This is a disclosed, deliberate gap against the plan's literal wording, not an o
   slow tests on a frozen canonical environment on schedule" job; there is currently no
   meaningful separate "memory" signal to run (`peak_rss_mb` was removed as misleading in P0-7,
   see `tests/benchmark/test_benchmark_harness.py::test_run_benchmark_row_has_no_peak_rss_mb`) --
-  a real one is P3-2 scope (measuring true peak process memory across a rebuilt harness), not
-  invented here.
+  a real one was P3-2 scope (measuring true peak process memory across a rebuilt harness), not
+  invented here. **Resolved in P3-2**: `evaluate/pipeline_benchmark.py`'s `peak_memory_mb`
+  field, a real `resource.getrusage(RUSAGE_SELF).ru_maxrss` high-water mark measured inside an
+  isolated per-cell subprocess (not a before/after snapshot delta).
 - Every job has an explicit `timeout-minutes` (5-30, sized to what was actually measured
   locally: fast-tests ~11s, integration ~36s, property ~6s, repo-check ~2s, benchmark-smoke
   ~3s, coverage ~2min) and inherits `--durations=15` from `addopts`, so slowest-test output and
@@ -494,7 +496,7 @@ Verified property lane still passes at both `ci` (18 passed, 5.6s) and `dev` (18
 | 11 | Private estimator state only in named adapter contracts | Holds (only hit outside `tests/contract/` was `tree_shap_attributions`, a false positive on `.tree_`) |
 | 12 | Every P0 fix has a regression | Holds for the runtime fixes P0-1..P0-7 (grep-matched by keyword per item); P0-8/9/10 are docs/CI/metadata, not runtime behaviour, so a pytest regression doesn't apply to them |
 | 13 | Default config exercises `combination="intersection"` | Holds (`tests/factories/configs.py`, from P1-2) |
-| 14 | PR benchmark smoke detects inverted direction; floors include varying-density + tolerance bands | **Partial.** Smoke fixed this phase (`benchmark-smoke` job). A varying-density synthetic dataset does not exist yet -- `test_accuracy_floors.py` already documents excluding LOF from its floors for exactly this reason. Building one is P3-2 scope ("varying-density regimes") and is deliberately not done here, same disposition as the two P1-6 deferrals |
+| 14 | PR benchmark smoke detects inverted direction; floors include varying-density + tolerance bands | **Partial at the time of P1-7.** Smoke fixed this phase (`benchmark-smoke` job). A varying-density synthetic dataset did not exist yet -- `test_accuracy_floors.py` already documented excluding LOF from its floors for exactly this reason. Building one was P3-2 scope ("varying-density regimes") and was deliberately not done here, same disposition as the two P1-6 deferrals. **Resolved in P3-2**: `evaluate/scenarios.py::varying_density_anomalies` + `tests/benchmark/test_pipeline_accuracy_floors.py` (floors on the `combination_union` ablation; the shipped `intersection` default's genuine weakness there is documented, not floor-tested as passing, in `docs/approximations.md`). |
 | 15 | Explicit bounded-CI / larger-dev/nightly Hypothesis profiles | Fixed this phase (`hypothesis_profiles.py`) |
 | 16 | Informational overall branch coverage; required >=85% diff coverage | Fixed this phase (`coverage` job) |
 | 17 | Required lanes report runtime budget + slowest tests | Fixed this phase (`timeout-minutes` + `--durations=15` per job) |
