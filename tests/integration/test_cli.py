@@ -557,9 +557,27 @@ enabled = false
 
 
 def _recent_day_labels(n: int) -> list[str]:
-    """The ``n`` day labels ending yesterday (what a cold-start backfill targets)."""
-    today = datetime.now(UTC).date()
-    return [(today - timedelta(days=k)).isoformat() for k in range(n, 0, -1)]
+    """The ``n`` day labels a cold-start backfill will target, right now.
+
+    Computed the exact same way ``resolve_backfill_range``'s cold-start
+    branch does (roll "today" to the previous business day, then step back
+    by calendar days from there) rather than naive ``today - k`` arithmetic.
+    With ``history.roll_non_business = true`` (used by every test in this
+    module), those two are only the same Monday-through-Friday; the naive
+    version silently drifts by up to two days whenever the test happens to
+    run on a Saturday or Sunday, since the anchor itself gets rolled back
+    before the window is computed -- see resolve_backfill_range's docstring.
+    Matching that logic here, instead of duplicating an assumption about
+    which days a "recent" window means, is what keeps this correct on every
+    day of the week.
+    """
+    from sorethumb.history.periods import period_range, resolve_period, step_back
+
+    ref = datetime.now(UTC)
+    _, _, ref_label = resolve_period(ref, "day", roll_non_business=True)
+    end_label = step_back(ref_label, "day", 1)
+    start_label = step_back(ref_label, "day", n)
+    return period_range(start_label, end_label, "day")
 
 
 @pytest.fixture
