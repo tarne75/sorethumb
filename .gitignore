@@ -17,7 +17,7 @@ htmlcov/
 sorethumb-workspace/
 .sorethumb_benchmark_cache/
 benchmark_results/
-validation/
+/validation/
 tmp/
 .idea/
 *.iml

@@ -1,344 +1,248 @@
 #!/usr/bin/env python3
-"""Validation sweep: run all detector combos × PCA on/off × datasets.
+"""Validation sweep: run detector combos × PCA on/off × datasets through the full pipeline.
 
-Results are written incrementally to validation/results.json so the script
-can be safely interrupted and resumed.
+Thin CLI over ``scripts/validation/``'s pure planner (``planner.py``,
+``schema.py``, ``data.py``) and runner (``runner.py``). Each case fits on a
+70/30 train/held-out split of one dataset and scores the held-out split via
+``score_forward`` (never trains and evaluates on the same rows). Datasets
+with a genuine anomaly ground truth (currently only kddcup99_sa; see
+``scripts/validation/datasets.py``) additionally get held-out ROC-AUC/AP and
+precision@k/recall@k/F1@k at a fixed review budget -- every other dataset
+gets operational/pipeline-smoke metrics only (n flagged, elapsed time), never
+a fabricated accuracy number for a dataset with no anomaly labels.
+
+Results are written atomically to validation/results.json after every case,
+so the script is safely interruptible. On resume, a case is only skipped if
+a stored *successful* result exists whose full identity (schema version,
+code revision, dataset file fingerprint, resolved config hash, seed,
+dependency versions) matches what would be run now -- a failed case, or one
+whose code/data/config/dependencies changed, always reruns.
 
 Usage:
     uv run python scripts/run_validation.py
-    uv run python scripts/run_validation.py --dataset kddcup99_sa  # single dataset
+    uv run python scripts/run_validation.py --dataset kddcup99_sa --pca off
+    uv run python scripts/run_validation.py --combo baseline --workers 4
+    uv run python scripts/run_validation.py --fail-fast
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import time
-from dataclasses import dataclass
+from concurrent.futures import CancelledError, Future, ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from sorethumb import Config, Workspace, run_detection  # noqa: E402
+from scripts.validation.datasets import COMBOS, DATASETS, combo_by_name, dataset_by_name  # noqa: E402
+from scripts.validation.identity import code_revision, dependency_versions  # noqa: E402
+from scripts.validation.planner import (  # noqa: E402
+    build_cases,
+    plan_run,
+    read_results_file,
+    write_results_atomic,
+)
+from scripts.validation.runner import build_config, build_identity, run_case, run_explain_check  # noqa: E402
+from scripts.validation.schema import CaseKey, CaseResult, ComboSpec, DatasetSpec  # noqa: E402
 
 DATA_DIR = REPO_ROOT / "data-samples"
 RESULTS_PATH = REPO_ROOT / "validation" / "results.json"
 WORKDIR_BASE = REPO_ROOT / "validation" / "runs"
 
-
-# ---------------------------------------------------------------------------
-# Dataset specs
-# ---------------------------------------------------------------------------
+_PCA_SETTINGS = {"on": [True], "off": [False], "both": [False, True]}
 
 
-@dataclass
-class DatasetSpec:
-    name: str
-    file: str
-    ignore: list[str]
-    source: str
-    description: str
-    rows: int
-    cols: int
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("--dataset", default=None, help="Run only this dataset (by name)")
+    parser.add_argument("--combo", default=None, help="Run only this detector combo (by name)")
+    parser.add_argument("--pca", choices=["on", "off", "both"], default="both")
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--fail-fast",
+        action="store_true",
+        help="Stop scheduling new cases after the first failure this session",
+    )
+    parser.add_argument(
+        "--workers", type=int, default=1, help="Parallel worker processes (cases use independent workspaces)"
+    )
+    parser.add_argument(
+        "--skip-explain-check",
+        action="store_true",
+        help="Skip the small separate explain-validation matrix (baseline combo, PCA off, per dataset)",
+    )
+    return parser.parse_args()
 
 
-DATASETS: list[DatasetSpec] = [
-    DatasetSpec(
-        name="kddcup99_sa",
-        file="kddcup99_sa.parquet",
-        ignore=["target"],
-        source="KDD Cup 1999 (UCI ML Repository) — SA subset, 10 % sample",
-        description="Network intrusion detection. 41 connection features (numeric + categorical). "
-        "Ground-truth `target` label excluded. Industry-standard anomaly benchmark.",
-        rows=100_655,
-        cols=42,
-    ),
-    DatasetSpec(
-        name="electricity",
-        file="electricity.parquet",
-        ignore=["class"],
-        source="Harries (1999) via OpenML — Electricity dataset",
-        description="Half-hourly Australian electricity demand 1996–1998. "
-        "Price and demand for NSW and Victoria plus transfer. `class` (UP/DOWN) excluded.",
-        rows=45_312,
-        cols=9,
-    ),
-    DatasetSpec(
-        name="weather_australia",
-        file="weather_australia.parquet",
-        ignore=["A15"],
-        source="Australian Bureau of Meteorology via UCI ML Repository",
-        description="Daily weather observations (anonymous columns A1–A14). "
-        "A15 is the binary RainTomorrow label, excluded from features.",
-        rows=690,
-        cols=15,
-    ),
-    DatasetSpec(
-        name="macro_us_quarterly",
-        file="macro_us_quarterly.parquet",
-        ignore=["year", "quarter"],
-        source="statsmodels macrodata — US Federal Reserve",
-        description="Quarterly US macroeconomic indicators 1959–2009 "
-        "(GDP, inflation, unemployment, interest rates). Year and quarter excluded as indices.",
-        rows=203,
-        cols=14,
-    ),
-    DatasetSpec(
-        name="elnino_sst",
-        file="elnino_sst.parquet",
-        ignore=["YEAR"],
-        source="statsmodels elnino — NOAA/TOGA-TAO buoy array",
-        description="Annual mean sea-surface temperatures across 12 Pacific buoy locations "
-        "1950–2010. YEAR excluded as index.",
-        rows=61,
-        cols=13,
-    ),
-    DatasetSpec(
-        name="sunspots_annual",
-        file="sunspots_annual.parquet",
-        ignore=["YEAR"],
-        source="statsmodels sunspots — Royal Observatory of Belgium",
-        description="Annual Wolf sunspot number 1700–2008. Single numeric feature after "
-        "excluding YEAR. Very small — edge-case/sanity dataset.",
-        rows=309,
-        cols=2,
-    ),
-    DatasetSpec(
-        name="longley_multicollinear",
-        file="longley_multicollinear.parquet",
-        ignore=[],
-        source="statsmodels longley — Longley (1967)",
-        description="Annual US macro data 1947–1962 (7 highly collinear features). "
-        "16 rows only — extreme edge case. Included for completeness.",
-        rows=16,
-        cols=7,
-    ),
-    DatasetSpec(
-        name="natops_mts",
-        file="natops_mts.parquet",
-        ignore=["label"],
-        source="UEA Time Series Classification Archive — NATOPS dataset",
-        description="24-channel aircraft hand-signal motion capture (51 timepoints), "
-        "stored wide (1224 numeric columns). `label` excluded. PCA recommended.",
-        rows=360,
-        cols=1_225,
-    ),
-    DatasetSpec(
-        name="basic_motions_mts",
-        file="basic_motions_mts.parquet",
-        ignore=["label"],
-        source="UEA Time Series Classification Archive — BasicMotions dataset",
-        description="6-axis IMU data for 4 activities (100 timepoints × 6 channels = 600 cols). "
-        "`label` excluded. PCA recommended.",
-        rows=80,
-        cols=601,
-    ),
-]
-
-# ---------------------------------------------------------------------------
-# Detector combos
-# ---------------------------------------------------------------------------
-
-BASE = ["isolation_forest", "kmeans_distance", "one_class_svm"]
-
-COMBOS: list[tuple[str, list[str]]] = [
-    ("baseline",           BASE),
-    ("baseline+ecod",      BASE + ["ecod"]),
-    ("baseline+lof",       BASE + ["lof"]),
-    ("baseline+hbos",      BASE + ["hbos"]),
-    ("baseline+ecod+lof",  BASE + ["ecod", "lof"]),
-    ("baseline+ecod+hbos", BASE + ["ecod", "hbos"]),
-    ("baseline+lof+hbos",  BASE + ["lof", "hbos"]),
-    ("all6",               BASE + ["ecod", "lof", "hbos"]),
-]
-
-NU_CANDIDATES = [0.1, 0.15, 0.2, 0.25, 0.3]
+def _print_line(result: CaseResult) -> None:
+    pca_label = "on " if result.pca else "off"
+    prefix = f"    [{result.dataset:22s} pca={pca_label} {result.combo:20s}]"
+    if result.status == "error":
+        print(f"{prefix} ERROR: {(result.error or 'unknown')[:100]}")
+        return
+    if result.status == "too_few_records":
+        print(
+            f"{prefix} skipped: train={result.n_train}/holdout={result.n_holdout} "
+            f"below scoring.min_records  {result.elapsed_seconds:>6.1f}s"
+        )
+        return
+    acc = ""
+    if result.roc_auc is not None and result.average_precision is not None:
+        acc = f"  ROC-AUC={result.roc_auc:.4f} AP={result.average_precision:.4f}"
+    print(
+        f"{prefix} {result.n_holdout_flagged:>5} / {result.n_holdout:>7} flagged"
+        f"{acc}  {result.elapsed_seconds:>6.1f}s"
+    )
 
 
-# ---------------------------------------------------------------------------
-# Config builder
-# ---------------------------------------------------------------------------
+def _lookup(case: CaseKey) -> tuple[DatasetSpec, ComboSpec]:
+    ds = dataset_by_name(case.dataset)
+    cb = combo_by_name(case.combo)
+    assert ds is not None
+    assert cb is not None
+    return ds, cb
 
 
-def build_config(dataset: DatasetSpec, pca: bool, detector_names: list[str], nu: float, workdir: Path) -> Config:
-    detectors = []
-    for name in detector_names:
-        det: dict = {"name": name, "enabled": True}
-        if name == "one_class_svm":
-            det["params"] = {"nu": nu}
-        detectors.append(det)
-
-    return Config.model_validate({
-        "source": {"uri": str(DATA_DIR / dataset.file)},
-        "columns": {"ignore": dataset.ignore},
-        "features": {"pca": pca},
-        "scoring": {"contamination": "auto", "combination": "intersection"},
-        "detectors": detectors,
-        "run": {"workdir": str(workdir), "seed": 42},
-        "explain": {"enabled": True, "max_rows": 500},
-    })
+def _run_sequential(
+    to_run: list[CaseKey], code_rev: str, deps: dict[str, str], fail_fast: bool, handle: _ResultHandler
+) -> None:
+    for case in to_run:
+        if handle.failed and fail_fast:
+            print("  --fail-fast: stopping before remaining cases.")
+            break
+        ds, cb = _lookup(case)
+        result = run_case(case, ds, cb, WORKDIR_BASE, DATA_DIR, code_rev, deps)
+        handle(result)
 
 
-# ---------------------------------------------------------------------------
-# Nu tuning
-# ---------------------------------------------------------------------------
+def _run_parallel(
+    to_run: list[CaseKey],
+    code_rev: str,
+    deps: dict[str, str],
+    workers: int,
+    fail_fast: bool,
+    handle: _ResultHandler,
+) -> None:
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures: dict[Future[CaseResult], CaseKey] = {}
+        for case in to_run:
+            ds, cb = _lookup(case)
+            fut = pool.submit(run_case, case, ds, cb, WORKDIR_BASE, DATA_DIR, code_rev, deps)
+            futures[fut] = case
+
+        fail_fast_triggered = False
+        for fut in as_completed(futures):
+            try:
+                result = fut.result()
+            except CancelledError:
+                continue  # cancelled before it started (see below); not run this session
+            handle(result)
+            if handle.failed and fail_fast and not fail_fast_triggered:
+                fail_fast_triggered = True
+                print("  --fail-fast: cancelling cases that haven't started yet.")
+                for other in futures:
+                    if not other.done():
+                        other.cancel()
 
 
-def tune_nu(dataset: DatasetSpec, pca: bool, workdir: Path) -> float:
-    """Try NU_CANDIDATES on the baseline, return first nu that yields > 0 anomalies."""
-    print(f"    [tuning nu] ", end="", flush=True)
-    for nu in NU_CANDIDATES:
-        cfg = build_config(dataset, pca, BASE, nu, workdir)
-        try:
-            result = run_detection(cfg, no_report=True, force=True)
-            n_total = sum(g.n_records for g in result.groups)
-            n_anom = result.n_anomalies
-            rate = n_anom / n_total if n_total > 0 else 0.0
-            print(f"nu={nu}→{n_anom} ({rate:.1%}) ", end="", flush=True)
-            if n_anom > 0:
-                print(f"✓")
-                return nu
-        except Exception as e:
-            print(f"nu={nu}→ERR({e}) ", end="", flush=True)
-    print("no anomalies found, using 0.1")
-    return 0.1
+def _run_explain_matrix(dataset_filter: str | None, seed: int) -> bool:
+    """Run the small, separate explain-validation matrix. Returns True if anything failed."""
+    print("\nExplain-validation matrix (baseline combo, PCA off, per dataset):")
+    baseline = combo_by_name("baseline")
+    assert baseline is not None
+    any_failed = False
+    for ds in DATASETS:
+        if dataset_filter and ds.name != dataset_filter:
+            continue
+        rec = run_explain_check(ds, baseline, seed, WORKDIR_BASE, DATA_DIR)
+        status_str = "OK" if rec["status"] == "success" else f"ERROR: {str(rec['error'])[:100]}"
+        print(f"    [{ds.name:22s}] {status_str}  {rec['elapsed_seconds']:>6.1f}s")
+        any_failed = any_failed or rec["status"] != "success"
+    return any_failed
 
 
-# ---------------------------------------------------------------------------
-# Single run
-# ---------------------------------------------------------------------------
+class _ResultHandler:
+    """Persists every result as it arrives and tracks whether any case failed."""
 
+    def __init__(self, seed_results: dict[CaseKey, CaseResult]) -> None:
+        self.all_results = dict(seed_results)
+        self.failed = False
 
-def run_one(dataset: DatasetSpec, pca: bool, nu: float, combo_name: str,
-            detector_names: list[str], workdir: Path) -> dict:
-    cfg = build_config(dataset, pca, detector_names, nu, workdir)
-    t0 = time.time()
-    try:
-        result = run_detection(cfg, no_report=True)
-        elapsed = time.time() - t0
-        n_total = sum(g.n_records for g in result.groups)
-        n_anom = result.n_anomalies
-        rate = n_anom / n_total if n_total > 0 else 0.0
-        group_summaries = [
-            {"group": g.group_label, "n_records": g.n_records,
-             "n_anomalies": g.n_anomalies, "status": g.status}
-            for g in result.groups
-        ]
-        return {
-            "dataset": dataset.name,
-            "pca": pca,
-            "combo": combo_name,
-            "detectors": detector_names,
-            "nu": nu,
-            "n_total": n_total,
-            "n_anomalies": n_anom,
-            "rate": round(rate, 6),
-            "elapsed_seconds": round(elapsed, 2),
-            "run_id": result.run_id,
-            "status": "success",
-            "warnings": result.warnings_issued,
-            "groups": group_summaries,
-        }
-    except Exception as e:
-        return {
-            "dataset": dataset.name,
-            "pca": pca,
-            "combo": combo_name,
-            "detectors": detector_names,
-            "nu": nu,
-            "n_total": 0,
-            "n_anomalies": 0,
-            "rate": 0.0,
-            "elapsed_seconds": round(time.time() - t0, 2),
-            "run_id": None,
-            "status": "error",
-            "error": str(e),
-            "warnings": [],
-            "groups": [],
-        }
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+    def __call__(self, result: CaseResult) -> None:
+        self.all_results[result.key()] = result
+        write_results_atomic(RESULTS_PATH, list(self.all_results.values()))
+        _print_line(result)
+        # "too_few_records" is a genuine, non-failing outcome (see
+        # CaseResult.status) -- only "error" counts against the exit code.
+        if result.status == "error":
+            self.failed = True
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", default=None, help="Run only this dataset (by name)")
-    args = parser.parse_args()
+    """Plan, run (or reuse), and report the validation matrix; exit 1 if anything failed."""
+    args = _parse_args()
+
+    if args.dataset and dataset_by_name(args.dataset) is None:
+        print(f"Unknown dataset: {args.dataset}", file=sys.stderr)
+        sys.exit(1)
+    if args.combo and combo_by_name(args.combo) is None:
+        print(f"Unknown combo: {args.combo}", file=sys.stderr)
+        sys.exit(1)
 
     RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     WORKDIR_BASE.mkdir(parents=True, exist_ok=True)
 
-    # Load existing results for resumability
-    if RESULTS_PATH.exists():
-        with RESULTS_PATH.open() as f:
-            all_results: list[dict] = json.load(f)
+    code_rev = code_revision(REPO_ROOT)
+    deps = dependency_versions()
+
+    cases = build_cases(
+        DATASETS,
+        COMBOS,
+        _PCA_SETTINGS[args.pca],
+        [args.seed],
+        dataset_filter=args.dataset,
+        combo_filter=args.combo,
+    )
+
+    def identity_for_case(case: CaseKey) -> object:
+        ds, cb = _lookup(case)
+        source_path = DATA_DIR / ds.file
+        workdir = (
+            WORKDIR_BASE / ds.name / ("pca_on" if case.pca else "pca_off") / cb.name / f"seed{case.seed}"
+        )
+        cfg = build_config(ds, case.pca, cb, case.seed, source_path, workdir)
+        return build_identity(source_path, cfg, case.seed, code_rev, deps)
+
+    existing = {r.key(): r for r in read_results_file(RESULTS_PATH)}
+    to_run, reused = plan_run(cases, existing, identity_for_case)
+
+    print(f"Validation matrix: {len(cases)} case(s) ({len(reused)} reused, {len(to_run)} to run)")
+    print(f"Code revision: {code_rev}")
+
+    handle = _ResultHandler({**existing, **{r.key(): r for r in reused}})
+
+    t_start = time.time()
+    if args.workers <= 1:
+        _run_sequential(to_run, code_rev, deps, args.fail_fast, handle)
     else:
-        all_results = []
+        _run_parallel(to_run, code_rev, deps, args.workers, args.fail_fast, handle)
+    elapsed = time.time() - t_start
+    print(
+        f"\nMain matrix: {len(to_run)} run, {len(reused)} reused in {elapsed:.1f}s. Results: {RESULTS_PATH}"
+    )
 
-    done_keys = {(r["dataset"], r["pca"], r["combo"]) for r in all_results}
+    explain_failed = False
+    if not args.skip_explain_check:
+        explain_failed = _run_explain_matrix(args.dataset, args.seed)
 
-    datasets = [d for d in DATASETS if args.dataset is None or d.name == args.dataset]
-    if args.dataset and not datasets:
-        print(f"Unknown dataset: {args.dataset}", file=sys.stderr)
+    if handle.failed or explain_failed:
+        print("\nOne or more required cases failed.")
         sys.exit(1)
-
-    total_runs = len(datasets) * 2 * len(COMBOS)
-    completed = 0
-    print(f"Starting validation: {len(datasets)} datasets × 2 PCA settings × {len(COMBOS)} combos = {total_runs} runs")
-    print(f"Already done: {len(done_keys)} runs\n")
-
-    for dataset in datasets:
-        print(f"\n{'='*65}")
-        print(f"  {dataset.name}  ({dataset.rows:,} rows × {dataset.cols} cols)")
-        print(f"{'='*65}")
-
-        for pca in [False, True]:
-            pca_label = "PCA=on " if pca else "PCA=off"
-            print(f"\n  [{pca_label}]")
-
-            workdir = WORKDIR_BASE / dataset.name / ("pca_on" if pca else "pca_off")
-            workdir.mkdir(parents=True, exist_ok=True)
-
-            # Determine nu: tune if baseline not yet done, else read from results
-            baseline_key = (dataset.name, pca, "baseline")
-            if baseline_key in done_keys:
-                existing = next(r for r in all_results
-                                if r["dataset"] == dataset.name
-                                and r["pca"] == pca
-                                and r["combo"] == "baseline")
-                nu = existing["nu"]
-                print(f"    [tuning nu] reusing nu={nu} from previous baseline run")
-            else:
-                nu = tune_nu(dataset, pca, workdir)
-
-            for combo_name, detector_names in COMBOS:
-                key = (dataset.name, pca, combo_name)
-                if key in done_keys:
-                    completed += 1
-                    continue
-
-                print(f"    [{combo_name:25s}] ", end="", flush=True)
-                rec = run_one(dataset, pca, nu, combo_name, detector_names, workdir)
-                all_results.append(rec)
-                done_keys.add(key)
-                completed += 1
-
-                # Persist after every run
-                with RESULTS_PATH.open("w") as f:
-                    json.dump(all_results, f, indent=2)
-
-                if rec["status"] == "success":
-                    print(f"{rec['n_anomalies']:>5} / {rec['n_total']:>7} ({rec['rate']:>6.2%})  {rec['elapsed_seconds']:>6.1f}s")
-                else:
-                    print(f"ERROR: {rec.get('error', 'unknown')[:80]}")
-
-    print(f"\n{'='*65}")
-    print(f"Validation complete. {completed} runs. Results: {RESULTS_PATH}")
 
 
 if __name__ == "__main__":
