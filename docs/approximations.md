@@ -11,6 +11,25 @@ coefficients stabilise quickly with sample size; at 200,000 rows the standard er
 the estimate is ~0.002, which is negligible relative to the 0.95 threshold used for
 column dropping. The subsample is drawn with a fixed seed for reproducibility.
 
+## Correlation pruning — can hide relational anomalies
+
+`features/correlate.py::drop_correlated` groups columns into connected components
+wherever |Pearson r| exceeds `features.correlation_threshold` (default 0.95, computed
+on the sampled matrix above) and keeps only the first member of each component,
+dropping the rest entirely — not just down-weighting them. This assumes redundant
+columns carry no information beyond what the survivor already captures, which holds
+for the *typical* row. It does not hold for a row where the correlation itself breaks:
+two sensors that normally track together (temperature and pressure on the same
+system, a metric and its trailing average) and decouple specifically on an anomalous
+record are a classic case where the *relationship*, not either value alone, is the
+anomaly signal. Once one of the pair is dropped, that decoupling is invisible to every
+detector — the surviving column's value in isolation may look unremarkable. This is a
+structural blind spot of correlation-based reduction, not a bug: raise
+`correlation_threshold` (bounded to `[0.0, 1.0]`; the comparison is `|r| >= threshold`,
+so `1.0` only ever catches a literal duplicate/linearly-dependent column and is the
+practical way to disable pruning) if your data's anomalies are expected to show up as
+broken relationships between otherwise-correlated columns.
+
 ## Silhouette score for KMeans `k` selection — sampled
 
 The silhouette score is near-quadratic in the number of rows. When evaluating candidate
@@ -18,6 +37,26 @@ The silhouette score is near-quadratic in the number of rows. When evaluating ca
 is seeded and deterministic. The elbow criterion (computed on the full training data) is
 the primary selection criterion; silhouette breaks ties. No accuracy guarantee is made for
 the selected `k` when the true cluster structure requires >20,000 rows to distinguish.
+
+## PCA — retained variance is not the same as retained anomaly signal
+
+`features/reduce.py::fit_pca` (used only when `features.pca = true`, off by default)
+selects components by cumulative *explained variance* and warns
+(`LowVarianceWarning`) when that cumulative figure falls below
+`pca_min_explained_variance` — but explained variance is a property of the *normal*
+bulk of the data, and PCA is not told anything about which rows are anomalous. A
+component can be dropped for explaining very little of the dataset's overall variance
+while still being exactly the direction a specific anomaly deviates along — a rare
+event is, by definition, rare, so it rarely contributes much to a variance ranking
+computed across the whole sample. This means a run can clear the
+`pca_min_explained_variance` threshold (say, 95%) with no warning at all, and still
+have silently discarded the one dimension that would have flagged a particular
+anomalous record. This is a known, general limitation of variance-based dimensionality
+reduction for outlier detection, not specific to this implementation; if PCA is enabled,
+treat `pca_min_explained_variance` as a floor on how much of the *typical* data is
+preserved, not a guarantee about anomaly sensitivity. Leaving `features.pca = false`
+(the default) avoids this risk entirely, at the cost of not compressing wide feature
+spaces.
 
 ## TreeSHAP for Isolation Forest — additivity unverified, and not of the final score
 
@@ -61,6 +100,45 @@ not attributed) rather than defaulting to gradient — silently guessing at a
 score's smoothness is exactly the failure mode this restriction exists to
 prevent.
 
+## Contaminated fitting — no clean reference set
+
+Every detector's `.fit()` call (`_pipeline.py`, the per-group fitting loop) is given
+the group's own feature matrix — the same data (or a subsample of it, see below) that
+is then scored for anomalies. There is no held-out "known normal" reference set: this
+is what makes the workflow unsupervised, but it also means each detector's notion of
+"normal" is itself shaped by whatever anomalies happen to be present in that data.
+Robust scaling (`features/scale.py`) is deliberately designed to resist this — median
+and IQR barely move when a small fraction of rows are extreme — but the *detectors*
+themselves have no equivalent protection built in here: IsolationForest, KMeans, and
+OneClassSVM all fit their notion of the data's shape on the contaminated input as
+supplied. In practice this is self-limiting for a low anomaly fraction (the reason
+outlier detection works at all), but it degrades gracefully rather than being
+guaranteed robust — a large enough or sufficiently clustered contaminated subset can
+shift a detector's boundary enough to under-flag exactly the anomalies it is meant to
+catch. This is a structural property of unsupervised anomaly detection in general, not
+a defect specific to `sorethumb`.
+
+## Capped detectors train on a subsample, score the full group
+
+`_pipeline.py`'s per-group fitting loop (`train_row_cap` / `default_train_row_cap`,
+e.g. 25,000 rows for OneClassSVM, 50,000 for LOF) draws a seeded random subsample of
+at most the cap and fits *only* on that subsample when the group exceeds it — but
+`score_samples` is always called against the *full* group afterwards. This keeps
+runtime bounded for detectors whose training cost grows faster than linearly, and the
+random sample is representative of the bulk distribution by construction — but two
+consequences follow directly from training and scoring on different row sets: (1) a
+rare anomalous pattern that exists in the full group may be entirely absent from the
+capped training sample purely by chance, so the fitted model never "saw" that
+region of feature space when it formed its boundary; (2) for data with meaningful
+temporal or other structure (not i.i.d. across rows), a uniform random subsample may
+not represent the tail of that structure as well as the full data would. Every row is
+still scored — this does not silently drop rows from results — but a detector's
+sensitivity to a specific rare pattern is not guaranteed to be as strong as if it had
+been fit on the complete group. Raising the relevant detector's `train_row_cap` in
+config (or setting it above the group's row count) removes the asymmetry entirely, at
+the runtime cost the cap exists to bound in the first place — see the
+[Scale guide](../README.md#scale-guide).
+
 ## KernelSHAP — Monte Carlo approximation
 
 When `explain.kernel_shap = true`, attributions for OneClassSVM/LOF are computed via
@@ -70,6 +148,27 @@ sampling of the feature space to estimate Shapley values. The result is labelled
 `heuristic`, not `model_specific` — it never touches the detector's internal structure,
 unlike TreeSHAP. Accuracy increases with `nsamples` but so does runtime. The default
 `nsamples` is documented in `explain/`.
+
+## Zero-inflated columns — robust scaling can leave them effectively unscaled
+
+`features/scale.py::fit_scaler`'s robust mode (the default) centres on the median and
+scales by the IQR (`q75 - q25`). For a zero-inflated column — a large majority of rows
+at exactly 0, with a real, information-carrying minority of nonzero values (fees,
+error counts, discount amounts, and similar "mostly absent" measures are typical) — a
+sufficiently zero-heavy column has median = q25 = q75 = 0, so the IQR is exactly zero.
+`_spread_or_unit` (the degenerate-column guard, `scale.py`'s `_ZERO_SPREAD` threshold)
+then sets `scale = 1.0` rather than dividing by zero — correct for a genuinely constant
+column, but for a zero-inflated one this leaves its real, information-carrying nonzero
+values effectively unscaled (divided by `1.0`) while every other column has been scaled
+to a comparable range. For distance-based detectors (KMeans, OneClassSVM), a column
+left at its raw natural magnitude this way can dominate — or, if its nonzero values are
+small in absolute terms, be drowned out by — the Euclidean/RBF distance calculation
+regardless of how informative it actually is. Standard-mode scaling (`features.scaler =
+"standard"`) has the same failure shape (trimmed mean/std over the central 98%, which
+is also 0/near-0 for a sufficiently zero-heavy column). There is no automatic
+zero-inflation-aware scaling mode; if a known zero-inflated column matters for anomaly
+detection, consider deriving an explicit "is nonzero" indicator column alongside it
+upstream, before feeding data in.
 
 ## Feature matrix dtype — float32 default
 
@@ -135,9 +234,9 @@ measured to be far more robust on these same two scenarios (ROC-AUC ~0.85) —
 it takes the *best*-performing detector's opinion per row instead of the
 worst's. This is real, measured behaviour of the shipped default on a
 plausible data regime, not a synthetic-data artifact tuned to fail; it is
-surfaced here rather than silently worked around, matching the project's
-practice of documenting known limitations (see `lof`'s clustered-anomaly
-weakness above) instead of asserting something known to be false.
+surfaced here rather than silently worked around, matching the rest of this
+file's practice of documenting known limitations instead of asserting
+something known to be false.
 
 ## Full-pipeline scenario benchmark — `contextual` anomalies are near-chance for every combination mode
 

@@ -29,8 +29,10 @@ Examples of unacceptable behavior:
 
 Community leaders are responsible for clarifying and enforcing our standards.
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project maintainers. All complaints will be reviewed and
-investigated promptly and fairly.
+reported to the project maintainers by emailing hello@t4-digital.uk with the
+subject line "sorethumb code of conduct". All complaints will be reviewed and
+investigated promptly and fairly, and reporter identity will be kept
+confidential.
 
 ## Attribution
 

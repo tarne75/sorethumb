@@ -53,6 +53,18 @@ line/headers as normal, and any *unrecognised* query parameter is not
 redacted — prefer `source.auth`/`source.auth_env_var` over embedding
 credentials in the URI itself.
 
+## Supported Versions
+
+`sorethumb` is pre-1.0 (currently `0.x`, alpha) and has not yet had its first
+tagged release. Only the latest released version on PyPI is supported;
+security fixes are not backported to older `0.x` releases. Once the project
+reaches 1.0, this section will be updated with an explicit support window.
+
+| Version | Supported |
+| ------- | --------- |
+| Latest `0.x` release | :white_check_mark: |
+| Older `0.x` releases | :x: |
+
 ## Reporting a Vulnerability
 
 Please do not report security vulnerabilities through public GitHub issues.

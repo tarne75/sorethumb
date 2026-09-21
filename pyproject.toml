@@ -7,7 +7,8 @@ name = "sorethumb"
 version = "0.1.0"
 description = "Unsupervised anomaly detection for tabular data"
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 authors = [{ name = "Tarne Westcott", email = "tarne.westcott@gmail.com" }]
 keywords = [
@@ -26,7 +27,6 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",

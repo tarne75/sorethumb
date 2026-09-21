@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/banner.svg" alt="sorethumb — unsupervised anomaly detection for tabular data" width="860"/>
+  <img src="https://raw.githubusercontent.com/tarne75/sorethumb/main/docs/banner.svg" alt="sorethumb — unsupervised anomaly detection for tabular data" width="860"/>
 </div>
 
 <div align="center">
@@ -9,7 +9,7 @@
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue?color=123A66)](https://github.com/tarne75/sorethumb)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?color=2F80ED)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?color=2F80ED)](https://github.com/tarne75/sorethumb/blob/main/LICENSE)
 
 </div>
 
@@ -219,7 +219,7 @@ Run abc12345  succeeded=1  skipped=0  failed=0
   Realised detector flag rates (own natural boundary):
     isolation_forest=1.83%, kmeans_distance=0.74%, one_class_svm=2.10%
 
-  Report: ./runs/abc12345/report.html
+  Report: ./reports/abc12345/index.html
 ```
 
 The three per-detector rates are heuristic boundaries, not measurements, and
@@ -254,7 +254,7 @@ means TreeSHAP (Isolation Forest) — it uses the fitted trees' actual
 structure, but (`check_additivity=False`) isn't a verified exact
 decomposition of the score; `kind=heuristic` means centroid distance
 (KMeans) or finite-difference gradient (One-Class SVM, LOF). See
-[docs/explanations.md](docs/explanations.md).
+[docs/explanations.md](https://github.com/tarne75/sorethumb/blob/main/docs/explanations.md).
 
 For a machine-readable result pipe `--json`:
 
@@ -409,7 +409,7 @@ train_row_cap = 50_000
 ```
 
 **Register a third-party detector** without modifying sorethumb — implement the
-[Detector protocol](src/sorethumb/detectors/_protocol.py) and add an entry point
+[Detector protocol](https://github.com/tarne75/sorethumb/blob/main/src/sorethumb/detectors/_protocol.py) and add an entry point
 to your package's `pyproject.toml`:
 
 ```toml
@@ -447,6 +447,13 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
   median of three heuristic per-detector cut-offs that themselves disagree —
   see the realised rates in the run output). It says nothing about how many
   genuine anomalies the data holds; only labelled data can tell you that.
+- Detectors fit on the same (unlabelled) data they then score — there is no
+  held-out "known normal" reference set, since that is what makes this
+  unsupervised in the first place. A detector whose row cap is smaller than
+  the group (e.g. `one_class_svm`'s default 25,000) fits on a random
+  subsample but still scores every row, so a rare pattern absent from that
+  subsample by chance may never shape the fitted boundary. See
+  [docs/approximations.md](https://github.com/tarne75/sorethumb/blob/main/docs/approximations.md).
 - ECOD and HBOS are the only detectors with a truly exact attribution — their
   score is already an additive sum of per-feature terms, so decomposing it is
   zero-error by construction. Isolation Forest yields model-specific
@@ -455,7 +462,24 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
   One-Class SVM/LOF are heuristic (centroid distance or finite-difference
   gradient, the latter restricted to the two detectors whose score responds
   continuously to a small perturbation). See
-  [docs/explanations.md](docs/explanations.md).
+  [docs/explanations.md](https://github.com/tarne75/sorethumb/blob/main/docs/explanations.md).
+- Feature reduction can discard exactly the signal that matters. Correlation
+  pruning (`features.correlation_threshold`, default 0.95) drops one column
+  from each highly-correlated pair entirely — invisible to every detector if
+  the anomaly is specifically a *broken* relationship between that pair.
+  PCA (opt-in, off by default) selects components by variance explained
+  across the whole dataset, which is a property of the normal bulk, not of
+  where a specific anomaly deviates — a run can clear
+  `pca_min_explained_variance` with no warning and still have discarded the
+  one dimension that would have flagged a particular row. See
+  [docs/approximations.md](https://github.com/tarne75/sorethumb/blob/main/docs/approximations.md).
+- Robust scaling (the default) can leave a zero-inflated column — mostly
+  zeros, with a real signal in the nonzero minority — effectively unscaled:
+  its median and IQR are both 0, so the degenerate-column guard sets its
+  scale to 1.0 instead of dividing by zero, leaving its raw magnitude to
+  dominate or be drowned out in distance-based detectors regardless of how
+  informative it actually is. See
+  [docs/approximations.md](https://github.com/tarne75/sorethumb/blob/main/docs/approximations.md).
 - Self-calibration maps every run's scores to roughly uniform on [0, 1] by
   construction, so two independently-fitted runs — including the per-period runs
   `sorethumb backfill` produces — are not on a common scale. A `sorethumb history`
@@ -473,23 +497,23 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
   since a deliberately crafted malicious file carries its own matching
   digest. Only load a workspace you created yourself or that came from a
   source you fully trust; never point these at a workspace received from
-  someone else without inspecting it first. See [SECURITY.md](SECURITY.md).
+  someone else without inspecting it first. See [SECURITY.md](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md).
 - Fetching `source.uri` over http(s) is hardened against the obvious cases
   (a redirect pivoting to a cloud metadata endpoint or another internal
   host, an unbounded response), not a general-purpose sandbox for an
-  untrusted remote server — see [SECURITY.md](SECURITY.md).
+  untrusted remote server — see [SECURITY.md](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md).
 
 ---
 
 ## Documentation
 
-- [Documentation index](docs/index.md)
-- [CLI reference](docs/cli_reference.md)
-- [Configuration reference](docs/configuration.md)
-- [Configuration examples](docs/configuration-examples.md)
-- [Detector models](docs/models.md)
-- [Example runs](docs/example-runs.md)
-- [Adapting to your data](docs/adapting-to-your-data.md)
-- [Explanations: model-specific vs heuristic](docs/explanations.md)
-- [Approximations and error characteristics](docs/approximations.md)
-- [Contributing](CONTRIBUTING.md)
+- [Documentation index](https://github.com/tarne75/sorethumb/blob/main/docs/index.md)
+- [CLI reference](https://github.com/tarne75/sorethumb/blob/main/docs/cli_reference.md)
+- [Configuration reference](https://github.com/tarne75/sorethumb/blob/main/docs/configuration.md)
+- [Configuration examples](https://github.com/tarne75/sorethumb/blob/main/docs/configuration-examples.md)
+- [Detector models](https://github.com/tarne75/sorethumb/blob/main/docs/models.md)
+- [Example runs](https://github.com/tarne75/sorethumb/blob/main/docs/example-runs.md)
+- [Adapting to your data](https://github.com/tarne75/sorethumb/blob/main/docs/adapting-to-your-data.md)
+- [Explanations: model-specific vs heuristic](https://github.com/tarne75/sorethumb/blob/main/docs/explanations.md)
+- [Approximations and error characteristics](https://github.com/tarne75/sorethumb/blob/main/docs/approximations.md)
+- [Contributing](https://github.com/tarne75/sorethumb/blob/main/CONTRIBUTING.md)

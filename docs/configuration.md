@@ -78,7 +78,7 @@ so trivial changes do not invalidate cached artefacts.
 | `features.time_derivatives` | list[str] | ['hour', 'dayofweek', 'day', 'month'] | Temporal derivatives to extract from the chosen time column. Supported: hour, dayofweek, day, month, year, quarter. |
 | `features.scaler` | "standard" \| "robust" | "robust" | 'robust' uses median+IQR (less sensitive to extreme outliers). 'standard' uses mean+std (required if downstream models assume z-scores). |
 | `features.dtype` | "float32" \| "float64" | "float32" | Output dtype of the feature matrix. float32 halves memory vs float64. |
-| `features.correlation_reduction` | bool | true | Drop one column from each pair with Pearson \|r\| > correlation_threshold. Reduces redundancy for distance-based detectors. |
+| `features.correlation_reduction` | bool | true | Drop one column from each pair with Pearson \|r\| >= correlation_threshold. Reduces redundancy for distance-based detectors. |
 | `features.correlation_threshold` | float | 0.95 | Correlation magnitude above which one of the pair is dropped. |
 | `features.pca` | bool | false | Compress features with PCA after scaling. Useful when the feature matrix is very wide; adds latency and reduces explainability. |
 | `features.pca_max_components` | int | 50 | Maximum number of PCA components to retain. |

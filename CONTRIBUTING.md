@@ -17,11 +17,15 @@ uv sync --all-extras --frozen
 # 4. Install pre-commit hooks
 uv run pre-commit install
 
-# 5. Verify everything passes
+# 5. Verify everything passes (mirrors CI's required PR lanes)
 uv run ruff check src/ tests/
 uv run ruff format --check src/ tests/
 uv run mypy src/
-uv run pytest -m "not integration and not benchmark"
+uv run python docs/generate_config_docs.py --check
+uv run pytest -m "unit or contract"
+uv run pytest -m integration
+uv run pytest -m property
+uv run pytest -m repo_check
 ```
 
 If you changed `pyproject.toml`'s dependencies, run `uv lock` to update
@@ -46,15 +50,32 @@ without SHAP explanations can skip straight to core: `pip install sorethumb`.
 
 ## Running specific test groups
 
+Every test carries exactly one marker (see `[tool.pytest.ini_options]` in
+`pyproject.toml`); bare `uv run pytest` runs only `unit`/`contract` by
+default (its `addopts` excludes the rest). These mirror CI's own job-by-job
+`-m` selection (`.github/workflows/ci.yml`) — nothing here should drift from
+what a job actually runs.
+
 ```bash
-# Default (unit + property tests only, no network)
+# Default: unit + contract only — fast, deterministic, no filesystem/
+# network/subprocess/model-serialisation I/O. Matches CI's fast-tests job.
 uv run pytest
 
-# Include integration tests (may hit the network)
+# Integration: real workspace, SQLite, CLI process, full pipeline, report
+# rendering. May touch the local filesystem and subprocesses, not the network.
 uv run pytest -m integration
 
-# Benchmark suite (opt-in, measures accuracy on real datasets)
+# Hypothesis-driven property tests.
+uv run pytest -m property
+
+# Repository/docs consistency checks (generated docs, README snippets).
+uv run pytest -m repo_check
+
+# Benchmark suite (opt-in, measures accuracy on real or synthetic datasets).
 uv run pytest -m benchmark
+
+# Every required-PR-lane test in one invocation (matches CI's coverage job).
+uv run pytest -m "unit or contract or integration or property or repo_check"
 
 # With coverage
 uv run pytest --cov=sorethumb --cov-report=term-missing

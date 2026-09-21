@@ -258,7 +258,7 @@ class FeaturesConfig(BaseModel):
     correlation_reduction: bool = Field(
         True,
         description=(
-            "Drop one column from each pair with Pearson |r| > correlation_threshold. "
+            "Drop one column from each pair with Pearson |r| >= correlation_threshold. "
             "Reduces redundancy for distance-based detectors."
         ),
     )

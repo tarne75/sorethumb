@@ -173,7 +173,7 @@
         },
         "correlation_reduction": {
           "default": true,
-          "description": "Drop one column from each pair with Pearson |r| > correlation_threshold. Reduces redundancy for distance-based detectors.",
+          "description": "Drop one column from each pair with Pearson |r| >= correlation_threshold. Reduces redundancy for distance-based detectors.",
           "title": "Correlation Reduction",
           "type": "boolean"
         },
