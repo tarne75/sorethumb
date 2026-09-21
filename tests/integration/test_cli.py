@@ -124,6 +124,62 @@ def test_run_creates_results_parquet(workspace):
     assert len(parquets) >= 1
 
 
+def test_run_zero_config_creates_single_workspace_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """P3-5: with no sorethumb.toml, `sorethumb run <file>` must create every
+    artefact (db, models, results, reports, logs) under one dedicated
+    `./sorethumb-workspace/` directory in the invocation directory -- never
+    scattered beside the source data (which may live somewhere else
+    entirely) and never loose files dropped directly in the invocation
+    directory itself.
+    """
+    data_dir = tmp_path / "data-elsewhere"
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    csv_path = _write_csv(data_dir / "data.csv", n_rows=300)
+
+    monkeypatch.chdir(project_dir)
+    result = runner.invoke(app, ["run", str(csv_path), "--no-report"], input="n\n")
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+
+    ws_dir = project_dir / "sorethumb-workspace"
+    assert ws_dir.is_dir()
+    assert (ws_dir / "sorethumb.db").is_file()
+    assert (ws_dir / "models").is_dir()
+    assert (ws_dir / "results").is_dir()
+    assert any((ws_dir / "results").rglob("anomalies.parquet"))
+
+    # Nothing else was created directly in the invocation directory...
+    assert {p.name for p in project_dir.iterdir()} == {"sorethumb-workspace"}
+    # ...and nothing was scattered beside the source data either.
+    assert {p.name for p in data_dir.iterdir()} == {"data.csv"}
+
+
+def test_run_zero_config_refuses_when_legacy_dot_workspace_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """P3-5: a sorethumb.db directly at '.' is a workspace created under the
+    pre-P3-5 default (workdir="."). Silently falling through to the new
+    './sorethumb-workspace/' default would just stop seeing its runs, with
+    no error -- refuse instead, non-destructively, until the caller chooses
+    explicitly (either --workdir . to keep using it, or migrate it)."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "sorethumb.db").touch()
+    csv_path = _write_csv(tmp_path / "data.csv", n_rows=300)
+
+    monkeypatch.chdir(project_dir)
+    result = runner.invoke(app, ["run", str(csv_path), "--no-report"])
+    output = result.stdout + (result.stderr or "")
+
+    assert result.exit_code == 2
+    assert "sorethumb-workspace" in output
+    assert not (project_dir / "sorethumb-workspace").exists()
+
+    # An explicit --workdir . goes right ahead against the legacy workspace.
+    result2 = runner.invoke(app, ["run", str(csv_path), "--no-report", "--workdir", "."], input="n\n")
+    assert result2.exit_code == 0, result2.stdout + (result2.stderr or "")
+
+
 def test_run_idempotent_second_run_skips_groups(workspace):
     _, toml_path, workdir = workspace
     runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])

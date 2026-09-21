@@ -136,7 +136,9 @@ print(f"Flagged {result.n_anomalies} rows for review across {result.n_succeeded}
 ### Zero-config: point at a file and go
 
 No config file needed. Pass the data file directly and sorethumb runs with
-sensible defaults, writing artefacts to the current directory:
+sensible defaults, writing every artefact under one dedicated
+`./sorethumb-workspace/` directory rather than beside your data or scattered
+loose in the current directory:
 
 ```bash
 cd /path/to/my-analysis
@@ -156,14 +158,17 @@ sorethumb init /path/to/my-analysis
 cd /path/to/my-analysis
 ```
 
-`init` writes a fully-commented `sorethumb.toml`. Open it and set the one required field:
+`init` writes a fully-commented `sorethumb.toml` and creates a
+`sorethumb-workspace/` directory next to it. Open the file and set the one
+field it leaves for you — `workdir` is already filled in, pointing at the
+workspace `init` just created:
 
 ```toml
 [source]
 uri = "/absolute/path/to/your/data.csv"    # also accepts .parquet, .json, and http(s):// URLs
 
 [run]
-workdir = "."   # where models, results and the SQLite ledger are stored
+workdir = "/path/to/my-analysis/sorethumb-workspace"   # where models, results and the SQLite ledger are stored
 ```
 
 **2. Check how your columns will be treated (no models trained)**

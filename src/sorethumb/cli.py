@@ -100,6 +100,15 @@ _JSON_OPT = Annotated[
     typer.Option("--json", help="Machine-readable JSON output on stdout."),
 ]
 
+# Zero-config default workspace root (P3-5): used only when neither --workdir
+# nor a config file's run.workdir is given. A dedicated directory, not ".",
+# so a first run never scatters sorethumb.db/models/results/reports/logs
+# beside the source data or other files already in the current directory.
+_DEFAULT_WORKDIR = "sorethumb-workspace"
+# The marker file Workspace.init creates (store/workspace.py's _MARKER_DB) --
+# duplicated here, not imported, since it is that module's private constant.
+_WORKSPACE_MARKER_FILENAME = "sorethumb.db"
+
 
 # ---------------------------------------------------------------------------
 # Version callback
@@ -179,6 +188,34 @@ def _parse_detectors_flag(value: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def _guard_legacy_dot_workspace() -> None:
+    """Refuse to silently switch a pre-existing "." workspace to the new default.
+
+    Before P3-5, the zero-config default workdir was ".". A directory that
+    already has a `sorethumb.db` marker at "." is a workspace created under
+    that old default; falling through to the new `_DEFAULT_WORKDIR` here
+    would not touch or delete anything (non-destructive by construction --
+    this function only ever reads), but it would silently make `sorethumb
+    history`/`runs`/etc. stop seeing that workspace's existing runs, which is
+    exactly the kind of surprise an explicit choice is supposed to prevent.
+    Only fires when neither --workdir nor config's run.workdir was given --
+    an explicit choice, in either direction, always wins outright.
+    """
+    if Path(_WORKSPACE_MARKER_FILENAME).exists():
+        err_console.print(
+            f"[red]Found an existing workspace at '.' ({_WORKSPACE_MARKER_FILENAME}), but "
+            f"no workdir is configured.[/red]\n"
+            f"sorethumb's zero-config default workspace changed from '.' to "
+            f"'./{_DEFAULT_WORKDIR}/' — continuing would look for runs in the new "
+            f"location and never see this one. Choose explicitly:\n"
+            f"  - Keep using this workspace: pass [bold]--workdir .[/bold] "
+            f'(or set [bold]run.workdir = "."[/bold] in sorethumb.toml).\n'
+            f"  - Migrate to the new default: move its contents into "
+            f"[bold]./{_DEFAULT_WORKDIR}/[/bold] yourself, then re-run without --workdir."
+        )
+        raise typer.Exit(2)
+
+
 def _load_config(
     config_path: Path | None,
     workdir: Path | None = None,
@@ -194,7 +231,10 @@ def _load_config(
     shows eight problems, not just the first one.
 
     When *uri_override* is provided and no config file exists, an empty raw dict
-    is used so the caller can proceed with defaults (workdir defaults to ".").
+    is used so the caller can proceed with defaults (workdir defaults to
+    ``_DEFAULT_WORKDIR``, "./sorethumb-workspace/"). If a legacy workspace
+    marker is found at "." in that case, refuses instead of silently
+    resolving against the new default — see ``_guard_legacy_dot_workspace``.
     When *detectors_override* is provided it replaces the detectors list entirely.
 
     *strict* and *log_level* are ``None`` when the caller's CLI flag was not
@@ -236,7 +276,8 @@ def _load_config(
     if workdir is not None:
         run_section["workdir"] = str(workdir)
     elif "workdir" not in run_section:
-        run_section["workdir"] = "."
+        _guard_legacy_dot_workspace()
+        run_section["workdir"] = _DEFAULT_WORKDIR
     if seed is not None:
         run_section["seed"] = seed
     # An explicitly-passed flag overrides TOML outright; not passing one
@@ -548,10 +589,18 @@ def init(
         raise typer.Exit(0)
 
     path.mkdir(parents=True, exist_ok=True)
-    toml_path.write_text(_generate_starter_toml(), encoding="utf-8")
+    ws_dir = path / _DEFAULT_WORKDIR
+    # Fill in the one field _generate_starter_toml() leaves as "required — no
+    # default" that init already has a real answer for, so the written file
+    # matches the workspace just created below rather than needing a manual
+    # edit before it can be used.
+    content = _generate_starter_toml().replace(
+        "# workdir =  # required — no default",
+        f'workdir = "{ws_dir}"',
+    )
+    toml_path.write_text(content, encoding="utf-8")
 
     try:
-        ws_dir = path / ".sorethumb_workspace"
         Workspace.init(ws_dir)
         console.print(f"[green]Workspace created:[/green] {ws_dir}")
     except Exception as exc:  # noqa: BLE001
@@ -629,8 +678,8 @@ def run(
         typer.Argument(
             help=(
                 "Path to a data file. When supplied, overrides source.uri in the config. "
-                "If no sorethumb.toml exists, all settings default and workdir defaults to '.' — "
-                "you will be prompted to save a config file."
+                "If no sorethumb.toml exists, all settings default and workdir defaults to "
+                "'./sorethumb-workspace/' — you will be prompted to save a config file."
             )
         ),
     ] = None,

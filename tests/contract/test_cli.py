@@ -125,6 +125,21 @@ def test_init_toml_is_valid_toml(tmp_path: Path):
     assert "run" in raw
 
 
+def test_init_workdir_matches_the_workspace_it_creates(tmp_path: Path):
+    """P3-5: init pre-creates a workspace directory (sorethumb-workspace/,
+    not the pre-P3-5 hidden .sorethumb_workspace/) -- the starter toml's
+    run.workdir must actually point at it, not be left as the generic
+    "required — no default" placeholder every other required field gets."""
+    result = runner.invoke(app, ["init", str(tmp_path)])
+    assert result.exit_code == 0
+
+    with (tmp_path / "sorethumb.toml").open("rb") as fh:
+        raw = tomllib.load(fh)
+    workdir = raw["run"]["workdir"]
+    assert workdir == str(tmp_path / "sorethumb-workspace")
+    assert (Path(workdir) / "sorethumb.db").is_file()
+
+
 def test_init_does_not_overwrite_existing(tmp_path: Path):
     runner.invoke(app, ["init", str(tmp_path)])
     original = (tmp_path / "sorethumb.toml").read_text(encoding="utf-8")

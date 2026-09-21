@@ -14,11 +14,21 @@ coverage.xml
 htmlcov/
 *.log
 *.joblib
-sorethumb-workspace/
+# Default sorethumb workspace (P3-5) and its artefacts. Anchored: a
+# workspace explicitly created at "." (the pre-P3-5 default, or via
+# `--workdir .`) produces these same top-level names, and unanchored
+# patterns would also match same-named directories anywhere else in the tree.
+/sorethumb-workspace/
+/sorethumb.db
+/models/
+/results/
+/reports/
+/logs/
+/cache/
 .sorethumb_benchmark_cache/
 benchmark_results/
 /validation/
-tmp/
+/tmp/
 .idea/
 *.iml
 prompts/

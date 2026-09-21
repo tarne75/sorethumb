@@ -56,7 +56,9 @@ All commands write logs to both the console and a rotating file:
 
 The file handler is created as soon as the config is loaded. When running
 without a config file (`sorethumb run <data_file>`), the log is written to
-`./logs/sorethumb.log` since workdir defaults to the current directory.
+`./sorethumb-workspace/logs/sorethumb.log`, since workdir defaults to a
+dedicated `./sorethumb-workspace/` directory rather than the current
+directory itself.
 
 ---
 
@@ -116,7 +118,7 @@ Run full anomaly detection: load data, build features, train detectors, score,
 explain (SHAP), and write a report.
 
 ```bash
-# Zero-config — runs with all defaults, workdir = current directory
+# Zero-config — runs with all defaults, workdir = ./sorethumb-workspace/
 sorethumb run /path/to/data.parquet
 
 # Config-based
@@ -142,7 +144,7 @@ Groups that are already marked complete in the ledger are skipped unless
 
 | Argument | Description |
 |----------|-------------|
-| `data_file` | Optional path to a data file. Overrides `source.uri` in the config. When no `sorethumb.toml` exists, all settings default and workdir defaults to `.`; you are prompted to save a config for future runs. |
+| `data_file` | Optional path to a data file. Overrides `source.uri` in the config. When no `sorethumb.toml` exists, all settings default and workdir defaults to `./sorethumb-workspace/`; you are prompted to save a config for future runs. |
 
 **Options:**
 

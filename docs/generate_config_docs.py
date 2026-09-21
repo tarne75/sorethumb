@@ -182,7 +182,8 @@ def generate() -> str:
         "",
         "sorethumb is configured through a single TOML file (default: `sorethumb.toml`).",
         "A config file is optional — passing a data file directly to `sorethumb run`",
-        'uses all defaults with `workdir = "."` and prompts to save a config on first run:',
+        "uses all defaults with `workdir = \"sorethumb-workspace\"` and prompts to save a "
+        "config on first run:",
         "",
         "```bash",
         "sorethumb run /path/to/data.parquet",
