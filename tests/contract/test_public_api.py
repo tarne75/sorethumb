@@ -55,7 +55,6 @@ def test_all_sorethumb_warnings_are_user_warnings() -> None:
         LowVarianceWarning,
         ModelSchemaDriftWarning,
         NonFiniteWarning,
-        PopulationMismatchWarning,
         SampleTruncatedWarning,
         SlowStageWarning,
         SorethumbWarning,
@@ -69,7 +68,6 @@ def test_all_sorethumb_warnings_are_user_warnings() -> None:
         LowVarianceWarning,
         ModelSchemaDriftWarning,
         NonFiniteWarning,
-        PopulationMismatchWarning,
         SampleTruncatedWarning,
         SlowStageWarning,
     ):

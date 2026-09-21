@@ -148,6 +148,19 @@ def test_migration_006_adds_period_execution_table(tmp_path):
     } <= cols
 
 
+def test_execute_ddl_rejects_alter_table_identifier_starting_with_digit(tmp_path):
+    """P3-6: _execute_ddl's table/column names now route through
+    validate_identifier (store/identifiers.py) before being spliced into a
+    PRAGMA string. _ALTER_ADD_COLUMN_RE's own \\w+ groups already exclude
+    SQL syntax characters, but \\w+ still matches a leading digit, which
+    validate_identifier's stricter ^[A-Za-z_][A-Za-z0-9_]*$ does not --
+    exercising that extra check requires a statement bypassing the regex
+    only at the character-class boundary, not a full injection payload."""
+    store = Store(tmp_path / "test.db")
+    with pytest.raises(StoreError, match="Invalid SQL table name"):
+        store._execute_ddl("ALTER TABLE 1bad ADD COLUMN x TEXT")
+
+
 def test_a_migration_failing_partway_rolls_back_and_is_safely_replayable(tmp_path, monkeypatch):
     """A migration's DDL runs inside BEGIN IMMEDIATE (see _apply_one_migration),
     so a statement failing partway through must roll back its own DDL and

@@ -1,5 +1,5 @@
-"""Integration tests for sorethumb.history: ledger, totals, rolling windows
-against a real Workspace/SQLite store.
+"""Integration tests for sorethumb.history: ledger, period completion, rolling
+windows against a real Workspace/SQLite store.
 
 See tests/unit/history/test_periods.py for the pure period-label/window math
 (no store involved).
@@ -7,7 +7,6 @@ See tests/unit/history/test_periods.py for the pure period-label/window math
 
 from __future__ import annotations
 
-import warnings
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -18,17 +17,14 @@ import pytest
 from sorethumb import Config
 from sorethumb._pipeline import run_detection
 from sorethumb.config import DetectorConfig
-from sorethumb.errors import PopulationMismatchWarning
 from sorethumb.history.ledger import (
     clear_period,
     completed_groups,
     iter_pending_periods,
     last_complete_period,
-    periods_missing_groups,
     resolve_backfill_range,
 )
 from sorethumb.history.periods import step_back, step_forward
-from sorethumb.history.totals import compute_totals
 from sorethumb.history.windows import WindowResult, compute_rolling_windows
 from sorethumb.store.workspace import Workspace, make_group_key
 from tests.factories.configs import make_config
@@ -274,7 +270,7 @@ class TestResolveBackfillRange:
 
 
 # ---------------------------------------------------------------------------
-# ledger.py — iter_pending_periods / clear_period / periods_missing_groups
+# ledger.py — iter_pending_periods / clear_period
 # ---------------------------------------------------------------------------
 
 
@@ -324,74 +320,6 @@ class TestLedgerHelpers:
             clear_period(ws.store, self.DS, "2026-09-01", self.CFG)
             assert completed_groups(ws.store, self.DS, "2026-09-01", self.CFG) == []
             assert ws.store.period_is_complete(self.DS, "2026-09-01", self.CFG) is False
-
-    def test_periods_missing_groups_detects_re_widening(self, ws):
-        with ws:
-            ws.store.upsert_dataset(self.DS, "uri", "s", "c", 100, 5)
-            ws.store.insert_run("r1", self.DS, "{}", 0)
-            gk_a = make_group_key({"g": "A"})
-            gk_b = make_group_key({"g": "B"})
-            # Period 2026-09-01 completed with only gk_a (scope was narrow at that time)
-            ws.store.upsert_total(self.DS, gk_a, "2026-09-01", 5, 100, 0.05, "r1", self.CFG)
-            # gk_b was seen for a different period (confirms it's a real group, not a phantom)
-            ws.store.upsert_total(self.DS, gk_b, "2026-08-01", 3, 100, 0.03, "r1", self.CFG)
-            # Now re-widened: both gk_a and gk_b are requested
-            missing = periods_missing_groups(
-                ws.store,
-                self.DS,
-                self.CFG,
-                [gk_a, gk_b],
-                "day",
-                28,
-                "2026-09-03",
-            )
-        assert "2026-09-01" in missing
-
-    def test_periods_missing_groups_bounded_to_seen(self, ws):
-        with ws:
-            ws.store.upsert_dataset(self.DS, "uri", "s", "c", 100, 5)
-            ws.store.insert_run("r1", self.DS, "{}", 0)
-            gk_never = make_group_key({"g": "NEVER"})
-            # No totals for gk_never — it's unseen
-            missing = periods_missing_groups(
-                ws.store,
-                self.DS,
-                self.CFG,
-                [gk_never],
-                "day",
-                28,
-                "2026-09-03",
-            )
-        # Bounded: gk_never not in seen groups → empty result
-        assert missing == []
-
-    def test_periods_missing_groups_scoped_by_config_hash(self, ws):
-        """A group only ever seen under a *different* config_hash must not
-        bound the requested set for this one -- each configuration's group
-        vocabulary is independent (group_by can differ entirely between
-        configs), so widening detected under config A must not leak into B.
-        """
-        with ws:
-            ws.store.upsert_dataset(self.DS, "uri", "s", "c", 100, 5)
-            ws.store.insert_run("r1", self.DS, "{}", 0)
-            gk_a = make_group_key({"g": "A"})
-            gk_b = make_group_key({"g": "B"})
-            # Under cfgA: gk_a and gk_b both seen (gk_b elsewhere), so gk_a's
-            # period is flagged as missing gk_b.
-            ws.store.upsert_total(self.DS, gk_a, "2026-09-01", 5, 100, 0.05, "r1", "cfgA")
-            ws.store.upsert_total(self.DS, gk_b, "2026-08-01", 3, 100, 0.03, "r1", "cfgA")
-            # Under cfgB: only gk_a has ever been seen -- gk_b is unbound here.
-            ws.store.upsert_total(self.DS, gk_a, "2026-09-01", 7, 100, 0.07, "r1", "cfgB")
-
-            missing_a = periods_missing_groups(
-                ws.store, self.DS, "cfgA", [gk_a, gk_b], "day", 28, "2026-09-03"
-            )
-            missing_b = periods_missing_groups(
-                ws.store, self.DS, "cfgB", [gk_a, gk_b], "day", 28, "2026-09-03"
-            )
-
-        assert "2026-09-01" in missing_a
-        assert missing_b == [], "gk_b was never seen under cfgB, so cfgA's widening must not apply to it"
 
 
 # ---------------------------------------------------------------------------
@@ -523,121 +451,6 @@ class TestPeriodExecution:
                 failed_count=0,
             )
             assert ws.store.period_is_complete(self.DS, "2026-09-01", self.CFG) is True
-
-
-# ---------------------------------------------------------------------------
-# totals.py
-# ---------------------------------------------------------------------------
-
-
-class TestComputeTotals:
-    DS = "ds3"
-
-    def _run(self, ws: Workspace, run_id: str = "run1") -> None:
-        ws.store.upsert_dataset(self.DS, "uri", "s", "c", 100, 3)
-        ws.store.insert_run(run_id, self.DS, "{}", 0)
-
-    def test_aggregates_anomaly_count_by_group(self, ws):
-        with ws:
-            self._run(ws)
-            results = pl.DataFrame(
-                {
-                    "country": ["US", "US", "AU", "AU"],
-                    "anomaly_flag": [True, False, True, True],
-                }
-            )
-            df = compute_totals(ws.store, results, None, ["country"], "2026-09-01", self.DS, "run1", "cfg1")
-        counts = dict(zip(df["group_key"].to_list(), df["anomaly_count"].to_list(), strict=True))
-        gk_us = make_group_key({"country": "US"})
-        gk_au = make_group_key({"country": "AU"})
-        assert counts[gk_us] == 1
-        assert counts[gk_au] == 2
-
-    def test_upsert_idempotent_single_row_per_natural_key(self, ws):
-        with ws:
-            self._run(ws)
-            results = pl.DataFrame({"anomaly_flag": [True, False, True]})
-            compute_totals(ws.store, results, None, [], "2026-09-01", self.DS, "run1", "cfg1")
-            compute_totals(ws.store, results, None, [], "2026-09-01", self.DS, "run1", "cfg1")
-            rows = ws.store._conn.execute(
-                "SELECT COUNT(*) AS n FROM totals WHERE dataset_fp=? AND period_label=?",
-                (self.DS, "2026-09-01"),
-            ).fetchone()
-        assert rows["n"] == 1
-
-    def test_population_join_at_group_grain(self, ws):
-        with ws:
-            self._run(ws)
-            results = pl.DataFrame(
-                {
-                    "country": ["US", "US", "AU"],
-                    "anomaly_flag": [True, False, True],
-                }
-            )
-            population = pl.DataFrame(
-                {
-                    "country": ["US", "AU"],
-                    "population": [1000, 500],
-                }
-            )
-            df = compute_totals(
-                ws.store, results, population, ["country"], "2026-09-01", self.DS, "run1", "cfg1"
-            )
-        gk_us = make_group_key({"country": "US"})
-        row_us = df.filter(pl.col("group_key") == gk_us)
-        assert row_us["population"][0] == 1000
-        assert abs(row_us["rate"][0] - 1 / 1000) < 1e-9
-
-    def test_population_missing_column_warns_unknown(self, ws):
-        with ws:
-            self._run(ws)
-            results = pl.DataFrame(
-                {
-                    "country": ["US"],
-                    "anomaly_flag": [True],
-                }
-            )
-            pop_wrong = pl.DataFrame({"region": ["NA"], "population": [500]})
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                df = compute_totals(
-                    ws.store, results, pop_wrong, ["country"], "2026-09-01", self.DS, "run1", "cfg1"
-                )
-        assert any(issubclass(x.category, PopulationMismatchWarning) for x in w)
-        assert df["population"][0] == -1
-        assert df["rate"][0] is None
-
-    def test_no_group_by_produces_global_group(self, ws):
-        with ws:
-            self._run(ws)
-            results = pl.DataFrame({"anomaly_flag": [True, True, False]})
-            df = compute_totals(ws.store, results, None, [], "2026-09-01", self.DS, "run1", "cfg1")
-        assert len(df) == 1
-        assert df["group_key"][0] == "__all__"
-        assert df["anomaly_count"][0] == 2
-
-    def test_rate_is_null_for_unknown_population(self, ws):
-        with ws:
-            self._run(ws)
-            results = pl.DataFrame({"anomaly_flag": [True]})
-            df = compute_totals(ws.store, results, None, [], "2026-09-01", self.DS, "run1", "cfg1")
-        assert df["population"][0] == -1
-        assert df["rate"][0] is None
-
-    def test_different_config_hash_produces_separate_rows(self, ws):
-        """Config change must add a new trend point, not overwrite the prior one."""
-        with ws:
-            self._run(ws)
-            results = pl.DataFrame({"anomaly_flag": [True, False]})
-            compute_totals(ws.store, results, None, [], "2026-09-01", self.DS, "run1", "cfgA")
-            compute_totals(ws.store, results, None, [], "2026-09-01", self.DS, "run1", "cfgB")
-            rows = ws.store._conn.execute(
-                "SELECT COUNT(*) AS n FROM totals WHERE dataset_fp=? AND period_label=?",
-                (self.DS, "2026-09-01"),
-            ).fetchone()
-        assert rows["n"] == 2, (
-            "Two different config_hashes for the same (dataset, period) must produce two rows, not one"
-        )
 
 
 # ---------------------------------------------------------------------------

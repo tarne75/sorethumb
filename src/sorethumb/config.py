@@ -510,8 +510,9 @@ class HistoryConfig(BaseModel):
         100,
         ge=1,
         description=(
-            "Periods with fewer rows than this emit a PopulationMismatchWarning "
-            "and are excluded from the baseline."
+            "The shortest rolling window is flagged low-volume (shown in the HTML "
+            "report) when its current population is below this -- informational "
+            "only; low-volume periods are still included in every aggregate."
         ),
     )
 

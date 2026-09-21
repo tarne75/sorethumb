@@ -106,10 +106,6 @@ class ModelVersionMismatchWarning(SorethumbWarning):
     """A persisted model was fitted under different library versions; scores may not be reproducible."""
 
 
-class PopulationMismatchWarning(SorethumbWarning):
-    """Population frame is missing a grouping column or period; rate set to unknown."""
-
-
 class CalibrationModeWarning(SorethumbWarning):
     """Calibration mode changed between runs; cross-run score comparison is invalid."""
 

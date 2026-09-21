@@ -410,11 +410,10 @@ def _record_period_history(
     objects: each one already carries ``n_records`` (the rows that entered the pipeline for this
     group × period — i.e. the population) and ``n_anomalies`` (the count).
 
-    We deliberately do **not** feed the persisted results frame to
-    ``compute_totals``: that frame holds only the flagged rows, with a
-    ``flagged`` column and the group *digest* — not the boolean ``anomaly_flag``
-    and raw grouping columns ``compute_totals`` needs, and it has no population.
-    The summaries are the right source.
+    Built from the summaries rather than the persisted results frame
+    deliberately: that frame holds only the flagged rows, with a ``flagged``
+    column and the group *digest* — no boolean ``anomaly_flag``, no raw
+    grouping columns, and no population. The summaries are the right source.
 
     ``success``, ``too_few_records`` *and* ``skipped`` groups are all written:
     a resumed (``skipped``) group re-upserts the same values it already has —

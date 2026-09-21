@@ -8,6 +8,17 @@ zero-anomaly periods be correctly distinguished from unprocessed ones, and
 keeps two different configurations touching the same period_label from making
 each other look done (or from double-counting when their totals are summed).
 
+The actual write path is ``_pipeline._record_period_history``, called once
+per (period, config) at the end of ``run_detection``/backfill: it builds the
+totals directly from each group's :class:`~sorethumb._pipeline.GroupSummary`
+(already has ``n_records``/``n_anomalies`` from the pipeline itself) and calls
+``Store.record_period_completion`` to upsert the period row, every group's
+totals row, and the completion record together. This module only *reads*
+that state back (``last_complete_period``, ``completed_groups``,
+``iter_pending_periods``) or computes *which* periods a caller should ask
+``run_detection`` to (re)process (``resolve_backfill_range``); it never writes
+totals itself.
+
 Every function here therefore takes an explicit ``config_hash``; there is no
 default, because silently aggregating across configurations is exactly the
 bug this module exists to prevent.
@@ -74,42 +85,6 @@ def last_complete_period(store: Store, dataset_fp: str, config_hash: str) -> str
 def completed_groups(store: Store, dataset_fp: str, period_label: str, config_hash: str) -> list[str]:
     """Return group_keys with a totals row for this (dataset_fp, period_label, config_hash)."""
     return store.completed_group_keys(dataset_fp, period_label, config_hash)
-
-
-def periods_missing_groups(
-    store: Store,
-    dataset_fp: str,
-    config_hash: str,
-    requested_groups: list[str],
-    granularity: PeriodGranularity,
-    lookback_periods: int,
-    reference_label: str,
-) -> list[str]:
-    """Return periods (under *config_hash*) that have some totals but are missing requested groups.
-
-    Bounds the requested list to groups this configuration has actually
-    produced before, so a group that never occurs never re-queues the same
-    periods forever. Typical caller: pass the group set discovered from the
-    live dataset to catch periods that were completed before the group_by
-    dimension widened.
-    """
-    if not requested_groups:
-        return []
-
-    existing = store.groups_seen_for_dataset(dataset_fp, config_hash)
-    bounded = [g for g in requested_groups if g in existing]
-    if not bounded:
-        return []
-
-    start_label = step_back(reference_label, granularity, lookback_periods)
-    all_labels = period_range(start_label, reference_label, granularity)
-
-    missing: list[str] = []
-    for label in all_labels:
-        done = set(completed_groups(store, dataset_fp, label, config_hash))
-        if done and any(g not in done for g in bounded):
-            missing.append(label)
-    return missing
 
 
 def clear_period(store: Store, dataset_fp: str, period_label: str, config_hash: str) -> None:

@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Self
 
 from sorethumb.errors import StoreError
+from sorethumb.store.identifiers import validate_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -282,10 +283,19 @@ class Store:
         ``IF NOT EXISTS``. ``ALTER TABLE ... ADD COLUMN`` has no such clause in
         SQLite, so it is special-cased here: skip it if the column is already
         there instead of failing with "duplicate column name".
+
+        The table/column names come from regex-matching *stmt* itself, not a
+        bound parameter -- PRAGMA takes no parameters for a table name in
+        SQLite. ``validate_identifier`` is the one place in the library that
+        does identifier-level string safety (see ``store/identifiers.py``);
+        routing them through it here, even though the surrounding regex
+        already constrains the character set, is what keeps that guard a
+        real, exercised check rather than a module nothing calls.
         """
         match = _ALTER_ADD_COLUMN_RE.match(stmt.strip())
         if match:
-            table, column = match.group(1), match.group(2)
+            table = validate_identifier(match.group(1), "table name")
+            column = validate_identifier(match.group(2), "column name")
             existing_cols = {row[1] for row in self._conn.execute(f"PRAGMA table_info({table})")}
             if column in existing_cols:
                 logger.info("Column %s.%s already present; skipping.", table, column)
@@ -814,20 +824,6 @@ class Store:
             (dataset_fp, period_label, config_hash),
         ).fetchall()
         return [str(r["group_key"]) for r in rows]
-
-    def groups_seen_for_dataset(self, dataset_fp: str, config_hash: str) -> set[str]:
-        """Return all group_keys ever seen in totals for a dataset under *config_hash*.
-
-        Scoped per config because different configurations can define
-        entirely different group_by dimensions -- a group_key meaningful under
-        one configuration is not necessarily meaningful, or even comparable,
-        under another.
-        """
-        rows = self._conn.execute(
-            "SELECT DISTINCT group_key FROM totals WHERE dataset_fp=? AND config_hash=?",
-            (dataset_fp, config_hash),
-        ).fetchall()
-        return {str(r["group_key"]) for r in rows}
 
     def totals_for_periods(
         self,
