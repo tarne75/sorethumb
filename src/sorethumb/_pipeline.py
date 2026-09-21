@@ -546,11 +546,14 @@ def run_detection(
         # already-complete groups (resume behaviour).
         run_id = _make_run_id(dataset_fp, config.config_hash(), period_label, snapshot_fp)
         config_json = _redacted_config_json(config)
+        import sorethumb as _st  # noqa: PLC0415
+
         ws.store.insert_run(
             run_id=run_id,
             dataset_fp=dataset_fp,
             config_json=config_json,
             seed=config.run.seed,
+            library_version=_st.__version__,
         )
 
         if dry_run:
@@ -819,12 +822,15 @@ def score_forward(
         new_run_id = _make_score_run_id(
             dataset_fp, snapshot_fp, config.config_hash(), period_label, source_run_id
         )
+        import sorethumb as _st  # noqa: PLC0415
+
         ws.store.insert_run(
             run_id=new_run_id,
             dataset_fp=dataset_fp,
             config_json=_redacted_config_json(config),
             seed=config.run.seed,
             source_run_id=source_run_id,
+            library_version=_st.__version__,
         )
         logger.info("score-forward run %s from source %s", new_run_id, source_run_id)
 

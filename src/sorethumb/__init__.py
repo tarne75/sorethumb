@@ -17,7 +17,18 @@ Config, SourceConfig, RunResult, GroupSummary, FeaturePlan, FeatureSpace,
 Metrics, Workspace, SorethumbError
 """
 
-__version__ = "0.1.0"
+import importlib.metadata
+
+try:
+    # Single source of truth: the installed distribution's metadata (which
+    # comes from pyproject.toml's `version` at build time), not a second
+    # hard-coded copy that can drift from it. Works for an editable dev
+    # install too -- uv/pip both write real dist-info metadata for those.
+    __version__ = importlib.metadata.version("sorethumb")
+except importlib.metadata.PackageNotFoundError:
+    # sorethumb was imported from source without being installed at all
+    # (no pip/uv install step) -- there is no metadata to read.
+    __version__ = "0+unknown"
 
 # Pipeline entry points
 from sorethumb._pipeline import (

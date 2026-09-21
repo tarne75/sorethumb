@@ -384,10 +384,18 @@ class Store:
 
         *source_run_id* is set for score-forward runs (``sorethumb score
         --from-run``) and NULL for ordinary fitted runs.
+
+        *library_version* has no fallback to a specific version string --
+        every real caller (``run_detection``, ``score_forward``) passes
+        ``sorethumb.__version__`` explicitly; a hard-coded fallback here
+        would silently misreport every run's recorded version once that
+        constant moved on, which is exactly the stale-duplicate-version
+        problem the caller-supplied value exists to avoid. A caller that
+        omits it (only tests do) gets the empty string, not a guess.
         """
         now = _now_utc()
         cfg_hash = _config_hash(config_json)
-        lib_ver = library_version or "0.1.0"
+        lib_ver = library_version
         py_ver = (
             python_version or f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
         )

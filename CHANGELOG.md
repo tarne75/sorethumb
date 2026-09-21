@@ -6,8 +6,47 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-21
+
+First public release. The Fixed / Compatibility entries record corrections
+made during pre-release hardening; there is no prior published version to
+diff against.
+
 ### Added
 
+- Detector `extra_params`: an escape hatch to pass arbitrary constructor kwargs
+  straight to the underlying sklearn estimator (`n_jobs`, `max_features`, KMeans
+  `tol`/`max_iter`/`algorithm`, LOF `leaf_size`/`metric`/`p`, OCSVM `tol`/
+  `shrinking`, …). Set it in config as
+  `params = { extra_params = { n_jobs = 4 } }`. Keys are validated at detector
+  construction against the estimator's real parameter list (a typo fails there,
+  not deep in sklearn); reserved keys (`random_state`, `contamination`,
+  `novelty`, `n_clusters`) and keys already exposed as wrapper arguments are
+  rejected with `ConfigError`. `get_params()` now includes an `extra_params`
+  entry on every detector. `ecod`/`hbos` have no underlying estimator and reject
+  any non-empty `extra_params`. `sorethumb init` writes every accepted key
+  (with its scikit-learn default) into the starter config, commented out, and
+  the [configuration reference](docs/configuration.md#detector-extra_params)
+  lists them per detector. Each wrapper class exposes
+  `available_extra_params()` for programmatic discovery.
+- Accuracy-floor benchmark (`tests/benchmark/test_accuracy_floors.py`, marker
+  `benchmark`): each guarded detector must clear a committed per-detector
+  ROC-AUC floor on the network-free synthetic datasets. Restores a real
+  accuracy-regression signal — the scheduled `benchmark` CI job previously
+  selected zero tests — and locks in the `kmeans_distance` CBLOF fix.
+- `KMeansDetector.large_cluster_coverage` (constructor argument, default `0.90`)
+  tunes the CBLOF reference set — the fraction of training rows the "large"
+  clusters must cover. Surfaced in `get_params()` alongside the resolved
+  `n_large_clusters`; the fitted reference centroids are exposed as the
+  `large_centroids` property.
+- Packaging metadata: PyPI trove classifiers, keywords, and `[project.urls]`
+  (Homepage, Repository, Documentation, Changelog, Issues). `py.typed` ships in
+  the wheel.
+- Release workflow (`.github/workflows/publish.yml`): a `vMAJOR.MINOR.PATCH`
+  tag builds the sdist + wheel, runs `twine check`, verifies the tag matches
+  `project.version`, and publishes to PyPI via trusted publishing (OIDC — no
+  API token). Needs a one-time PyPI trusted-publisher entry and a `pypi`
+  deployment environment.
 - Store durability hardening. `PRAGMA busy_timeout` (30s) is now set on every
   connection, so a second process writing to the same workspace waits for the
   lock instead of failing instantly with "database is locked". Each migration
@@ -21,7 +60,6 @@ Versioning: [Semantic Versioning](https://semver.org/).
   mid-migration can be safely retried. HTML/JSON reports and CSV exports are
   now written atomically (shared `sorethumb._atomic` module, previously only
   used for model artifacts), so a reader can never open a half-written file.
-
 - Native, exact per-feature attributions for ECOD and HBOS. Both detectors
   already define their score as an unweighted average of independent
   per-feature terms (an empirical-CDF tail probability for ECOD, a histogram
@@ -71,7 +109,6 @@ Versioning: [Semantic Versioning](https://semver.org/).
   every fenced README block: `python` blocks run in a subprocess, `toml` config
   fragments are validated against `Config`, and each `sorethumb <cmd>` / `--flag`
   is checked against the live CLI.
-
 - `sorethumb score --from-run RUN_ID` is now real (it previously ignored
   `--from-run` and did a full fitted run). It loads the source run's persisted
   FeaturePlan and, per group, its per-detector models and calibrators; applies
@@ -82,6 +119,102 @@ Versioning: [Semantic Versioning](https://semver.org/).
   library-version drift are detected per group (`--strict` → errors). New
   public API `sorethumb.score_forward(config, source_run_id)`; the fitted plan
   is persisted at `models/<run_id>/plan.json` (`save_plan` / `load_plan`).
+- Full-pipeline benchmark harness (`evaluate/pipeline_benchmark.py`,
+  `sorethumb benchmark`): a named taxonomy of synthetic anomaly types
+  (point, local, contextual, clustered, masking, swamping, varying-density)
+  with mixed numeric and categorical columns through the real feature
+  pipeline (encoding, scaling, optional PCA, detectors, calibration,
+  ensemble), never training and evaluating on the same rows. Every
+  (scenario, ablation) cell runs over several seeds and reports mean ± a 95%
+  confidence interval; `peak_memory_mb` is a real OS-tracked high-water mark
+  from an isolated subprocess per cell. `sklearn:*` rows compare against bare
+  sklearn detectors with no sorethumb pipeline. `sorethumb benchmark` now runs
+  this suite alongside the legacy real-dataset one (each independently
+  disable-able with `--no-pipeline` / `--no-legacy`) and injects both result
+  tables into the README from one documented command.
+
+### Changed
+
+- TreeSHAP's `attribution_kind` is `model_specific`, not `exact`. TreeSHAP runs
+  with `check_additivity=False` (IsolationForest's `score_samples` isn't the
+  strict SHAP sum of base value + contributions, so additivity checking would
+  raise on every call) — so additivity is unverified at runtime, and even
+  where the decomposition holds exactly it's exact for *path length*, which
+  IsolationForest's score is a nonlinear transform of. Neither supports
+  calling the result `exact`. `blend()`'s tier logic is renamed to match
+  (`model_specific` iff every contributing source is `model_specific`, else
+  `heuristic`); nothing sorethumb computes is tagged `exact` any more. See
+  `docs/explanations.md` and `docs/approximations.md`.
+- Persisted models now record the fit-time versions of Python, sorethumb,
+  scikit-learn, numpy, scipy and joblib in `manifest.json`. `load_model` and
+  `score_with_existing` compare them against the current environment and emit
+  `ModelVersionMismatchWarning` (or, in strict mode, raise
+  `ModelVersionMismatchError`) so a dependency upgrade can no longer change
+  scores silently.
+- CI adds a `build` job: builds the distribution, `twine check`s it, asserts
+  the package data (`py.typed`, SQL migrations) is shipped, then installs the
+  wheel into a clean virtualenv and smoke-tests `sorethumb --version` and
+  `import sorethumb`.
+- CI declares a weekly `schedule` trigger so the `benchmark` job (guarded by
+  `if: github.event_name == 'schedule'`) can actually run — restoring the
+  accuracy-regression signal.
+- README marked pre-release (0.1.0); install instructions build from a clone.
+- Statistical contract sharpened. The README, `docs/adapting-to-your-data.md`,
+  `docs/configuration-examples.md`, `docs/approximations.md`, the
+  `scoring.contamination` field description, the run summary and `--json` output
+  no longer present `contamination` / `contamination="auto"` as a prevalence
+  estimate. `contamination` is a **review budget** (the size of the shortlist you
+  will look at); `"auto"` is a heuristic median of per-detector cut-offs that
+  disagree. The CLI summary line "Total anomalies: N" is now "Flagged for review:
+  N (X% of M rows) — … not an estimate of true prevalence"; `--json` groups gain
+  `n_flagged` alongside the retained `n_anomalies`.
+- `_pipeline`: the per-group ledger/status bookkeeping and the
+  ensemble→threshold→explain→write tail are factored into shared helpers
+  (`_execute_group`, `_finalize_group`) used by both `run_detection` and
+  `score_forward`, so the two paths cannot diverge.
+- `run_id` derivation now folds in the snapshot fingerprint, so a changed source
+  snapshot produces a fresh run (no resume against stale results) while period /
+  totals history keys on the stable `dataset_id` alone. `config_hash` excludes
+  `source.dataset_id` (an organisational label, not a result-affecting param).
+- `Calibrator` is self-calibration only. The `mode="reference"` path
+  (`__init__(mode=...)`, `fit(reference_scores=...)`) was unreachable —
+  `run_detection` hardcoded `mode="self"` and `ScoringConfig` had no field to
+  select otherwise — so it is removed. `to_dict` no longer emits `"mode"`;
+  `from_dict` ignores it in payloads written by older versions.
+- README differentiators #2 / #4 and the `sorethumb backfill` help + docs
+  corrected: `backfill` fits and self-calibrates each period independently, so a
+  `sorethumb history` trend reflects *relative* period-to-period movement, not an
+  absolute anomaly level on one scale. `sorethumb score --from-run RUN_ID` stays
+  the single-scale cross-run path. (No prior release claimed otherwise in a
+  shipped changelog.)
+- Dependency and lockfile reproducibility: `uv.lock` is now enforced (`uv lock
+  --check` + `uv sync --frozen`) in every CI/publish job; `setup-uv` is pinned
+  to an exact commit and Hatchling is constrained. shap, numba, matplotlib,
+  pandas and datasets moved out of the mandatory install into `explain` /
+  `report` / `benchmark` / `dev` optional-dependency extras; TreeSHAP/KernelSHAP
+  degrade to the gradient method with a clear warning when `explain` isn't
+  installed, rather than raising.
+- Zero-config default workspace changed from `.` to a dedicated
+  `./sorethumb-workspace/` directory, so a first `sorethumb run <file>` never
+  scatters `sorethumb.db`/`models`/`results`/`reports`/`logs` beside the source
+  data or loose in the current directory. A pre-existing workspace at `.`
+  (the old default) is detected and refused rather than silently orphaned —
+  pass `--workdir .` explicitly to keep using it. `sorethumb init` now creates
+  this same directory (previously a mismatched, hidden `.sorethumb_workspace`)
+  and fills in the starter config's `run.workdir` to match it.
+
+### Removed
+
+- Dropped the unsupported `s3://` example from the README; only local paths and
+  `http(s)://` URLs are accepted (an `s3://` URI already raised
+  `SourceError: Unsupported URI scheme`).
+- `history/totals.py`'s `compute_totals` (and `ledger.py`'s
+  `periods_missing_groups`, `db.py`'s `groups_seen_for_dataset`): all dead
+  code left over from the history redesign, never called from any production
+  path. The real, authoritative completion path is
+  `_pipeline._record_period_history` / `Store.record_period_completion`,
+  built directly from each group's `GroupSummary`. Removing `compute_totals`
+  also removed the now-unreachable `PopulationMismatchWarning`.
 
 ### Fixed
 
@@ -97,6 +230,31 @@ Versioning: [Semantic Versioning](https://semver.org/).
   remaining auto-write path (prompting to save a starter config when `run`
   is invoked with a data-file argument and no `sorethumb.toml` exists yet)
   is unaffected, since there is no existing file for it to destroy.
+- `kmeans_distance` no longer lets a tight anomaly cluster capture its own
+  centroid and be scored normal — the previous behaviour ranked planted
+  anomalies as the *most* normal records (benchmark ROC-AUC ~0.0002). Scoring
+  is now CBLOF-style: every row is measured against the nearest *large-cluster*
+  centroid, where "large" is the set of clusters that together cover
+  `large_cluster_coverage` (default `0.90`) of the training data; small
+  clusters — anomaly sub-groups included — are excluded from the reference set.
+  Consequence of the 0.90 default: the detector assumes anomalies are ≲ 10 % of
+  the data. Lower `large_cluster_coverage` for a higher true anomaly rate;
+  raise it toward `1.0` to be stricter.
+- Artefact pruning no longer matches a failed run to its files by a path
+  substring (`instr(path, run_id)`), which could delete another run's files
+  when one `run_id` was a substring of another. Artefacts now carry their
+  owning `run_id` (migration 003) and the prune query joins on equality.
+- The migration runner now strips full-line `--` comments before splitting on
+  `;`, so prose containing a semicolon in a migration comment can no longer
+  truncate the following statement.
+- Scaler no longer clamps a genuine sub-1.0 spread up to `1.0`, which flattened
+  fine-grained columns to near-zero variance. A spread is now used as-is; only
+  an effectively-zero spread (constant or degenerate column) falls back to
+  `1.0`.
+- Standard-mode scaling fits mean and std over each column's 1st–99th percentile
+  range, so a handful of anomalous rows can no longer inflate the centre or the
+  spread used to standardise the normal bulk. (Robust mode already used
+  outlier-resistant median/IQR.)
 - Score-forward artifact loading did not fail closed. `sorethumb score
   --from-run` accepted a source run of any status (`running`, `failed`, or
   even another score-forward run) as long as its row existed;
@@ -203,7 +361,10 @@ Versioning: [Semantic Versioning](https://semver.org/).
   `other_config_hashes_for_periods`: `WindowResult.calibration_break` now
   fires when a window's span also has totals recorded under a *different*
   configuration — real provenance that the trend may be an incomplete
-  picture, instead of a check that could never trip.
+  picture, instead of a check that could never trip. (`groups_seen_for_dataset`
+  and `periods_missing_groups` were themselves later removed as dead code —
+  see Removed — once the redesign settled and backfill's real pending-period
+  path never ended up calling them.)
 - A group that failed without raising (e.g. "no detector produced scores",
   or a score-forward group whose requested detector was never persisted in
   the source run) was written to the `run_group` ledger as `status='complete'`
@@ -218,9 +379,9 @@ Versioning: [Semantic Versioning](https://semver.org/).
   one class present (both are mathematically undefined there). `0.0` reads as
   a real, terrible score — indistinguishable from a model that actively
   anti-ranks — and silently drags down any mean/std computed over it (as the
-  benchmark harness's new multi-seed aggregation does, see below). Both now
-  return `float("nan")`, which correctly propagates through aggregation
-  instead of masquerading as data.
+  benchmark harness's multi-seed aggregation does). Both now return
+  `float("nan")`, which correctly propagates through aggregation instead of
+  masquerading as data.
 - Benchmark harness leaked the labels into their own evaluation. `run_benchmark`
   set the precision@k / recall@k / F1 operating point to
   `contamination = y.mean()` (the true label rate), which makes
@@ -285,6 +446,10 @@ Versioning: [Semantic Versioning](https://semver.org/).
   covering sources gets `attribution_kind="unavailable"` and
   `reason_1="unavailable (beyond explain.max_rows)"` instead of a fabricated
   `column=value` reason.
+- shap is not installed unless the `explain` extra is requested: TreeSHAP and
+  KernelSHAP now catch the resulting `ImportError` and fall back to the
+  gradient method with a `FallbackAttributionWarning`, instead of the run
+  failing.
 - The apply path was unguarded against schema drift. `apply_feature_plan` never
   checked `plan.schema_fingerprint` against the incoming data, and `apply_scaler`
   silently passed through any column with no fitted scale parameters. Together,
@@ -392,6 +557,13 @@ Versioning: [Semantic Versioning](https://semver.org/).
   `sorethumb history` had nothing to aggregate. `too_few_records` groups are
   recorded with a zero count so they stop re-queueing; `skipped` / `failed`
   groups are left untouched. `score_forward` deliberately does not write history.
+- Backfill was leaking weekend periods into a range even with
+  `history.roll_non_business = true` configured: `resolve_backfill_range`'s
+  three branches walked labels via calendar-day arithmetic
+  (`period_range`/`step_back`/`step_forward`), none of which have any weekday
+  awareness, so a window whose *span* crossed a weekend still produced
+  Saturday/Sunday labels. A new `filter_non_business` is applied once,
+  uniformly, after all three branches build their range.
 - `sorethumb backfill` now creates the workspace if it does not exist yet
   (matching `sorethumb run`), instead of failing with a `StoreError`.
 - Dataset identity was the full-content+schema fingerprint
@@ -438,9 +610,20 @@ Versioning: [Semantic Versioning](https://semver.org/).
   numpy, scipy, scikit-learn versions) alongside every run, written to
   `benchmark_metadata.json` and prepended to the Markdown table, so a
   published number can be tied to the environment that produced it.
+- `sorethumb.__version__` was a second hard-coded copy of `pyproject.toml`'s
+  version, and `Store.insert_run`'s `library_version` fallback was a third
+  (a stale literal `"0.1.0"` that neither of `run_detection`/`score_forward`
+  ever overrode, so every run's report footer always showed `"0.1.0"`
+  regardless of what was actually installed). `__version__` is now derived
+  from installed distribution metadata (`importlib.metadata.version`);
+  both pipeline entry points now pass it explicitly to `insert_run`, and the
+  now-pointless hard-coded fallback there is removed.
 
 ### Security
 
+- CSV report cells and column names are neutralised against spreadsheet formula
+  injection: a leading `=`, `+`, `-`, `@`, or control character is prefixed with
+  `'` before the frame is written.
 - Documented the persisted-model trust boundary. A workspace's fitted
   estimators and calibrators are `joblib`/pickle files; `sorethumb score
   --from-run` and `run.reuse_models` unpickle them with no sandboxing, which
@@ -452,52 +635,17 @@ Versioning: [Semantic Versioning](https://semver.org/).
   `score --from-run` CLI help/docstring and `docs/cli_reference.md` no
   longer imply the digest check makes a third-party workspace safe to load.
 
-### Changed
-
-- TreeSHAP's `attribution_kind` is `model_specific`, not `exact`. TreeSHAP runs
-  with `check_additivity=False` (IsolationForest's `score_samples` isn't the
-  strict SHAP sum of base value + contributions, so additivity checking would
-  raise on every call) — so additivity is unverified at runtime, and even
-  where the decomposition holds exactly it's exact for *path length*, which
-  IsolationForest's score is a nonlinear transform of. Neither supports
-  calling the result `exact`. `blend()`'s tier logic is renamed to match
-  (`model_specific` iff every contributing source is `model_specific`, else
-  `heuristic`); nothing sorethumb computes is tagged `exact` any more. See
-  `docs/explanations.md` and `docs/approximations.md`.
-- Statistical contract sharpened. The README, `docs/adapting-to-your-data.md`,
-  `docs/configuration-examples.md`, `docs/approximations.md`, the
-  `scoring.contamination` field description, the run summary and `--json` output
-  no longer present `contamination` / `contamination="auto"` as a prevalence
-  estimate. `contamination` is a **review budget** (the size of the shortlist you
-  will look at); `"auto"` is a heuristic median of per-detector cut-offs that
-  disagree. The CLI summary line "Total anomalies: N" is now "Flagged for review:
-  N (X% of M rows) — … not an estimate of true prevalence"; `--json` groups gain
-  `n_flagged` alongside the retained `n_anomalies`.
-- `_pipeline`: the per-group ledger/status bookkeeping and the
-  ensemble→threshold→explain→write tail are factored into shared helpers
-  (`_execute_group`, `_finalize_group`) used by both `run_detection` and
-  `score_forward`, so the two paths cannot diverge.
-- `run_id` derivation now folds in the snapshot fingerprint, so a changed source
-  snapshot produces a fresh run (no resume against stale results) while period /
-  totals history keys on the stable `dataset_id` alone. `config_hash` excludes
-  `source.dataset_id` (an organisational label, not a result-affecting param).
-- `Calibrator` is self-calibration only. The `mode="reference"` path
-  (`__init__(mode=...)`, `fit(reference_scores=...)`) was unreachable —
-  `run_detection` hardcoded `mode="self"` and `ScoringConfig` had no field to
-  select otherwise — so it is removed. `to_dict` no longer emits `"mode"`;
-  `from_dict` ignores it in payloads written by older versions.
-- README differentiators #2 / #4 and the `sorethumb backfill` help + docs
-  corrected: `backfill` fits and self-calibrates each period independently, so a
-  `sorethumb history` trend reflects *relative* period-to-period movement, not an
-  absolute anomaly level on one scale. `sorethumb score --from-run RUN_ID` stays
-  the single-scale cross-run path. (No prior release claimed otherwise in a
-  shipped changelog; `[0.1.0]` is not yet tagged.)
-
 ### Compatibility
 
-- `attribution_kind == "exact"` no longer appears in results Parquet, CLI
-  output, or reports — TreeSHAP rows now read `"model_specific"` (see Changed).
-  Update any downstream filter/comparison on the literal string `"exact"`.
+- Identity digests widened from 64-bit (16 hex) to 128-bit (32 hex):
+  `run_id`, `group_key`, `dataset_fp`, `config_hash`, and the model plan digest.
+  Run IDs and group directories therefore have new names — existing workspaces
+  start fresh runs rather than resuming. No migration provided.
+- `attribution_kind == "exact"` is now reserved for ECOD/HBOS's native
+  per-feature decomposition (`explain/native.py`) — it no longer appears for
+  IsolationForest/TreeSHAP results, which read `"model_specific"` instead
+  (see Changed). Update any downstream filter/comparison on the literal
+  string `"exact"` accordingly.
 - One-time re-baseline for existing workspaces: the first run after upgrading
   computes the new logical `dataset_id`, which will not match the old
   content+schema `dataset_fp`, so history recorded before the upgrade stays under
@@ -505,112 +653,6 @@ Versioning: [Semantic Versioning](https://semver.org/).
   id. Migration 005 seeds `dataset_snapshot` from existing `dataset` rows so
   their snapshot history is preserved. Set `source.dataset_id` explicitly to pin
   identity going forward.
-
-## [0.1.0] - 2026-09-09
-
-First tagged release. The Fixed / Compatibility entries record corrections made
-during pre-release hardening; there is no prior published version to diff
-against.
-
-### Added
-
-- Detector `extra_params`: an escape hatch to pass arbitrary constructor kwargs
-  straight to the underlying sklearn estimator (`n_jobs`, `max_features`, KMeans
-  `tol`/`max_iter`/`algorithm`, LOF `leaf_size`/`metric`/`p`, OCSVM `tol`/
-  `shrinking`, …). Set it in config as
-  `params = { extra_params = { n_jobs = 4 } }`. Keys are validated at detector
-  construction against the estimator's real parameter list (a typo fails there,
-  not deep in sklearn); reserved keys (`random_state`, `contamination`,
-  `novelty`, `n_clusters`) and keys already exposed as wrapper arguments are
-  rejected with `ConfigError`. `get_params()` now includes an `extra_params`
-  entry on every detector. `ecod`/`hbos` have no underlying estimator and reject
-  any non-empty `extra_params`. `sorethumb init` writes every accepted key
-  (with its scikit-learn default) into the starter config, commented out, and
-  the [configuration reference](docs/configuration.md#detector-extra_params)
-  lists them per detector. Each wrapper class exposes
-  `available_extra_params()` for programmatic discovery.
-- Accuracy-floor benchmark (`tests/benchmark/test_accuracy_floors.py`, marker
-  `benchmark`): each guarded detector must clear a committed per-detector
-  ROC-AUC floor on the network-free synthetic datasets. Restores a real
-  accuracy-regression signal — the scheduled `benchmark` CI job previously
-  selected zero tests — and locks in the `kmeans_distance` CBLOF fix.
-- `KMeansDetector.large_cluster_coverage` (constructor argument, default `0.90`)
-  tunes the CBLOF reference set — the fraction of training rows the "large"
-  clusters must cover. Surfaced in `get_params()` alongside the resolved
-  `n_large_clusters`; the fitted reference centroids are exposed as the
-  `large_centroids` property.
-- Packaging metadata: PyPI trove classifiers, keywords, and `[project.urls]`
-  (Homepage, Repository, Documentation, Changelog, Issues). `py.typed` ships in
-  the wheel.
-- Release workflow (`.github/workflows/publish.yml`): a `vMAJOR.MINOR.PATCH`
-  tag builds the sdist + wheel, runs `twine check`, verifies the tag matches
-  `project.version`, and publishes to PyPI via trusted publishing (OIDC — no
-  API token). Needs a one-time PyPI trusted-publisher entry and a `pypi`
-  deployment environment.
-
-### Changed
-
-- Persisted models now record the fit-time versions of Python, sorethumb,
-  scikit-learn, numpy, scipy and joblib in `manifest.json`. `load_model` and
-  `score_with_existing` compare them against the current environment and emit
-  `ModelVersionMismatchWarning` (or, in strict mode, raise
-  `ModelVersionMismatchError`) so a dependency upgrade can no longer change
-  scores silently.
-- CI adds a `build` job: builds the distribution, `twine check`s it, asserts
-  the package data (`py.typed`, SQL migrations) is shipped, then installs the
-  wheel into a clean virtualenv and smoke-tests `sorethumb --version` and
-  `import sorethumb`.
-- CI declares a weekly `schedule` trigger so the `benchmark` job (guarded by
-  `if: github.event_name == 'schedule'`) can actually run — restoring the
-  accuracy-regression signal.
-- README marked pre-release (0.1.0); install instructions build from a clone.
-
-### Removed
-
-- Dropped the unsupported `s3://` example from the README; only local paths and
-  `http(s)://` URLs are accepted (an `s3://` URI already raised
-  `SourceError: Unsupported URI scheme`).
-
-### Fixed
-
-- `kmeans_distance` no longer lets a tight anomaly cluster capture its own
-  centroid and be scored normal — the previous behaviour ranked planted
-  anomalies as the *most* normal records (benchmark ROC-AUC ~0.0002). Scoring
-  is now CBLOF-style: every row is measured against the nearest *large-cluster*
-  centroid, where "large" is the set of clusters that together cover
-  `large_cluster_coverage` (default `0.90`) of the training data; small
-  clusters — anomaly sub-groups included — are excluded from the reference set.
-  Consequence of the 0.90 default: the detector assumes anomalies are ≲ 10 % of
-  the data. Lower `large_cluster_coverage` for a higher true anomaly rate;
-  raise it toward `1.0` to be stricter.
-- Artefact pruning no longer matches a failed run to its files by a path
-  substring (`instr(path, run_id)`), which could delete another run's files
-  when one `run_id` was a substring of another. Artefacts now carry their
-  owning `run_id` (migration 003) and the prune query joins on equality.
-- The migration runner now strips full-line `--` comments before splitting on
-  `;`, so prose containing a semicolon in a migration comment can no longer
-  truncate the following statement.
-- Scaler no longer clamps a genuine sub-1.0 spread up to `1.0`, which flattened
-  fine-grained columns to near-zero variance. A spread is now used as-is; only
-  an effectively-zero spread (constant or degenerate column) falls back to
-  `1.0`.
-- Standard-mode scaling fits mean and std over each column's 1st–99th percentile
-  range, so a handful of anomalous rows can no longer inflate the centre or the
-  spread used to standardise the normal bulk. (Robust mode already used
-  outlier-resistant median/IQR.)
-
-### Security
-
-- CSV report cells and column names are neutralised against spreadsheet formula
-  injection: a leading `=`, `+`, `-`, `@`, or control character is prefixed with
-  `'` before the frame is written.
-
-### Compatibility
-
-- Identity digests widened from 64-bit (16 hex) to 128-bit (32 hex):
-  `run_id`, `group_key`, `dataset_fp`, `config_hash`, and the model plan digest.
-  Run IDs and group directories therefore have new names — existing workspaces
-  start fresh runs rather than resuming. No migration provided.
 
 ### Docs
 
@@ -623,6 +665,15 @@ against.
   contamination ceiling.
 - `docs/models.md` "How anomaly scoring works" corrected: `composite_score` is
   1 = most anomalous, 0 = normal (it was documented inverted).
+- README images and relative documentation links converted to absolute
+  `github.com` URLs so both render correctly on GitHub and on PyPI (which has
+  no filesystem context to resolve a relative link against). Fixed a wrong
+  sample report path in the CLI quickstart transcript. Adopted PEP 639
+  license metadata (`license = "Apache-2.0"` + `license-files`, dropping the
+  now-redundant OSI classifier). `docs/approximations.md` and the README's
+  Honest limitations gained entries for correlation pruning, PCA's
+  low-variance risk, contaminated fitting, capped-detector train/score
+  mixing, and zero-inflated scaling.
 
 [Unreleased]: https://github.com/tarne75/sorethumb/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/tarne75/sorethumb/releases/tag/v0.1.0

@@ -17,7 +17,13 @@ pytestmark = pytest.mark.unit
 
 
 def test_version_attribute() -> None:
-    assert sorethumb.__version__ == "0.1.0"
+    """__version__ is derived from installed distribution metadata (P0-10),
+    not a second hard-coded copy of pyproject.toml's version that can drift
+    from it -- so this asserts equality with that metadata, never a literal
+    version string."""
+    import importlib.metadata
+
+    assert sorethumb.__version__ == importlib.metadata.version("sorethumb")
 
 
 def test_strict_mode_warning_becomes_error() -> None:
