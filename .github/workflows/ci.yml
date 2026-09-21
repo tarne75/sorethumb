@@ -15,102 +15,36 @@ on:
 # (bec219d24cd3e171d82865faccec33120bb574f4 == the v10.1.0 tag), not a
 # floating major-version tag, for reproducibility -- see P3-3 in
 # prompts/pre-release-plan.md. `uses:` can't reference `env:`/expressions, so
-# the SHA is repeated per job rather than centralised.
+# the SHA is repeated per job rather than centralised. Every other
+# third-party action is pinned to an exact commit the same way (P0-9).
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
-      - name: Verify uv.lock is up to date with pyproject.toml
-        run: uv lock --check
-      - run: uv sync --all-extras --frozen
-      - run: uv run ruff check src/ tests/
-      - run: uv run ruff format --check src/ tests/
-      - run: uv run mypy src/
-      - name: Verify configuration.md + prose docs match the schema
-        run: uv run python docs/generate_config_docs.py --check
-
-  # Required PR lane: fast unit tests + public/persistence contracts, across
-  # every supported Python version (the deterministic compatibility suite).
-  fast-tests:
-    name: fast-tests (${{ matrix.os }}, py${{ matrix.python }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    env:
-      HYPOTHESIS_PROFILE: ci
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-        python: ["3.11", "3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
-        with:
-          python-version: ${{ matrix.python }}
-      - run: uv lock --check
-      - run: uv sync --all-extras --frozen
-      - run: uv run pytest -m "unit or contract"
-
-  # Required PR lane: local integration tests (real workspace, SQLite,
-  # CLI process, full pipeline, report rendering). Linux only for now — a
-  # Windows integration job needs its own phase (SQLite file-locking,
-  # path-separator behaviour) and was explicitly deferred, not overlooked.
-  integration:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      HYPOTHESIS_PROFILE: ci
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
-        with:
-          python-version: "3.12"
-      - run: uv lock --check
-      - run: uv sync --all-extras --frozen
-      - run: uv run pytest -m integration
-
-  # Required PR lane: bounded Hypothesis property tests.
-  property:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      HYPOTHESIS_PROFILE: ci
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
-        with:
-          python-version: "3.12"
-      - run: uv lock --check
-      - run: uv sync --all-extras --frozen
-      - run: uv run pytest -m property
-
-  # Required PR lane: repository/docs consistency checks.
-  repo-check:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
-        with:
-          python-version: "3.12"
-      - run: uv lock --check
-      - run: uv sync --all-extras --frozen
-      - run: uv run pytest -m repo_check
+  # The required release-gating suite (ruff/format/mypy, repo-check, fast
+  # tests across Python versions, integration, property, build+twine+smoke)
+  # lives in release-validation.yml so publish.yml can run the exact same
+  # checks against the exact tagged commit, not just trust this run — see
+  # P0-9 in prompts/pre-release-plan.md.
+  validate:
+    uses: ./.github/workflows/release-validation.yml
 
   # Required PR lane: one tolerance-banded benchmark smoke case that catches
   # a score-direction regression. Deliberately narrow (synthetic data only,
   # one seed) so it stays fast enough to require on every PR; the full
   # accuracy-floor suite and real-dataset checks run on schedule (see
-  # `full-nightly` below).
+  # `full-nightly` below). Not part of release-validation.yml's gate (P0-9
+  # scopes the release gate to correctness/build, not accuracy floors).
   benchmark-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: "3.12"
@@ -128,7 +62,7 @@ jobs:
     env:
       HYPOTHESIS_PROFILE: ci
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
@@ -143,7 +77,7 @@ jobs:
             --cov=sorethumb \
             --cov-report=xml \
             --cov-report=term
-      - uses: codecov/codecov-action@v4
+      - uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml
@@ -155,69 +89,6 @@ jobs:
             --compare-branch=origin/${{ github.base_ref }} \
             --fail-under=85
 
-  # Required PR job: build, twine check, clean-wheel install smoke for core
-  # and every advertised extra (P3-3: "clean installs for core and each
-  # advertised extra").
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
-      - name: Verify uv.lock is up to date with pyproject.toml
-        run: uv lock --check
-      - name: Build sdist and wheel
-        run: uv build
-      - name: Check distribution metadata
-        run: uvx twine check dist/*
-      - name: Assert package data is shipped in the wheel
-        run: |
-          unzip -l dist/*.whl | grep -q 'sorethumb/py.typed'
-          unzip -l dist/*.whl | grep -q 'sorethumb/store/migrations/001_initial.sql'
-      - name: Install the wheel into a clean venv (core only) and smoke-test
-        run: |
-          python -m venv /tmp/smoke-core
-          /tmp/smoke-core/bin/pip install --upgrade pip
-          /tmp/smoke-core/bin/pip install dist/*.whl
-          /tmp/smoke-core/bin/sorethumb --version
-          /tmp/smoke-core/bin/python -c "
-          import sorethumb
-          from sorethumb import Config, SourceConfig, run_detection
-          # explain/report/benchmark modules must import fine with no optional
-          # extra installed -- every shap/matplotlib/pandas/datasets import in
-          # them is lazy (function-level), not at module load time.
-          import sorethumb.explain.shap_tree
-          import sorethumb.explain.gradient
-          import sorethumb.report.charts
-          print('import OK', sorethumb.__version__)
-          "
-      - name: Install each advertised extra into its own clean venv and smoke-test
-        run: |
-          set -e
-          whl="$(ls dist/*.whl)"
-          for extra in explain report benchmark dev; do
-            case "$extra" in
-              explain)   smoke_import="import shap, numba" ;;
-              report)    smoke_import="import matplotlib" ;;
-              benchmark) smoke_import="import datasets, pandas" ;;
-              dev)       smoke_import="import pytest, hypothesis, ruff, mypy" ;;
-            esac
-            echo "::group::extra=$extra"
-            venv="/tmp/smoke-$extra"
-            python -m venv "$venv"
-            "$venv/bin/pip" install --upgrade pip
-            "$venv/bin/pip" install "${whl}[${extra}]"
-            "$venv/bin/python" -c "
-          import sorethumb
-          ${smoke_import}  # noqa: F401
-          print('import OK ($extra)', sorethumb.__version__)
-          "
-            echo "::endgroup::"
-          done
-
   # Network/external-dataset validation: manual or nightly only, never on a
   # PR push. Executes every fenced code block in README.md; the Python
   # quickstart downloads the KDDCup99 10% subset via scikit-learn.
@@ -226,7 +97,7 @@ jobs:
     timeout-minutes: 10
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       - run: uv lock --check
       - run: uv sync --all-extras --frozen
@@ -242,7 +113,7 @@ jobs:
     env:
       HYPOTHESIS_PROFILE: nightly
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: "3.12"

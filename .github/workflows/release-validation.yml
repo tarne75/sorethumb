@@ -1,0 +1,173 @@
+name: Release validation
+
+# Reusable workflow (P0-9): the one set of checks a commit must pass before
+# it can be published. Called by ci.yml on every push/PR (so it's exercised
+# continuously) and by publish.yml against the exact tagged commit (so
+# publication is gated on that exact SHA passing, not on trusting a past
+# ci.yml run against a possibly-different commit on main). Anything NOT
+# required to gate a release -- the benchmark accuracy floors, informational
+# coverage, the network-hitting docs-snippets/full-nightly lanes -- stays in
+# ci.yml itself, not here.
+#
+# Every third-party action below is pinned to an exact commit, not a floating
+# major-version tag -- see the header comment in ci.yml for why the SHA is
+# repeated per step rather than centralised (`uses:` can't reference `env:`).
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - name: Verify uv.lock is up to date with pyproject.toml
+        run: uv lock --check
+      - run: uv sync --all-extras --frozen
+      - run: uv run ruff check src/ tests/
+      - run: uv run ruff format --check src/ tests/
+      - run: uv run mypy src/
+      - name: Verify configuration.md + prose docs match the schema
+        run: uv run python docs/generate_config_docs.py --check
+
+  # Fast unit tests + public/persistence contracts, across every supported
+  # Python version (the deterministic compatibility suite).
+  fast-tests:
+    name: fast-tests (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      HYPOTHESIS_PROFILE: ci
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv lock --check
+      - run: uv sync --all-extras --frozen
+      - run: uv run pytest -m "unit or contract"
+
+  # Local integration tests (real workspace, SQLite, CLI process, full
+  # pipeline, report rendering). Linux only for now — a Windows integration
+  # job needs its own phase (SQLite file-locking, path-separator behaviour)
+  # and was explicitly deferred, not overlooked.
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HYPOTHESIS_PROFILE: ci
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.12"
+      - run: uv lock --check
+      - run: uv sync --all-extras --frozen
+      - run: uv run pytest -m integration
+
+  # Bounded Hypothesis property tests.
+  property:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      HYPOTHESIS_PROFILE: ci
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.12"
+      - run: uv lock --check
+      - run: uv sync --all-extras --frozen
+      - run: uv run pytest -m property
+
+  # Repository/docs consistency checks.
+  repo-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.12"
+      - run: uv lock --check
+      - run: uv sync --all-extras --frozen
+      - run: uv run pytest -m repo_check
+
+  # Build, twine check, package-data assertion, clean-wheel install smoke for
+  # core and every advertised extra (P3-3: "clean installs for core and each
+  # advertised extra"). Uploads the built dist/ as an artifact so a caller
+  # (publish.yml) can publish the exact artifact that was just validated here,
+  # rather than rebuilding a second time.
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - name: Verify uv.lock is up to date with pyproject.toml
+        run: uv lock --check
+      - name: Build sdist and wheel
+        run: uv build
+      - name: Check distribution metadata
+        run: uvx twine check dist/*
+      - name: Assert package data is shipped in the wheel
+        run: |
+          unzip -l dist/*.whl | grep -q 'sorethumb/py.typed'
+          unzip -l dist/*.whl | grep -q 'sorethumb/store/migrations/001_initial.sql'
+      - name: Install the wheel into a clean venv (core only) and smoke-test
+        run: |
+          python -m venv /tmp/smoke-core
+          /tmp/smoke-core/bin/pip install --upgrade pip
+          /tmp/smoke-core/bin/pip install dist/*.whl
+          /tmp/smoke-core/bin/sorethumb --version
+          /tmp/smoke-core/bin/python -c "
+          import sorethumb
+          from sorethumb import Config, SourceConfig, run_detection
+          # explain/report/benchmark modules must import fine with no optional
+          # extra installed -- every shap/matplotlib/pandas/datasets import in
+          # them is lazy (function-level), not at module load time.
+          import sorethumb.explain.shap_tree
+          import sorethumb.explain.gradient
+          import sorethumb.report.charts
+          print('import OK', sorethumb.__version__)
+          "
+      - name: Install each advertised extra into its own clean venv and smoke-test
+        run: |
+          set -e
+          whl="$(ls dist/*.whl)"
+          for extra in explain report benchmark dev; do
+            case "$extra" in
+              explain)   smoke_import="import shap, numba" ;;
+              report)    smoke_import="import matplotlib" ;;
+              benchmark) smoke_import="import datasets, pandas" ;;
+              dev)       smoke_import="import pytest, hypothesis, ruff, mypy" ;;
+            esac
+            echo "::group::extra=$extra"
+            venv="/tmp/smoke-$extra"
+            python -m venv "$venv"
+            "$venv/bin/pip" install --upgrade pip
+            "$venv/bin/pip" install "${whl}[${extra}]"
+            "$venv/bin/python" -c "
+          import sorethumb
+          ${smoke_import}  # noqa: F401
+          print('import OK ($extra)', sorethumb.__version__)
+          "
+            echo "::endgroup::"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
