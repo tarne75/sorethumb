@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.25,<2"]
 build-backend = "hatchling.build"
 
 [project]
@@ -45,22 +45,37 @@ dependencies = [
     "numpy>=1.26.0",
     "scikit-learn>=1.4.0",
     "scipy>=1.12.0",
-    "shap>=0.45.0",
-    "numba>=0.67.0",
-    "pandas>=2.0.0",
-    "matplotlib>=3.8.0",
     "pydantic>=2.5.0",
     "pydantic-settings>=2.2.0",
     "typer>=0.9.0",
     "rich>=13.0.0",
     "httpx>=0.27.0",
     "joblib>=1.3.0",
-    "psutil>=5.9.0",
 ]
 
 [project.optional-dependencies]
+# TreeSHAP/KernelSHAP explanations (explain/shap_tree.py, explain/gradient.py's
+# kernel_shap_attributions). Without this extra, both gracefully fall back to
+# the pure-numpy finite-difference gradient method with a FallbackAttributionWarning
+# instead of raising -- see those modules' ImportError handling.
+explain = [
+    "shap>=0.45.0",
+    # Pinned explicitly (not just a transitive shap dependency): an
+    # unconstrained resolution has historically picked a numba version too
+    # old to support the newer Python versions this project supports.
+    "numba>=0.67.0",
+]
+# HTML report trend charts (report/charts.py). Not required for report
+# rendering itself (report/html.py has no matplotlib dependency) -- only for
+# render_trend_chart, which is not yet wired into the default report.
+report = [
+    "matplotlib>=3.8.0",
+]
+# The evaluation/benchmark harnesses (evaluate/benchmark.py's real-dataset
+# suite, evaluate/pipeline_benchmark.py's sklearn-baseline comparison rows).
 benchmark = [
     "datasets>=2.0.0",
+    "pandas>=2.0.0",
 ]
 dev = [
     "pytest>=9.0.0",
@@ -70,7 +85,6 @@ dev = [
     "mypy>=2.0.0",
     "pre-commit>=4.0.0",
     "pandas-stubs>=2.0.0",
-    "types-psutil>=5.9.0",
 ]
 
 [project.scripts]

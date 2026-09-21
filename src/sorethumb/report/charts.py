@@ -1,19 +1,16 @@
 """Trend chart rendering.
 
-matplotlib is forced to the non-interactive Agg backend at import time.
-All rendering is headless; nothing is displayed to a screen.
+matplotlib (the ``report`` extra, not a core dependency) is imported lazily,
+inside ``render_trend_chart`` -- so importing this module never requires it,
+only actually rendering a chart does. Forced to the non-interactive Agg
+backend before pyplot is imported. All rendering is headless; nothing is
+displayed to a screen.
 """
 
 from __future__ import annotations
 
 import base64
 import io
-
-import matplotlib
-
-matplotlib.use("Agg")  # must be set before pyplot is imported
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
 
 _WINDOW_ALPHAS = {1: 0.10, 7: 0.13, 14: 0.16, 28: 0.20}
 _TOTAL_COLOR = "#1a1a2e"
@@ -54,6 +51,12 @@ def render_trend_chart(
     Base64-encoded PNG string (no ``data:image/png;base64,`` prefix).
 
     """
+    import matplotlib  # noqa: PLC0415
+
+    matplotlib.use("Agg")  # must be set before pyplot is imported
+    import matplotlib.pyplot as plt  # noqa: PLC0415
+    import matplotlib.ticker as mticker  # noqa: PLC0415
+
     cal_breaks = cal_break_labels or set()
     non_business = non_business_labels or set()
 

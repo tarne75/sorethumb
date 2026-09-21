@@ -3,7 +3,10 @@
 Uses shap.TreeExplainer on the fitted sklearn IsolationForest. The known failure
 where a tree collapses to a single root node causes shap to index past the end of
 the node array; we catch that, fall back to the gradient method, and emit
-FallbackAttributionWarning — the result tag becomes "heuristic".
+FallbackAttributionWarning — the result tag becomes "heuristic". The same
+fallback applies when shap itself is not installed (it lives in the optional
+``explain`` extra, not a core dependency) -- explanations degrade to the
+pure-numpy gradient method rather than the run failing.
 
 The explainer is constructed with check_additivity=False because IsolationForest's
 score_samples does not equal the SHAP sum of its base value and contributions —
@@ -61,9 +64,9 @@ def tree_shap_attributions(
         unverified — not "exact"), "heuristic" after fallback.
 
     """
-    import shap  # noqa: PLC0415
-
     try:
+        import shap  # noqa: PLC0415
+
         explainer = shap.TreeExplainer(detector._model)  # noqa: SLF001
         # check_additivity=False because IF path-length scores are not strictly additive
         shap_values = explainer.shap_values(X, check_additivity=False)
@@ -71,6 +74,16 @@ def tree_shap_attributions(
         # Negate so positive attribution means more anomalous (consistent with calibrated score direction)
         attributions = -np.asarray(shap_values, dtype=np.float64)
         return attributions, "model_specific"
+
+    except ImportError as exc:
+        warnings.warn(
+            f"shap is not installed; TreeSHAP attributions for group {group_name!r} are "
+            "unavailable. Falling back to gradient attributions (heuristic). "
+            "Install with: pip install 'sorethumb[explain]'.",
+            FallbackAttributionWarning,
+            stacklevel=2,
+        )
+        logger.warning("TreeSHAP unavailable for group %r (shap not installed): %s", group_name, exc)
 
     except (IndexError, ValueError, RuntimeError) as exc:
         warnings.warn(

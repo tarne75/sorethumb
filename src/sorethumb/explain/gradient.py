@@ -19,9 +19,12 @@ We negate the finite-difference gradient so positive attribution means
 from __future__ import annotations
 
 import logging
+import warnings
 from typing import Any
 
 import numpy as np
+
+from sorethumb.errors import FallbackAttributionWarning
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +109,10 @@ def kernel_shap_attributions(
     """KernelSHAP attributions using a k-means summary background.
 
     Much slower than gradient or TreeSHAP; the tag stays "heuristic".
-    Only called when explain.kernel_shap = True.
+    Only called when explain.kernel_shap = True. Falls back to the plain
+    finite-difference gradient method (same "heuristic" tag either way, so
+    the caller sees no difference) when shap is not installed -- it lives in
+    the optional ``explain`` extra, not a core dependency.
 
     Parameters
     ----------
@@ -120,7 +126,17 @@ def kernel_shap_attributions(
         Rows beyond this cap are silently skipped.
 
     """
-    import shap  # noqa: PLC0415
+    try:
+        import shap  # noqa: PLC0415
+    except ImportError as exc:
+        warnings.warn(
+            "shap is not installed; KernelSHAP attributions are unavailable. "
+            "Falling back to gradient attributions. Install with: pip install 'sorethumb[explain]'.",
+            FallbackAttributionWarning,
+            stacklevel=2,
+        )
+        logger.warning("KernelSHAP unavailable (shap not installed): %s", exc)
+        return gradient_attributions(detector, X, max_rows=max_rows)
 
     if X.shape[0] > max_rows:
         logger.warning("kernel_shap_attributions: capping %d rows to max_rows=%d.", X.shape[0], max_rows)

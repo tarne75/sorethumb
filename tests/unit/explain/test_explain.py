@@ -139,6 +139,28 @@ def test_kernel_shap_attributions_row_cap():
     assert attrs.shape[0] == 10
 
 
+def test_kernel_shap_falls_back_to_gradient_when_shap_not_installed(monkeypatch):
+    """shap lives in the optional `explain` extra (P3-3); explicitly opting
+    into explain.kernel_shap without it installed must still degrade
+    gracefully to the plain gradient method, never raise."""
+    import sys
+
+    from sorethumb.explain.gradient import kernel_shap_attributions
+
+    det, X = _fit_if(n=30, d=4, seed=0)
+    monkeypatch.setitem(sys.modules, "shap", None)
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        attrs, tag = kernel_shap_attributions(det, X, background_k=5, max_rows=5000)
+
+    assert tag == "heuristic"
+    assert attrs.shape == X.shape
+    fallback_warnings = [x for x in w if issubclass(x.category, FallbackAttributionWarning)]
+    assert len(fallback_warnings) == 1
+    assert "shap is not installed" in str(fallback_warnings[0].message)
+
+
 # ---------------------------------------------------------------------------
 # centroid_attributions
 # ---------------------------------------------------------------------------
@@ -215,6 +237,27 @@ def test_tree_shap_fallback_on_single_node(monkeypatch):
     assert tag == "heuristic"
     assert any(issubclass(x.category, FallbackAttributionWarning) for x in w)
     assert attrs.shape == (10, 4)
+
+
+def test_tree_shap_falls_back_gracefully_when_shap_not_installed(monkeypatch):
+    """shap lives in the optional `explain` extra (P3-3), not a core
+    dependency -- without it, TreeSHAP must degrade to the gradient method
+    with a clear warning, never raise."""
+    import sys
+
+    det, X = _fit_if(n=100)
+    monkeypatch.setitem(sys.modules, "shap", None)  # makes `import shap` raise ImportError
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        attrs, tag = tree_shap_attributions(det, X[:10], group_name="test_group")
+
+    assert tag == "heuristic"
+    assert attrs.shape == (10, 4)
+    fallback_warnings = [x for x in w if issubclass(x.category, FallbackAttributionWarning)]
+    assert len(fallback_warnings) == 1
+    assert "shap is not installed" in str(fallback_warnings[0].message)
+    assert "pip install 'sorethumb[explain]'" in str(fallback_warnings[0].message)
 
 
 def test_tree_shap_outliers_get_higher_attributions():

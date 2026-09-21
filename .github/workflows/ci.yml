@@ -11,14 +11,22 @@ on:
     - cron: "0 6 * * 1"
   workflow_dispatch: {}
 
+# Every astral-sh/setup-uv@<sha> reference below is pinned to an exact commit
+# (bec219d24cd3e171d82865faccec33120bb574f4 == the v10.1.0 tag), not a
+# floating major-version tag, for reproducibility -- see P3-3 in
+# prompts/pre-release-plan.md. `uses:` can't reference `env:`/expressions, so
+# the SHA is repeated per job rather than centralised.
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv sync --all-extras
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - name: Verify uv.lock is up to date with pyproject.toml
+        run: uv lock --check
+      - run: uv sync --all-extras --frozen
       - run: uv run ruff check src/ tests/
       - run: uv run ruff format --check src/ tests/
       - run: uv run mypy src/
@@ -40,12 +48,11 @@ jobs:
         python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: ${{ matrix.python }}
-      - run: uv sync --all-extras
-      - name: Install shap (Python 3.12 workaround — uv pulls incompatible numba)
-        run: uv pip install "shap>=0.45"
+      - run: uv lock --check
+      - run: uv sync --all-extras --frozen
       - run: uv run pytest -m "unit or contract"
 
   # Required PR lane: local integration tests (real workspace, SQLite,
@@ -59,11 +66,11 @@ jobs:
       HYPOTHESIS_PROFILE: ci
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: "3.12"
-      - run: uv sync --all-extras
-      - run: uv pip install "shap>=0.45"
+      - run: uv lock --check
+      - run: uv sync --all-extras --frozen
       - run: uv run pytest -m integration
 
   # Required PR lane: bounded Hypothesis property tests.
@@ -74,10 +81,11 @@ jobs:
       HYPOTHESIS_PROFILE: ci
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: "3.12"
-      - run: uv sync --all-extras
+      - run: uv lock --check
+      - run: uv sync --all-extras --frozen
       - run: uv run pytest -m property
 
   # Required PR lane: repository/docs consistency checks.
@@ -86,10 +94,11 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: "3.12"
-      - run: uv sync --all-extras
+      - run: uv lock --check
+      - run: uv sync --all-extras --frozen
       - run: uv run pytest -m repo_check
 
   # Required PR lane: one tolerance-banded benchmark smoke case that catches
@@ -102,11 +111,11 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: "3.12"
-      - run: uv sync --all-extras
-      - run: uv pip install "shap>=0.45"
+      - run: uv lock --check
+      - run: uv sync --all-extras --frozen
       - run: uv run pytest tests/benchmark/test_accuracy_floors.py -m benchmark
 
   # Informational overall branch coverage + required >=85% diff coverage on
@@ -122,11 +131,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: "3.12"
-      - run: uv sync --all-extras
-      - run: uv pip install "shap>=0.45"
+      - run: uv lock --check
+      - run: uv sync --all-extras --frozen
       - name: Run behavioural lanes with branch coverage (informational)
         run: |
           uv run pytest \
@@ -146,16 +155,20 @@ jobs:
             --compare-branch=origin/${{ github.base_ref }} \
             --fail-under=85
 
-  # Required PR job: build, twine check, clean-wheel install smoke.
+  # Required PR job: build, twine check, clean-wheel install smoke for core
+  # and every advertised extra (P3-3: "clean installs for core and each
+  # advertised extra").
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - name: Verify uv.lock is up to date with pyproject.toml
+        run: uv lock --check
       - name: Build sdist and wheel
         run: uv build
       - name: Check distribution metadata
@@ -164,13 +177,46 @@ jobs:
         run: |
           unzip -l dist/*.whl | grep -q 'sorethumb/py.typed'
           unzip -l dist/*.whl | grep -q 'sorethumb/store/migrations/001_initial.sql'
-      - name: Install the wheel into a clean venv and smoke-test
+      - name: Install the wheel into a clean venv (core only) and smoke-test
         run: |
-          python -m venv /tmp/smoke
-          /tmp/smoke/bin/pip install --upgrade pip
-          /tmp/smoke/bin/pip install dist/*.whl
-          /tmp/smoke/bin/sorethumb --version
-          /tmp/smoke/bin/python -c "import sorethumb; from sorethumb import Config, SourceConfig, run_detection; print('import OK', sorethumb.__version__)"
+          python -m venv /tmp/smoke-core
+          /tmp/smoke-core/bin/pip install --upgrade pip
+          /tmp/smoke-core/bin/pip install dist/*.whl
+          /tmp/smoke-core/bin/sorethumb --version
+          /tmp/smoke-core/bin/python -c "
+          import sorethumb
+          from sorethumb import Config, SourceConfig, run_detection
+          # explain/report/benchmark modules must import fine with no optional
+          # extra installed -- every shap/matplotlib/pandas/datasets import in
+          # them is lazy (function-level), not at module load time.
+          import sorethumb.explain.shap_tree
+          import sorethumb.explain.gradient
+          import sorethumb.report.charts
+          print('import OK', sorethumb.__version__)
+          "
+      - name: Install each advertised extra into its own clean venv and smoke-test
+        run: |
+          set -e
+          whl="$(ls dist/*.whl)"
+          for extra in explain report benchmark dev; do
+            case "$extra" in
+              explain)   smoke_import="import shap, numba" ;;
+              report)    smoke_import="import matplotlib" ;;
+              benchmark) smoke_import="import datasets, pandas" ;;
+              dev)       smoke_import="import pytest, hypothesis, ruff, mypy" ;;
+            esac
+            echo "::group::extra=$extra"
+            venv="/tmp/smoke-$extra"
+            python -m venv "$venv"
+            "$venv/bin/pip" install --upgrade pip
+            "$venv/bin/pip" install "${whl}[${extra}]"
+            "$venv/bin/python" -c "
+          import sorethumb
+          ${smoke_import}  # noqa: F401
+          print('import OK ($extra)', sorethumb.__version__)
+          "
+            echo "::endgroup::"
+          done
 
   # Network/external-dataset validation: manual or nightly only, never on a
   # PR push. Executes every fenced code block in README.md; the Python
@@ -181,8 +227,9 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv sync --all-extras
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - run: uv lock --check
+      - run: uv sync --all-extras --frozen
       - run: uv run python docs/check_readme_snippets.py
 
   # Full accuracy/slow/network suite plus a larger Hypothesis profile, on a
@@ -196,9 +243,9 @@ jobs:
       HYPOTHESIS_PROFILE: nightly
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: "3.12"
-      - run: uv sync --all-extras
-      - run: uv pip install "shap>=0.45"
+      - run: uv lock --check
+      - run: uv sync --all-extras --frozen
       - run: uv run pytest -m "benchmark or slow or network or property" --tb=short

@@ -10,21 +10,39 @@ cd sorethumb
 # 2. Install uv (if not already installed)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 3. Create the virtualenv and install all dependencies
-uv sync --all-extras
+# 3. Create the virtualenv and install every extra (--frozen: use the
+#    committed uv.lock as-is, matching what CI installs)
+uv sync --all-extras --frozen
 
-# 4. Install shap separately (Python 3.12 workaround — uv pulls an incompatible numba)
-.venv/bin/pip install "shap>=0.45"
-
-# 5. Install pre-commit hooks
+# 4. Install pre-commit hooks
 uv run pre-commit install
 
-# 6. Verify everything passes
+# 5. Verify everything passes
 uv run ruff check src/ tests/
 uv run ruff format --check src/ tests/
 uv run mypy src/
 uv run pytest -m "not integration and not benchmark"
 ```
+
+If you changed `pyproject.toml`'s dependencies, run `uv lock` to update
+`uv.lock` and commit both together — CI runs `uv lock --check` and will fail
+a PR where they've drifted apart.
+
+## Optional extras
+
+The mandatory install (`pip install sorethumb` / `uv sync`) is deliberately
+minimal. Everything below is opt-in, matched to the feature it enables:
+
+| Extra | Adds | Enables |
+|---|---|---|
+| `explain` | shap, numba | TreeSHAP / KernelSHAP explanations. Without it, explanations fall back to the pure-numpy gradient method with a warning — the run itself never fails. |
+| `report` | matplotlib | Trend charts in the HTML report. |
+| `benchmark` | datasets, pandas | `sorethumb benchmark` (both the real-dataset and full-pipeline-scenario suites). |
+| `dev` | pytest, ruff, mypy, pre-commit, hypothesis, ... | Everything needed to run the test suite and quality checks in this repo. |
+
+`uv sync --all-extras --frozen` installs all four, which is what you want for
+contributing. A production install that only ever calls `run_detection`
+without SHAP explanations can skip straight to core: `pip install sorethumb`.
 
 ## Running specific test groups
 
@@ -41,18 +59,6 @@ uv run pytest -m benchmark
 # With coverage
 uv run pytest --cov=sorethumb --cov-report=term-missing
 ```
-
-## SHAP + Python 3.12
-
-`uv add shap` fails because uv resolves `numba==0.53.1` which does not support
-Python 3.12. The workaround is to install shap after `uv sync`:
-
-```bash
-.venv/bin/pip install "shap>=0.45"
-```
-
-This resolves `numba>=0.67.0` and `llvmlite>=0.49.0` which both support Python 3.12.
-The `pyproject.toml` pins `numba>=0.67` to prevent uv from pulling an incompatible version.
 
 ## Adding a detector
 

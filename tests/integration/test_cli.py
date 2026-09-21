@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import tomllib
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -556,39 +556,46 @@ enabled = false
     return path
 
 
-def _recent_day_labels(n: int) -> list[str]:
-    """The ``n`` day labels a cold-start backfill will target, right now.
+def _recent_day_labels(n: int) -> tuple[list[str], int]:
+    """The ``n`` business-day labels a cold-start backfill will target right
+    now, plus the ``bootstrap_periods``/``lookback_periods`` calendar-day
+    span that makes ``resolve_backfill_range``'s cold-start branch land on
+    exactly those labels.
 
-    Computed the exact same way ``resolve_backfill_range``'s cold-start
-    branch does (roll "today" to the previous business day, then step back
-    by calendar days from there) rather than naive ``today - k`` arithmetic.
-    With ``history.roll_non_business = true`` (used by every test in this
-    module), those two are only the same Monday-through-Friday; the naive
-    version silently drifts by up to two days whenever the test happens to
-    run on a Saturday or Sunday, since the anchor itself gets rolled back
-    before the window is computed -- see resolve_backfill_range's docstring.
-    Matching that logic here, instead of duplicating an assumption about
-    which days a "recent" window means, is what keeps this correct on every
-    day of the week.
+    ``resolve_backfill_range``'s cold-start branch walks back *calendar*
+    days from the reference, then drops Saturday/Sunday labels via
+    ``filter_non_business`` (see its docstring) -- so a fixed
+    ``bootstrap_periods=n`` only ever produces exactly ``n`` labels when the
+    trailing window happens not to cross a weekend, and silently produces
+    fewer on the days it does. Returning the exact calendar-day span between
+    the earliest of the n business-day labels and "yesterday" lets the
+    caller configure ``bootstrap``/``lookback`` to match precisely, so the
+    test is correct on every day of the week rather than only the days it
+    happened to be run on.
     """
-    from sorethumb.history.periods import period_range, resolve_period, step_back
+    from sorethumb.history.periods import filter_non_business, period_range, resolve_period, step_back
 
     ref = datetime.now(UTC)
     _, _, ref_label = resolve_period(ref, "day", roll_non_business=True)
     end_label = step_back(ref_label, "day", 1)
-    start_label = step_back(ref_label, "day", n)
-    return period_range(start_label, end_label, "day")
+    # Generous margin: at most 2 non-business days per 7-calendar-day span.
+    start_label = step_back(ref_label, "day", n * 2 + 3)
+    candidates = period_range(start_label, end_label, "day")
+    business_labels = filter_non_business(candidates, "day", roll_non_business=True)
+    labels = business_labels[-n:]
+    span_days = (date.fromisoformat(end_label) - date.fromisoformat(labels[0])).days + 1
+    return labels, span_days
 
 
 @pytest.fixture
 def timeseries_workspace(tmp_path: Path):
     """(toml_path, workdir, day_labels) for a 3-day time-series dataset."""
-    labels = _recent_day_labels(3)
+    labels, span_days = _recent_day_labels(3)
     parquet = tmp_path / "data" / "ts.parquet"
     _write_timeseries_parquet(parquet, labels)
     workdir = tmp_path / "ws"
     toml_path = tmp_path / "sorethumb.toml"
-    _write_timeseries_toml(toml_path, parquet, workdir, bootstrap=3)
+    _write_timeseries_toml(toml_path, parquet, workdir, bootstrap=span_days)
     return toml_path, workdir, labels
 
 
