@@ -20,10 +20,12 @@ def test_version_attribute() -> None:
     """__version__ is derived from installed distribution metadata (P0-10),
     not a second hard-coded copy of pyproject.toml's version that can drift
     from it -- so this asserts equality with that metadata, never a literal
-    version string."""
+    version string. Looked up by the PyPI distribution name "sorethumb-ml",
+    which differs from this import package's own name "sorethumb" (see
+    prompts/release-launch-plan.md Item 1)."""
     import importlib.metadata
 
-    assert sorethumb.__version__ == importlib.metadata.version("sorethumb")
+    assert sorethumb.__version__ == importlib.metadata.version("sorethumb-ml")
 
 
 def test_strict_mode_warning_becomes_error() -> None:

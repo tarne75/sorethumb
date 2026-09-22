@@ -131,7 +131,7 @@ def kernel_shap_attributions(
     except ImportError as exc:
         warnings.warn(
             "shap is not installed; KernelSHAP attributions are unavailable. "
-            "Falling back to gradient attributions. Install with: pip install 'sorethumb[explain]'.",
+            "Falling back to gradient attributions. Install with: pip install 'sorethumb-ml[explain]'.",
             FallbackAttributionWarning,
             stacklevel=2,
         )

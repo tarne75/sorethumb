@@ -3,7 +3,11 @@ requires = ["hatchling>=1.25,<2"]
 build-backend = "hatchling.build"
 
 [project]
-name = "sorethumb"
+# PyPI distribution name only -- "sorethumb" was taken. The import name
+# (`import sorethumb`), CLI command, and everything else stay unchanged;
+# see prompts/release-launch-plan.md Item 1 for the full rationale and the
+# exact list of runtime/doc references that read this name specifically.
+name = "sorethumb-ml"
 version = "0.1.0"
 description = "Unsupervised anomaly detection for tabular data"
 readme = "README.md"

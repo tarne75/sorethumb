@@ -1748,7 +1748,7 @@ def benchmark(
         except ImportError:
             err_console.print(
                 "[red]The benchmark extra is not installed; skipping the legacy suite.[/red]\n"
-                "Install with: uv pip install 'sorethumb[benchmark]', or pass --no-legacy."
+                "Install with: uv pip install 'sorethumb-ml[benchmark]', or pass --no-legacy."
             )
         else:
             from sorethumb.evaluate.benchmark import (  # noqa: PLC0415

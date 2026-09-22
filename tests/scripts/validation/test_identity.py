@@ -23,9 +23,9 @@ def test_code_revision_unknown_outside_a_git_checkout(tmp_path):
 
 def test_dependency_versions_includes_sorethumb_and_numpy():
     deps = dependency_versions()
-    assert "sorethumb" in deps
+    assert "sorethumb-ml" in deps  # PyPI distribution name, not the "sorethumb" import name
     assert "numpy" in deps
-    assert deps["sorethumb"] != "unknown"
+    assert deps["sorethumb-ml"] != "unknown"
 
 
 def test_dependency_versions_unknown_package_reports_unknown():

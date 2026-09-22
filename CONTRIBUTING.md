@@ -34,7 +34,7 @@ a PR where they've drifted apart.
 
 ## Optional extras
 
-The mandatory install (`pip install sorethumb` / `uv sync`) is deliberately
+The mandatory install (`pip install sorethumb-ml` / `uv sync`) is deliberately
 minimal. Everything below is opt-in, matched to the feature it enables:
 
 | Extra | Adds | Enables |
@@ -46,7 +46,7 @@ minimal. Everything below is opt-in, matched to the feature it enables:
 
 `uv sync --all-extras --frozen` installs all four, which is what you want for
 contributing. A production install that only ever calls `run_detection`
-without SHAP explanations can skip straight to core: `pip install sorethumb`.
+without SHAP explanations can skip straight to core: `pip install sorethumb-ml`.
 
 ## Running specific test groups
 

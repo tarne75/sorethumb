@@ -49,7 +49,9 @@ logger = logging.getLogger(__name__)
 
 # Libraries whose version changes can silently change a pickled estimator's
 # scores. Recorded at fit time and checked when the model is reloaded.
-_TRACKED_LIBRARIES = ("sorethumb", "scikit-learn", "numpy", "scipy", "joblib")
+# "sorethumb-ml" is this package's PyPI *distribution* name, not its import
+# name -- importlib.metadata looks packages up by the former.
+_TRACKED_LIBRARIES = ("sorethumb-ml", "scikit-learn", "numpy", "scipy", "joblib")
 
 
 def plan_digest(plan_json: str) -> str:

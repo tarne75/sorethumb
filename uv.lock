@@ -2930,7 +2930,7 @@ wheels = [
 ]
 
 [[package]]
-name = "sorethumb"
+name = "sorethumb-ml"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

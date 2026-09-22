@@ -257,7 +257,7 @@ def test_tree_shap_falls_back_gracefully_when_shap_not_installed(monkeypatch):
     fallback_warnings = [x for x in w if issubclass(x.category, FallbackAttributionWarning)]
     assert len(fallback_warnings) == 1
     assert "shap is not installed" in str(fallback_warnings[0].message)
-    assert "pip install 'sorethumb[explain]'" in str(fallback_warnings[0].message)
+    assert "pip install 'sorethumb-ml[explain]'" in str(fallback_warnings[0].message)
 
 
 def test_tree_shap_outliers_get_higher_attributions():
