@@ -1,10 +1,19 @@
 name: Publish
 
-# Publishes to PyPI via trusted publishing (OIDC — no API token stored).
-# One-time setup on PyPI: add a trusted publisher for this project with
-#   owner = tarne75, repository = sorethumb,
-#   workflow = publish.yml, environment = pypi
-# and create a `pypi` deployment environment in the repo settings.
+# Publishes to PyPI using an API token (secrets.PYPI_TOKEN), not OIDC
+# trusted publishing. Trusted publishing needs the PyPI project to already
+# exist to configure a trusted publisher against it, which is impossible
+# for this project's first-ever publish -- token auth sidesteps that
+# chicken-and-egg problem. See prompts/release-launch-plan.md Item 2.
+# PYPI_TOKEN must be account-scoped (not project-scoped) for this first
+# publish to succeed, since the sorethumb-ml project doesn't exist on PyPI
+# yet; a project-scoped token can be rotated in afterward for tighter
+# ongoing security once the project exists.
+#
+# The `pypi` GitHub Environment referenced below has a required-reviewers
+# protection rule: even after a tag passes the full validation suite, the
+# run pauses and waits for an explicit approval click before anything
+# reaches PyPI.
 #
 # P0-9: publication is gated on the exact tagged commit -- not main's latest,
 # not a past ci.yml run -- passing the complete release-validation suite
@@ -58,10 +67,9 @@ jobs:
     timeout-minutes: 10
     environment:
       name: pypi
-      url: https://pypi.org/p/sorethumb
+      url: https://pypi.org/p/sorethumb-ml
     permissions:
       contents: read
-      id-token: write # trusted publishing
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -96,3 +104,5 @@ jobs:
             exit 1
           fi
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          password: ${{ secrets.PYPI_TOKEN }}
