@@ -172,8 +172,13 @@ uv build
 uvx twine check --strict dist/*
 
 _step "Package-data assertion"
-unzip -l dist/*.whl | grep -q 'sorethumb/py.typed' || _fail "py.typed missing from wheel"
-unzip -l dist/*.whl | grep -q 'sorethumb/store/migrations/001_initial.sql' || _fail "migrations missing from wheel"
+# `grep -q` exits the instant it finds a match, which can SIGPIPE unzip if
+# it's still writing -- with pipefail (set above), that signal becomes the
+# pipeline's reported exit status even though grep DID find the match,
+# spuriously reporting "missing" for content that's actually present. Not
+# using -q (grep drains all of unzip's output before exiting) avoids it.
+unzip -l dist/*.whl | grep 'sorethumb/py.typed' >/dev/null || _fail "py.typed missing from wheel"
+unzip -l dist/*.whl | grep 'sorethumb/store/migrations/001_initial.sql' >/dev/null || _fail "migrations missing from wheel"
 _ok "py.typed and migrations present in wheel"
 
 _step "Clean-venv install smoke test (core, then each extra)"

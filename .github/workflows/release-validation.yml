@@ -124,9 +124,17 @@ jobs:
       - name: Check distribution metadata
         run: uvx twine check dist/*
       - name: Assert package data is shipped in the wheel
+        # `grep -q` exits the instant it finds a match, which can SIGPIPE
+        # unzip if it's still writing -- GitHub Actions runs bash with
+        # pipefail on by default, so that signal becomes the step's
+        # reported exit status even though grep DID find the match,
+        # spuriously failing the build for content that's actually
+        # present. Not using -q (grep drains all of unzip's output before
+        # exiting) avoids the race. Found via scripts/release.sh hitting
+        # this for real -- see release-launch-plan.md.
         run: |
-          unzip -l dist/*.whl | grep -q 'sorethumb/py.typed'
-          unzip -l dist/*.whl | grep -q 'sorethumb/store/migrations/001_initial.sql'
+          unzip -l dist/*.whl | grep 'sorethumb/py.typed' >/dev/null
+          unzip -l dist/*.whl | grep 'sorethumb/store/migrations/001_initial.sql' >/dev/null
       - name: Install the wheel into a clean venv (core only) and smoke-test
         run: |
           python -m venv /tmp/smoke-core
