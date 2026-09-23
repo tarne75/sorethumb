@@ -230,6 +230,22 @@ diff against.
 
 ### Fixed
 
+- Generated `sorethumb.toml` files (`sorethumb init`, `sorethumb run` writing
+  a starter config, `sorethumb config show --output`) could come out
+  syntactically invalid TOML. Required-field values and detector `params`
+  were interpolated by hand: a Windows path (`C:\Users\...`) broke on the
+  unescaped backslashes, an embedded quote or control character broke the
+  surrounding string literal, and a nested `extra_params` dict was rendered
+  with `json.dumps`, which emits JSON object syntax (quoted keys, `:`
+  separators) rather than a valid TOML inline table. Replaced every
+  hand-built TOML literal in `cli.py` with a small dependency-free
+  serialiser (`sorethumb.io.toml_write`) that correctly escapes strings
+  (backslashes, quotes, control characters, arbitrary Unicode) and renders
+  lists and nested dicts as TOML arrays/inline tables. New unit tests cover
+  the serialiser directly; new contract tests round-trip a generated config
+  containing a Windows path, quotes/tabs/newlines, every registered
+  detector, and a non-empty nested `params.extra_params` through both
+  `tomllib` and `Config.model_validate`.
 - `sorethumb run --detectors` silently rewrote `sorethumb.toml`. When an
   existing config file was overridden with `--detectors`/`-d`, `run()` called
   `_write_minimal_toml`, which regenerates a full starter TOML from the

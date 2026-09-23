@@ -307,6 +307,8 @@ def _load_config(
 
 def _write_minimal_toml(path: Path, cfg: Config) -> None:
     """Write a full starter sorethumb.toml with required fields and detectors filled in."""
+    from sorethumb.io.toml_write import render_toml_key, render_toml_value  # noqa: PLC0415
+
     content = _generate_starter_toml()
 
     # Stamp the file as coming from `sorethumb run`, not `sorethumb init`
@@ -317,11 +319,11 @@ def _write_minimal_toml(path: Path, cfg: Config) -> None:
     # Fill in the two required fields that have no default
     content = content.replace(
         "# uri =  # required — no default",
-        f'uri = "{cfg.source.uri}"',
+        f"uri = {render_toml_value(cfg.source.uri)}",
     )
     content = content.replace(
         "# workdir =  # required — no default",
-        f'workdir = "{cfg.run.workdir}"',
+        f"workdir = {render_toml_value(str(cfg.run.workdir))}",
     )
     # Replace the entire [[detectors]] section with the actual configured detectors
     marker = "# Detectors run as an ensemble; add or remove [[detectors]] blocks freely."
@@ -330,13 +332,13 @@ def _write_minimal_toml(path: Path, cfg: Config) -> None:
     for det in cfg.detectors:
         det_lines.append("")
         det_lines.append("[[detectors]]")
-        det_lines.append(f'name = "{det.name}"')
+        det_lines.append(f"name = {render_toml_value(det.name)}")
         if not det.enabled:
             det_lines.append("enabled = false")
         if det.params:
             det_lines.append("[detectors.params]")
             for k, v in det.params.items():
-                det_lines.append(f"{k} = {json.dumps(v)}")
+                det_lines.append(f"{render_toml_key(k)} = {render_toml_value(v)}")
         if det.train_row_cap is not None:
             det_lines.append(f"train_row_cap = {det.train_row_cap}")
     det_lines.append("")
@@ -398,13 +400,12 @@ def _redact_config(config: Config) -> dict[str, Any]:
 
 def _render_toml_scalar(value: object) -> str | None:
     """Render a Python scalar as a TOML literal, or None if it has no literal form."""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, str):
-        return f'"{value}"'
-    if isinstance(value, (int, float)):
-        return str(value)
-    return None
+    from sorethumb.io.toml_write import render_toml_value  # noqa: PLC0415
+
+    try:
+        return render_toml_value(value)
+    except TypeError:
+        return None
 
 
 def _detector_params_block(det_name: str, description: str) -> list[str]:
@@ -488,26 +489,15 @@ def _generate_starter_toml() -> str:
         ScoringConfig,
         SourceConfig,
     )
+    from sorethumb.io.toml_write import render_toml_value  # noqa: PLC0415
 
     _MISSING = object()
 
     def _scalar(v: object) -> str | None:
-        if isinstance(v, bool):
-            return "true" if v else "false"
-        if isinstance(v, str):
-            return f'"{v}"'
-        if isinstance(v, (int, float)):
-            return str(v)
-        if isinstance(v, list):
-            if not v:
-                return "[]"
-            rendered = [_scalar(x) for x in v]
-            if any(r is None for r in rendered):
-                return None
-            return "[" + ", ".join(str(r) for r in rendered) + "]"
-        if isinstance(v, dict) and not v:
-            return "{}"
-        return None
+        try:
+            return render_toml_value(v)
+        except TypeError:
+            return None
 
     def _field_block(name: str, fi: FieldInfo, override: object = _MISSING) -> list[str]:
         lines: list[str] = []
@@ -588,6 +578,8 @@ def init(
         err_console.print(f"[yellow]sorethumb.toml already exists:[/yellow] {toml_path}")
         raise typer.Exit(0)
 
+    from sorethumb.io.toml_write import render_toml_value  # noqa: PLC0415
+
     path.mkdir(parents=True, exist_ok=True)
     ws_dir = path / _DEFAULT_WORKDIR
     # Fill in the one field _generate_starter_toml() leaves as "required — no
@@ -596,7 +588,7 @@ def init(
     # edit before it can be used.
     content = _generate_starter_toml().replace(
         "# workdir =  # required — no default",
-        f'workdir = "{ws_dir}"',
+        f"workdir = {render_toml_value(str(ws_dir))}",
     )
     toml_path.write_text(content, encoding="utf-8")
 
