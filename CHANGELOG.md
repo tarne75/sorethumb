@@ -202,6 +202,18 @@ diff against.
   pass `--workdir .` explicitly to keep using it. `sorethumb init` now creates
   this same directory (previously a mismatched, hidden `.sorethumb_workspace`)
   and fills in the starter config's `run.workdir` to match it.
+- The PyPI distribution name is `sorethumb-ml`, not `sorethumb` — the
+  latter is owned by an unrelated package. Only the published/installed
+  name changes (`pip install sorethumb-ml`); the import package
+  (`import sorethumb`), the CLI command (`sorethumb run` etc.), the GitHub
+  repo, and every on-disk convention (`sorethumb.toml`,
+  `sorethumb-workspace/`, `sorethumb.db`) are unaffected, the same way
+  `pip install beautifulsoup4` gives you `import bs4`. Publication also
+  moved from OIDC trusted publishing to a PyPI API token
+  (`secrets.PYPI_TOKEN`), since trusted publishing needs the PyPI project
+  to already exist to configure a trusted publisher against it — impossible
+  for this project's first-ever publish; the `pypi` GitHub Environment now
+  also requires a manual reviewer approval before any publish reaches PyPI.
 
 ### Removed
 
@@ -653,6 +665,11 @@ diff against.
   id. Migration 005 seeds `dataset_snapshot` from existing `dataset` rows so
   their snapshot history is preserved. Set `source.dataset_id` explicitly to pin
   identity going forward.
+- `pip install sorethumb` installs an unrelated package, not this one —
+  install `pip install sorethumb-ml` instead (see Changed). No prior
+  release of this project ever shipped under the `sorethumb` PyPI name to
+  migrate away from; `import sorethumb` and the `sorethumb` CLI command are
+  unaffected.
 
 ### Docs
 
