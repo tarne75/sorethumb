@@ -1647,6 +1647,44 @@ def workspace_migrate(
     console.print("[green]Migrations up to date.[/green]")
 
 
+# Minimum path segments after the filesystem/drive anchor a reset target
+# must have. Below this, a path is too shallow to plausibly be a dedicated,
+# disposable workspace directory rather than an important top-level location
+# reached by a typo or a misconfigured workdir (e.g. "/Users", "/home").
+_MIN_RESET_DEPTH = 3
+
+
+def _guard_reset_target(ws_path: Path) -> None:
+    """Refuse `workspace reset` against a path that is almost certainly not a disposable workspace, regardless of --yes.
+
+    Applied *in addition to* -- never instead of -- verifying the target
+    actually opens as a Workspace: a marker file existing inside one of
+    these locations, however unlikely, would still not make deleting it
+    safe.
+    """
+    reasons: list[str] = []
+    if ws_path == Path(ws_path.anchor):
+        reasons.append("it is a filesystem/drive root")
+    if ws_path == Path.home().resolve():
+        reasons.append("it is your home directory")
+    if ws_path == Path.cwd().resolve():
+        reasons.append("it is the current working directory")
+    if (ws_path / ".git").exists():
+        reasons.append("it looks like a git repository root (contains .git)")
+    depth = len(ws_path.parts) - 1  # segments after the anchor
+    if depth < _MIN_RESET_DEPTH:
+        reasons.append(
+            f"it is only {depth} path segment(s) below the root (minimum "
+            f"{_MIN_RESET_DEPTH}) -- too shallow to plausibly be a dedicated "
+            "workspace directory"
+        )
+    if reasons:
+        err_console.print(f"[red]Refusing to reset {ws_path}:[/red]")
+        for reason in reasons:
+            err_console.print(f"  - {reason}")
+        raise typer.Exit(2)
+
+
 @workspace_app.command(name="reset")
 def workspace_reset(
     config: _CONFIG_OPT = None,
@@ -1662,13 +1700,27 @@ def workspace_reset(
     Requires interactive confirmation of the workspace path (or --yes for
     unattended use). Named explicitly so you know exactly what will be destroyed
     before it happens.
+
+    Refuses outright -- regardless of --yes -- unless the target actually
+    opens as a sorethumb workspace, and rejects a filesystem/drive root, your
+    home directory, the current working directory, a git repository root, or
+    a suspiciously shallow path (see _guard_reset_target).
     """
     _setup_logging(log_level or "INFO")
     cfg = _load_config(config, workdir=workdir, log_level=log_level)
     ws_path = Path(cfg.run.workdir).resolve()
 
+    _guard_reset_target(ws_path)
+
+    try:
+        with Workspace.open(ws_path):
+            pass
+    except SorethumbError as exc:
+        err_console.print(f"[red]Refusing to reset {ws_path}: not a sorethumb workspace ({exc})[/red]")
+        raise typer.Exit(2) from exc
+
+    console.print(f"[red bold]This will destroy:[/red bold] {ws_path}")
     if not yes:
-        console.print(f"[red bold]This will destroy:[/red bold] {ws_path}")
         console.print("Type the full workspace path to confirm (Ctrl-C to abort):")
         typed = input("> ").strip()
         if typed != str(ws_path):
@@ -1677,7 +1729,12 @@ def workspace_reset(
 
     import shutil  # noqa: PLC0415
 
-    shutil.rmtree(ws_path, ignore_errors=True)
+    try:
+        shutil.rmtree(ws_path)
+    except OSError as exc:
+        err_console.print(f"[red]Failed to fully delete {ws_path}:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
     console.print(f"[green]Workspace destroyed:[/green] {ws_path}")
 
 

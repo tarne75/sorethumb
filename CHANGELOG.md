@@ -646,6 +646,19 @@ diff against.
   "Honest limitations" entry and `SECURITY.md` section spell this out; the
   `score --from-run` CLI help/docstring and `docs/cli_reference.md` no
   longer imply the digest check makes a third-party workspace safe to load.
+- `sorethumb workspace reset` could delete unrelated data. It resolved
+  `run.workdir` to a path and ran `shutil.rmtree(path, ignore_errors=True)`
+  without ever verifying that path was actually a sorethumb workspace — a
+  typo, a bad unattended `--workdir`/config, or a resolved-symlink surprise
+  could point it at a home directory, a git repository root, or worse, and
+  `ignore_errors=True` meant a partial failure still reported success.
+  `reset` now refuses outright, regardless of `--yes`, unless the target
+  actually opens as a real workspace (has a `sorethumb.db` marker) — and
+  separately, always refuses a filesystem/drive root, the home directory,
+  the current working directory, a git repository root, or a suspiciously
+  shallow path, even if one of those happened to contain a marker file.
+  Deletion failures now propagate as a non-zero exit instead of being
+  silently swallowed.
 
 ### Compatibility
 

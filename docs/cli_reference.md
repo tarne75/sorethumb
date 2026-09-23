@@ -542,6 +542,14 @@ sorethumb workspace migrate
 logs. Requires interactive confirmation of the workspace path, or `--yes` for
 unattended use.
 
+Refuses outright, regardless of `--yes`, unless the target actually opens
+as a real sorethumb workspace (has a `sorethumb.db` marker) — and always
+refuses a filesystem/drive root, your home directory, the current working
+directory, a git repository root, or a suspiciously shallow path, even if
+one of those happened to contain a workspace marker. A deletion failure
+(e.g. a permissions error partway through) is reported and exits non-zero,
+never silently ignored.
+
 ```bash
 sorethumb workspace reset
 sorethumb workspace reset --yes   # skip confirmation (CI / scripted teardown)

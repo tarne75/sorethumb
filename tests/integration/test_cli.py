@@ -782,3 +782,71 @@ def test_workspace_reset_requires_confirmation(workspace):
     result = runner.invoke(app, ["workspace", "reset", "--config", str(toml_path), "--yes"])
     assert result.exit_code == 0
     assert not workdir.exists()
+
+
+def test_workspace_reset_rejects_a_directory_that_is_not_a_workspace(tmp_path: Path):
+    """P0-2: a directory with no sorethumb.db marker (never a real
+    Workspace) must be refused, not silently accepted and destroyed,
+    however it ended up as the resolved workdir."""
+    not_a_workspace = tmp_path / "not-a-workspace"
+    not_a_workspace.mkdir()
+    (not_a_workspace / "important.txt").write_text("do not delete me")
+    csv_path = tmp_path / "data" / "test.csv"
+    _write_csv(csv_path, n_rows=10)
+    toml_path = tmp_path / "sorethumb.toml"
+    _write_toml(toml_path, csv_path, not_a_workspace)
+
+    result = runner.invoke(app, ["workspace", "reset", "--config", str(toml_path), "--yes"])
+
+    assert result.exit_code != 0
+    assert not_a_workspace.exists()
+    assert (not_a_workspace / "important.txt").exists()
+
+
+def test_workspace_reset_deletion_failure_is_reported_not_swallowed(
+    workspace, monkeypatch: pytest.MonkeyPatch
+):
+    """P0-2: `shutil.rmtree(..., ignore_errors=True)` used to make a
+    partial/failed deletion look like a clean success (exit 0). A real
+    deletion failure must now propagate as a non-zero exit."""
+    _, toml_path, workdir = workspace
+    runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
+    assert workdir.exists()
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("simulated deletion failure")
+
+    monkeypatch.setattr("shutil.rmtree", _boom)
+
+    result = runner.invoke(app, ["workspace", "reset", "--config", str(toml_path), "--yes"])
+
+    assert result.exit_code != 0
+
+
+def test_workspace_reset_resolves_a_symlinked_workdir_before_deleting(
+    tmp_path: Path,
+) -> None:
+    """P0-2: `_guard_reset_target` and the deletion itself must act on the
+    *resolved* target, not the symlink -- a workdir configured as a symlink
+    to a real workspace must still delete the real directory (proving the
+    resolve-before-guard path-resolution edge case works), and must not
+    delete anything if the symlink instead points somewhere unsafe."""
+    real_ws_parent = tmp_path / "real" / "nested" / "location"
+    real_ws_parent.mkdir(parents=True)
+    real_ws = real_ws_parent / "ws"
+    csv_path = tmp_path / "data" / "test.csv"
+    _write_csv(csv_path, n_rows=10)
+    toml_for_run = tmp_path / "real-sorethumb.toml"
+    _write_toml(toml_for_run, csv_path, real_ws)
+    runner.invoke(app, ["run", "--config", str(toml_for_run), "--no-report"])
+    assert (real_ws / "sorethumb.db").exists()
+
+    link_ws = tmp_path / "link-to-ws"
+    link_ws.symlink_to(real_ws, target_is_directory=True)
+    toml_via_link = tmp_path / "link-sorethumb.toml"
+    _write_toml(toml_via_link, csv_path, link_ws)
+
+    result = runner.invoke(app, ["workspace", "reset", "--config", str(toml_via_link), "--yes"])
+
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+    assert not real_ws.exists()
