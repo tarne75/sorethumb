@@ -39,6 +39,16 @@ into. This is **not** a defence against DNS rebinding (the resolved address
 is not pinned for the actual connection) and does not sandbox the remote
 server in any other way; only fetch datasets from sources you trust.
 
+If `source.auth`/`source.auth_env_var` is configured, the resulting
+`Authorization` header is sent only to the exact origin (scheme, host, and
+effective port) `source.uri` names. A redirect to any other origin — a
+different host, a different port, or even a same-host scheme change — gets
+the request without it, so a compromised or malicious remote server cannot
+use a redirect to have your credential sent elsewhere. A redirect that
+would downgrade the connection from HTTPS to HTTP is refused outright, not
+just stripped of the credential, since that also removes transport
+security for the response body itself.
+
 `source.max_download_bytes` bounds both the declared `Content-Length` and
 the actual streamed size, so an unbounded or misconfigured response cannot
 exhaust disk space.

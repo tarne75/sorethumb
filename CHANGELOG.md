@@ -659,6 +659,20 @@ diff against.
   shallow path, even if one of those happened to contain a marker file.
   Deletion failures now propagate as a non-zero exit instead of being
   silently swallowed.
+- Authenticated HTTP(S) downloads (`source.auth`/`auth_env_var`) reused the
+  original `Authorization` header on every redirect hop unconditionally,
+  including a redirect to a different (but still "safe") public host, a
+  different port on the same host, or a same-host HTTPS -> HTTP downgrade
+  — a compromised or malicious remote server could redirect the fetcher
+  to disclose the credential to another origin, or to send it in
+  plaintext. `Authorization` is now sent only to the exact origin
+  (scheme, host, effective port) `source.uri` named; any redirect to a
+  different origin gets the request without it. Separately, any
+  HTTPS -> HTTP downgrade redirect is now refused outright — not merely
+  stripped of the credential — since it also drops transport security for
+  the response body itself, independent of whether auth is even
+  configured. The existing redirect-count cap and internal/cloud-metadata
+  host checks are unchanged.
 
 ### Compatibility
 

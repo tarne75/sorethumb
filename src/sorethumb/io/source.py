@@ -20,6 +20,15 @@ Download hardening
   or another internal/link-local target a malicious or compromised remote
   server redirects to. A same-host redirect (http -> https, a path change)
   is never blocked: the user already asked for that host explicitly.
+- An ``Authorization`` header (``source.auth``/``auth_env_var``) is only
+  ever sent to the exact origin (scheme, host, effective port) the
+  original request targeted -- any redirect to a *different* origin, even
+  a same-host scheme change, gets the request without it, so a bearer or
+  basic credential can never leak to another site a compromised or
+  malicious remote server redirects to. See ``_is_same_origin`` /
+  ``_strip_authorization``. Separately, an HTTPS -> HTTP downgrade at any
+  hop is refused outright (not just stripped of credentials), since it
+  silently drops transport security for the response body too.
 
 Redaction
 ---------
@@ -327,6 +336,36 @@ def _download_to(
                 ) from None
 
 
+def _effective_port(url: httpx.URL) -> int:
+    """Return the port a connection to *url* actually uses.
+
+    httpx already normalises an explicit default port (e.g. ``:443`` on
+    ``https://``) away to ``None``, so an explicit-vs-implicit default port
+    is never mistaken for a real difference.
+    """
+    if url.port is not None:
+        return url.port
+    return 443 if url.scheme == "https" else 80
+
+
+def _is_same_origin(a: httpx.URL, b: httpx.URL) -> bool:
+    """Return True if scheme, host, and effective port all match.
+
+    httpx already lower-cases both ``.scheme`` and ``.host``.
+    """
+    return a.scheme == b.scheme and a.host == b.host and _effective_port(a) == _effective_port(b)
+
+
+def _strip_authorization(headers: dict[str, str]) -> dict[str, str]:
+    """Drop any Authorization header, case-insensitively.
+
+    Used whenever a redirect moves to a different origin than the one the
+    caller configured, so a bearer/basic credential is never sent anywhere
+    but the exact (scheme, host, port) `source.uri` named.
+    """
+    return {k: v for k, v in headers.items() if k.lower() != "authorization"}
+
+
 def _download_once(
     client: httpx.Client, url: str, headers: dict[str, str], dest: Path, *, max_bytes: int
 ) -> None:
@@ -334,9 +373,18 @@ def _download_once(
 
     Follows redirects manually (host-checked, capped), then streams the
     final response to *dest* with a hard size ceiling.
+
+    Authorization is only ever sent to the exact origin (scheme, host,
+    effective port) the original request targeted -- a redirect to any
+    other origin gets the request without it, regardless of how "safe"
+    that other host's resolved address looks. An HTTPS -> HTTP downgrade
+    at any hop is refused outright, independent of whether credentials are
+    even configured, since it silently drops transport security for the
+    response body too, not just for an auth header.
     """
     request = client.build_request("GET", url, headers=headers)
     original_host = request.url.host
+    original_url = request.url
 
     for _hop in range(_MAX_REDIRECTS + 1):
         if request.url.host != original_host:
@@ -350,7 +398,17 @@ def _download_once(
                     raise SourceError(
                         f"HTTP {resp.status_code} redirect from '{url}' had no Location header."
                     )
-                request = client.build_request("GET", request.url.join(next_url), headers=headers)
+                target = request.url.join(next_url)
+                if request.url.scheme == "https" and target.scheme == "http":
+                    raise SourceError(
+                        f"Refusing HTTPS -> HTTP downgrade redirect while fetching "
+                        f"'{redact_source_uri(url)}' (from {request.url.scheme}://{request.url.host} "
+                        f"to {target.scheme}://{target.host})."
+                    )
+                next_headers = (
+                    headers if _is_same_origin(original_url, target) else _strip_authorization(headers)
+                )
+                request = client.build_request("GET", target, headers=next_headers)
                 continue
 
             if resp.status_code in _RETRYABLE_STATUS:

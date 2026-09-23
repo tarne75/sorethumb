@@ -703,6 +703,178 @@ def test_download_refuses_too_many_redirects(tmp_path: Path) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Authorization is origin-scoped across redirects (P0-3)
+# ---------------------------------------------------------------------------
+
+_SECRET_TOKEN = "super-secret-do-not-leak-xyz"
+
+
+def test_download_preserves_authorization_on_same_origin_redirect(tmp_path: Path) -> None:
+    """A same-origin redirect (identical scheme/host/port, path change only)
+    must still carry the Authorization header -- this is exactly the
+    ordinary case (e.g. a CDN redirecting one path to another on itself)
+    the P0-3 origin check must not break."""
+    import httpx
+
+    from sorethumb.io.source import _download_to
+
+    seen_auth: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_auth.append(request.headers.get("authorization"))
+        if request.url.path == "/data.csv":
+            return httpx.Response(302, headers={"location": "http://198.51.100.1/final.csv"})
+        return httpx.Response(200, content=b"a,b\n1,2\n")
+
+    dest = tmp_path / "out.csv"
+    _download_to(
+        "http://198.51.100.1/data.csv",
+        {"Authorization": f"Bearer {_SECRET_TOKEN}"},
+        dest,
+        max_bytes=10_000,
+        transport=httpx.MockTransport(handler),
+    )
+    assert seen_auth == [f"Bearer {_SECRET_TOKEN}", f"Bearer {_SECRET_TOKEN}"]
+
+
+def test_download_strips_authorization_on_cross_host_redirect(tmp_path: Path) -> None:
+    """A redirect to a *different* host, even a public/safe one, must never
+    carry the original Authorization header -- the credential is scoped to
+    the host the caller explicitly configured, not to "wherever that host's
+    server later points us"."""
+    import httpx
+
+    from sorethumb.io.source import _download_to
+
+    seen_auth: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_auth.append(request.headers.get("authorization"))
+        if request.url.host == "198.51.100.1":
+            return httpx.Response(302, headers={"location": "http://8.8.8.8/final.csv"})
+        return httpx.Response(200, content=b"a,b\n1,2\n")
+
+    dest = tmp_path / "out.csv"
+    _download_to(
+        "http://198.51.100.1/data.csv",
+        {"Authorization": f"Bearer {_SECRET_TOKEN}"},
+        dest,
+        max_bytes=10_000,
+        transport=httpx.MockTransport(handler),
+    )
+    assert seen_auth == [f"Bearer {_SECRET_TOKEN}", None]
+
+
+def test_download_strips_authorization_on_port_change_redirect(tmp_path: Path) -> None:
+    """Same host, different explicit port: a different origin, so the
+    credential must still be stripped even though the hostname string is
+    identical."""
+    import httpx
+
+    from sorethumb.io.source import _download_to
+
+    seen_auth: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_auth.append(request.headers.get("authorization"))
+        if request.url.port is None:
+            return httpx.Response(302, headers={"location": "http://198.51.100.1:8080/final.csv"})
+        return httpx.Response(200, content=b"a,b\n1,2\n")
+
+    dest = tmp_path / "out.csv"
+    _download_to(
+        "http://198.51.100.1/data.csv",
+        {"Authorization": f"Bearer {_SECRET_TOKEN}"},
+        dest,
+        max_bytes=10_000,
+        transport=httpx.MockTransport(handler),
+    )
+    assert seen_auth == [f"Bearer {_SECRET_TOKEN}", None]
+
+
+def test_download_refuses_https_to_http_downgrade_redirect(tmp_path: Path) -> None:
+    """An HTTPS -> HTTP downgrade must be refused outright -- not merely
+    stripped of credentials -- since it also drops transport security for
+    the response body. The secret must not leak into the raised error."""
+    import httpx
+
+    from sorethumb.io.source import _download_to
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.scheme == "https":
+            return httpx.Response(302, headers={"location": "http://198.51.100.1/final.csv"})
+        return httpx.Response(200, content=b"should not be reached")
+
+    dest = tmp_path / "out.csv"
+    with pytest.raises(SourceError, match=r"[Dd]owngrade") as exc_info:
+        _download_to(
+            "https://198.51.100.1/data.csv",
+            {"Authorization": f"Bearer {_SECRET_TOKEN}"},
+            dest,
+            max_bytes=10_000,
+            transport=httpx.MockTransport(handler),
+        )
+    assert _SECRET_TOKEN not in str(exc_info.value)
+
+
+def test_download_refuses_https_to_http_downgrade_even_without_auth_configured(
+    tmp_path: Path,
+) -> None:
+    """The downgrade refusal is unconditional -- it protects the response
+    body's transport security too, not just a credential that may not even
+    be configured."""
+    import httpx
+
+    from sorethumb.io.source import _download_to
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.scheme == "https":
+            return httpx.Response(302, headers={"location": "http://198.51.100.1/final.csv"})
+        return httpx.Response(200, content=b"should not be reached")
+
+    dest = tmp_path / "out.csv"
+    with pytest.raises(SourceError, match=r"[Dd]owngrade"):
+        _download_to(
+            "https://198.51.100.1/data.csv",
+            {},
+            dest,
+            max_bytes=10_000,
+            transport=httpx.MockTransport(handler),
+        )
+
+
+def test_download_cross_origin_redirect_does_not_leak_secret_via_logging(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The whole point of stripping Authorization cross-origin is that the
+    credential must never reach anywhere it could be recorded -- confirm it
+    never shows up in the log output this download produces, or in the
+    final downloaded file (the mock final host echoes nothing back, but
+    this guards against a future change accidentally logging headers)."""
+    import logging
+
+    import httpx
+
+    from sorethumb.io.source import _download_to
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "198.51.100.1":
+            return httpx.Response(302, headers={"location": "http://8.8.8.8/final.csv"})
+        return httpx.Response(200, content=b"a,b\n1,2\n")
+
+    dest = tmp_path / "out.csv"
+    with caplog.at_level(logging.DEBUG):
+        _download_to(
+            "http://198.51.100.1/data.csv",
+            {"Authorization": f"Bearer {_SECRET_TOKEN}"},
+            dest,
+            max_bytes=10_000,
+            transport=httpx.MockTransport(handler),
+        )
+    assert _SECRET_TOKEN not in caplog.text
+
+
 def test_download_rejects_oversized_declared_content_length(tmp_path: Path) -> None:
     """A Content-Length above the limit must be rejected before any body
     is read."""
