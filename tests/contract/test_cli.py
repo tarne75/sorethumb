@@ -163,6 +163,110 @@ def test_init_toml_lists_extra_params_commented(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# TOML serialisation (P0-4) -- _write_minimal_toml must always produce
+# syntactically valid TOML that round-trips into an equivalent Config,
+# no matter what characters or nested structures the source Config holds.
+# ---------------------------------------------------------------------------
+
+
+def test_write_minimal_toml_escapes_windows_backslash_path(tmp_path: Path):
+    from sorethumb.cli import _write_minimal_toml
+    from sorethumb.config import Config, DetectorConfig, RunConfig, SourceConfig
+
+    cfg = Config(
+        source=SourceConfig(uri=r"C:\Users\alice\data\events.csv"),
+        run=RunConfig(workdir=r"C:\Users\alice\workdir"),
+        detectors=[DetectorConfig(name="isolation_forest")],
+    )
+    out_path = tmp_path / "sorethumb.toml"
+    _write_minimal_toml(out_path, cfg)
+    text = out_path.read_text(encoding="utf-8")
+
+    with out_path.open("rb") as fh:
+        raw = tomllib.load(fh)
+    assert raw["source"]["uri"] == r"C:\Users\alice\data\events.csv"
+    assert raw["run"]["workdir"] == r"C:\Users\alice\workdir"
+
+    reloaded = Config.model_validate(raw)
+    assert reloaded.source.uri == cfg.source.uri
+    assert reloaded.run.workdir == cfg.run.workdir
+
+
+def test_write_minimal_toml_escapes_quotes_and_control_characters(tmp_path: Path):
+    from sorethumb.cli import _write_minimal_toml
+    from sorethumb.config import Config, DetectorConfig, RunConfig, SourceConfig
+
+    tricky = 'a "quoted" path\twith\ta tab\nand a newline'
+    cfg = Config(
+        source=SourceConfig(uri=f"/data/{tricky}.csv"),
+        run=RunConfig(workdir="/tmp/sorethumb-workspace"),
+        detectors=[DetectorConfig(name="isolation_forest")],
+    )
+    out_path = tmp_path / "sorethumb.toml"
+    _write_minimal_toml(out_path, cfg)
+
+    with out_path.open("rb") as fh:
+        raw = tomllib.load(fh)
+    assert raw["source"]["uri"] == cfg.source.uri
+    reloaded = Config.model_validate(raw)
+    assert reloaded.source.uri == cfg.source.uri
+
+
+def test_write_minimal_toml_renders_every_builtin_detector(tmp_path: Path):
+    """Every registered detector -- not just the three default-starter ones --
+    must round-trip through the writer, since a live Config (which this
+    function serves, unlike the static starter template) can contain any
+    of them."""
+    from sorethumb.cli import _write_minimal_toml
+    from sorethumb.config import Config, DetectorConfig, RunConfig, SourceConfig
+    from sorethumb.detectors import registry
+
+    cfg = Config(
+        source=SourceConfig(uri="/data/events.csv"),
+        run=RunConfig(workdir="/tmp/sorethumb-workspace"),
+        detectors=[DetectorConfig(name=name) for name in registry],
+    )
+    out_path = tmp_path / "sorethumb.toml"
+    _write_minimal_toml(out_path, cfg)
+
+    with out_path.open("rb") as fh:
+        raw = tomllib.load(fh)
+    assert [d["name"] for d in raw["detectors"]] == list(registry)
+    reloaded = Config.model_validate(raw)
+    assert [d.name for d in reloaded.detectors] == list(registry)
+
+
+def test_write_minimal_toml_renders_nested_extra_params(tmp_path: Path):
+    """A non-empty nested params.extra_params dict (the exact shape P0-4
+    called out -- json.dumps previously emitted invalid TOML inline-table
+    syntax for it) must round-trip correctly."""
+    from sorethumb.cli import _write_minimal_toml
+    from sorethumb.config import Config, DetectorConfig, RunConfig, SourceConfig
+
+    cfg = Config(
+        source=SourceConfig(uri="/data/events.csv"),
+        run=RunConfig(workdir="/tmp/sorethumb-workspace"),
+        detectors=[
+            DetectorConfig(
+                name="isolation_forest",
+                params={"n_estimators": 50, "extra_params": {"n_jobs": 2, "bootstrap": True}},
+            )
+        ],
+    )
+    out_path = tmp_path / "sorethumb.toml"
+    _write_minimal_toml(out_path, cfg)
+
+    with out_path.open("rb") as fh:
+        raw = tomllib.load(fh)
+    params = raw["detectors"][0]["params"]
+    assert params["n_estimators"] == 50
+    assert params["extra_params"] == {"n_jobs": 2, "bootstrap": True}
+
+    reloaded = Config.model_validate(raw)
+    assert reloaded.detectors[0].params["extra_params"] == {"n_jobs": 2, "bootstrap": True}
+
+
+# ---------------------------------------------------------------------------
 # sorethumb config check / schema / show
 # ---------------------------------------------------------------------------
 
