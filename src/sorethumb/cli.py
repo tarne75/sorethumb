@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import logging
 import logging.handlers
-import os
 import re
 from collections.abc import Callable
 from datetime import UTC
@@ -384,12 +383,21 @@ def _add_file_handler(workdir: Path, level: str) -> None:
 
 
 def _redact_config(config: Config) -> dict[str, Any]:
-    """Return config dict with auth credentials redacted."""
-    raw: dict[str, Any] = json.loads(config.model_dump_json())
-    raw.get("source", {}).pop("auth_env_var", None)
-    for env_var in ("SORETHUMB_TOKEN", "SORETHUMB_PASSWORD"):
-        if env_var in os.environ:
-            os.environ[env_var] = "REDACTED"
+    """Return a config dict safe to print or echo back to the user.
+
+    Config never holds a credential *value* -- ``SourceConfig.auth_env_var``
+    is only the *name* of an environment variable read fresh at request
+    time (see ``io/source.py``'s ``_build_auth_headers``), so there is
+    nothing to strip there (see ``test_auth_token_not_in_config_json``).
+    ``source.uri`` can itself carry embedded userinfo (``user:pass@host``)
+    or a signed-download token in its query string, though -- redact that
+    the same way run persistence already does
+    (``_pipeline._redacted_config_json``), rather than invent a second,
+    possibly-inconsistent redaction rule here.
+    """
+    from sorethumb._pipeline import _redacted_config_json  # noqa: PLC0415
+
+    raw: dict[str, Any] = json.loads(_redacted_config_json(config))
     return raw
 
 
@@ -1405,9 +1413,19 @@ def detectors(
 def config_check(
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
+    json_output: _JSON_OPT = False,
 ) -> None:
-    """Validate a config file and report every error at once."""
+    """Validate a config file and report every error at once.
+
+    Use --json to print the fully-resolved config (defaults, env vars, and
+    CLI overrides all applied) as JSON, with credentials redacted -- useful
+    to inspect what a run would actually use before there's a run to
+    `config show` from.
+    """
     cfg = _load_config(config, workdir=workdir)
+    if json_output:
+        typer.echo(json.dumps(_redact_config(cfg), indent=2))
+        return
     console.print("[green]Config is valid.[/green]")
     console.print(f"  workdir: {cfg.run.workdir}")
     console.print(f"  detectors: {[d.name for d in cfg.detectors if d.enabled]}")

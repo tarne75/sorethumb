@@ -398,14 +398,20 @@ sorethumb benchmark --log-level DEBUG
 ### `sorethumb config check`
 
 Validate a config file and report every error at once (not just the first).
-Exit code `0` means the config is valid.
+Exit code `0` means the config is valid. `--json` prints the fully-resolved
+config (defaults, env vars, and CLI overrides all applied) instead, with
+credentials redacted — a source URI's embedded userinfo or signed-download
+token is masked the same way it is before being persisted to the database;
+an `auth_env_var` value is never included in `Config` in the first place, so
+there is nothing to redact there.
 
 ```bash
 sorethumb config check
 sorethumb config check --config /other/path/sorethumb.toml
+sorethumb config check --json
 ```
 
-**Options:** `--config`, `--workdir`
+**Options:** `--config`, `--workdir`, `--json`
 
 ---
 

@@ -235,7 +235,12 @@ def _promote(tmp_path: Path, dest: Path) -> None:
 def _build_auth_headers(config: SourceConfig) -> dict[str, str]:
     if config.auth == "none" or not config.auth_env_var:
         return {}
-    token = os.environ.get(config.auth_env_var, "")
+    # .strip() -- a token/credential read from an env var populated via
+    # `export X=$(cat file)` or a CI secrets manager commonly carries a
+    # trailing newline or padding space; sent verbatim that breaks the
+    # header (and, for "bearer", is silently wrong rather than rejected).
+    # A whitespace-only value is therefore treated the same as unset.
+    token = os.environ.get(config.auth_env_var, "").strip()
     if not token:
         raise SourceError(
             f"Auth env var '{config.auth_env_var}' is not set or empty. Set it before calling resolve_source."

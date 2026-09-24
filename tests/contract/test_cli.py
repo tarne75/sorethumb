@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import tomllib
 from pathlib import Path
 
@@ -281,6 +282,73 @@ def test_config_check_valid(workspace):
 def test_config_check_missing_file(tmp_path: Path):
     result = runner.invoke(app, ["config", "check", "--config", str(tmp_path / "missing.toml")])
     assert result.exit_code == 2
+
+
+def test_config_check_json_output(workspace):
+    _, toml_path, _ = workspace
+    result = runner.invoke(app, ["config", "check", "--json", "--config", str(toml_path)])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert "source" in data
+    assert "detectors" in data
+
+
+def test_config_check_json_redacts_uri_credentials(tmp_path: Path):
+    """config check --json (P0-5) must never echo back a credential
+    embedded in source.uri -- reuses the same redaction
+    _pipeline._redacted_config_json already applies before a run's config
+    is persisted to the database, rather than a second, separate rule."""
+    toml_path = tmp_path / "sorethumb.toml"
+    toml_path.write_text(
+        f"""\
+[source]
+uri = "https://alice:s3cret-pw@example.com/data.csv"
+format = "csv"
+
+[run]
+workdir = {json.dumps(str(tmp_path / "workdir"))}
+""",
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["config", "check", "--json", "--config", str(toml_path)])
+    assert result.exit_code == 0
+    assert "s3cret-pw" not in result.stdout
+    data = json.loads(result.stdout)
+    assert data["source"]["uri"] == "https://***@example.com/data.csv"
+
+
+def test_redact_config_does_not_mutate_environment(monkeypatch: pytest.MonkeyPatch):
+    """P0-5: _redact_config previously mutated os.environ in place (setting
+    SORETHUMB_TOKEN/SORETHUMB_PASSWORD to the literal string "REDACTED"),
+    which would corrupt a real credential for the rest of the process. It
+    must now be a pure function."""
+    from sorethumb.cli import _redact_config
+    from sorethumb.config import Config, RunConfig, SourceConfig
+
+    monkeypatch.setenv("SORETHUMB_TOKEN", "do-not-touch-me")
+    cfg = Config(
+        source=SourceConfig(uri="https://x/data.csv", auth="bearer", auth_env_var="SORETHUMB_TOKEN"),
+        run=RunConfig(workdir="/tmp/sorethumb-workspace"),
+    )
+    _redact_config(cfg)
+    assert os.environ["SORETHUMB_TOKEN"] == "do-not-touch-me"
+
+
+def test_redact_config_keeps_auth_env_var_name(monkeypatch: pytest.MonkeyPatch):
+    """The env var *name* is not a secret (see
+    test_auth_token_not_in_config_json) -- only its value is -- so it's
+    kept, consistent with what's already persisted for a real run."""
+    from sorethumb.cli import _redact_config
+    from sorethumb.config import Config, RunConfig, SourceConfig
+
+    monkeypatch.setenv("MY_TOKEN", "secret-value")
+    cfg = Config(
+        source=SourceConfig(uri="https://x/data.csv", auth="bearer", auth_env_var="MY_TOKEN"),
+        run=RunConfig(workdir="/tmp/sorethumb-workspace"),
+    )
+    redacted = _redact_config(cfg)
+    assert redacted["source"]["auth_env_var"] == "MY_TOKEN"
+    assert "secret-value" not in json.dumps(redacted)
 
 
 def test_config_schema_matches_golden(workspace):

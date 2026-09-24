@@ -575,6 +575,76 @@ def test_build_auth_headers_bearer_passes_token_through(monkeypatch: pytest.Monk
     assert _build_auth_headers(cfg) == {"Authorization": "Bearer abc123"}
 
 
+def test_build_auth_headers_missing_env_var_raises() -> None:
+    from sorethumb.config import SourceConfig
+    from sorethumb.io.source import _build_auth_headers
+
+    cfg = SourceConfig(uri="https://x/data.csv", auth="bearer", auth_env_var="SOREHUMB_DOES_NOT_EXIST_XYZ")
+    with pytest.raises(SourceError, match="not set or empty"):
+        _build_auth_headers(cfg)
+
+
+def test_build_auth_headers_empty_env_var_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sorethumb.config import SourceConfig
+    from sorethumb.io.source import _build_auth_headers
+
+    monkeypatch.setenv("EMPTY_TOKEN", "")
+    cfg = SourceConfig(uri="https://x/data.csv", auth="bearer", auth_env_var="EMPTY_TOKEN")
+    with pytest.raises(SourceError, match="not set or empty"):
+        _build_auth_headers(cfg)
+
+
+def test_build_auth_headers_whitespace_only_env_var_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A whitespace-only credential (e.g. a stray env var set to a single
+    newline) is not a usable token -- treat it the same as unset (P0-5)."""
+    from sorethumb.config import SourceConfig
+    from sorethumb.io.source import _build_auth_headers
+
+    monkeypatch.setenv("WHITESPACE_TOKEN", "   \n\t  ")
+    cfg = SourceConfig(uri="https://x/data.csv", auth="bearer", auth_env_var="WHITESPACE_TOKEN")
+    with pytest.raises(SourceError, match="not set or empty"):
+        _build_auth_headers(cfg)
+
+
+def test_build_auth_headers_strips_surrounding_whitespace(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A token read from an env var populated via `export X=$(cat file)` or
+    a CI secrets manager commonly carries a trailing newline; sent verbatim
+    that produces a header with a stray newline in it (P0-5)."""
+    from sorethumb.config import SourceConfig
+    from sorethumb.io.source import _build_auth_headers
+
+    monkeypatch.setenv("PADDED_TOKEN", "  abc123\n")
+    cfg = SourceConfig(uri="https://x/data.csv", auth="bearer", auth_env_var="PADDED_TOKEN")
+    assert _build_auth_headers(cfg) == {"Authorization": "Bearer abc123"}
+
+
+def test_auth_header_flows_from_env_var_to_actual_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Transport-boundary check (P0-5): an env var set for bearer auth must
+    produce the real Authorization header on the actual outbound request --
+    not merely in _build_auth_headers' return value in isolation, which is
+    all the pre-existing tests checked."""
+    import httpx
+
+    from sorethumb.config import SourceConfig
+    from sorethumb.io.source import _build_auth_headers, _download_to
+
+    monkeypatch.setenv("BEARER_TOKEN", "real-secret-token")
+    cfg = SourceConfig(uri="http://198.51.100.1/data.csv", auth="bearer", auth_env_var="BEARER_TOKEN")
+    headers = _build_auth_headers(cfg)
+
+    seen_auth: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_auth.append(request.headers.get("authorization"))
+        return httpx.Response(200, content=b"a,b\n1,2\n")
+
+    dest = tmp_path / "out.csv"
+    _download_to(cfg.uri, headers, dest, max_bytes=10_000, transport=httpx.MockTransport(handler))
+    assert seen_auth == ["Bearer real-secret-token"]
+
+
 # ---------------------------------------------------------------------------
 # Redaction (P2-5)
 # ---------------------------------------------------------------------------
