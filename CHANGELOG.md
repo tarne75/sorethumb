@@ -230,6 +230,25 @@ diff against.
 
 ### Fixed
 
+- `cli._redact_config` (dead code, never called by any shipped command)
+  mutated `os.environ` in place — overwriting `SORETHUMB_TOKEN`/
+  `SORETHUMB_PASSWORD` with the literal string `"REDACTED"` — instead of
+  returning a redacted copy of the config dict. Had anything called it
+  before a source fetch in the same process, every subsequent
+  authenticated download would have sent `Authorization: Bearer REDACTED`
+  on the wire. `_build_auth_headers` (`io/source.py`), which actually builds
+  every outbound `Authorization` header, was and remains correct — it was
+  never affected by this. `_redact_config` is now a pure function that
+  reuses the same redaction `_pipeline._redacted_config_json` already
+  applies to a run's persisted config (masking `source.uri` userinfo/signed
+  tokens; an `auth_env_var` *value* is never in `Config` to begin with — see
+  `test_auth_token_not_in_config_json`) instead of a second, separate rule,
+  and is now wired into a new `sorethumb config check --json`, which prints
+  the fully-resolved config before there's a run to `config show` from.
+  Separately, `_build_auth_headers` now strips surrounding whitespace from
+  the token/credential read from the configured env var (a value populated
+  via `export X=$(cat file)` or a CI secrets manager commonly carries a
+  trailing newline) and treats a whitespace-only value as unset.
 - Generated `sorethumb.toml` files (`sorethumb init`, `sorethumb run` writing
   a starter config, `sorethumb config show --output`) could come out
   syntactically invalid TOML. Required-field values and detector `params`
