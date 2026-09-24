@@ -556,6 +556,7 @@ def run_detection(
             dataset_fp=dataset_fp,
             config_json=config_json,
             seed=config.run.seed,
+            config_hash=config.config_hash(),
             library_version=_st.__version__,
         )
 
@@ -910,6 +911,7 @@ def score_forward(
             dataset_fp=dataset_fp,
             config_json=_redacted_config_json(config),
             seed=config.run.seed,
+            config_hash=config.config_hash(),
             source_run_id=source_run_id,
             library_version=_st.__version__,
         )

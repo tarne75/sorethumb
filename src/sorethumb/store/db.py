@@ -81,10 +81,6 @@ def _now_utc() -> str:
     return datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _config_hash(config_json: str) -> str:
-    return hashlib.sha256(config_json.encode()).hexdigest()[:32]
-
-
 def _iter_sql_statements(sql: str) -> Generator[str, None, None]:
     """Yield non-empty SQL statements from a migration file.
 
@@ -376,6 +372,7 @@ class Store:
         dataset_fp: str,
         config_json: str,
         seed: int,
+        config_hash: str = "",
         library_version: str = "",
         python_version: str = "",
         source_run_id: str | None = None,
@@ -384,6 +381,16 @@ class Store:
 
         *source_run_id* is set for score-forward runs (``sorethumb score
         --from-run``) and NULL for ordinary fitted runs.
+
+        *config_hash* has no fallback computed from *config_json*: every real
+        caller (``run_detection``, ``score_forward``) passes
+        ``Config.config_hash()`` explicitly -- the same canonical value used
+        to derive ``run_id`` itself and recorded on ``totals``/
+        ``period_execution`` for the same execution. Hashing the full
+        ``config_json`` here instead (the pre-P0-6 behaviour) produced a
+        *different* value under the same column name, silently breaking any
+        join or comparison across those tables. A caller that omits it (only
+        tests do) gets the empty string, not a differently-computed guess.
 
         *library_version* has no fallback to a specific version string --
         every real caller (``run_detection``, ``score_forward``) passes
@@ -394,7 +401,6 @@ class Store:
         omits it (only tests do) gets the empty string, not a guess.
         """
         now = _now_utc()
-        cfg_hash = _config_hash(config_json)
         lib_ver = library_version
         py_ver = (
             python_version or f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
@@ -406,7 +412,7 @@ class Store:
                  library_version, python_version, started_at, status, source_run_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
             """,
-            (run_id, dataset_fp, cfg_hash, config_json, seed, lib_ver, py_ver, now, source_run_id),
+            (run_id, dataset_fp, config_hash, config_json, seed, lib_ver, py_ver, now, source_run_id),
         )
         self._conn.commit()
 
