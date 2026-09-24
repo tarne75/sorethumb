@@ -49,9 +49,14 @@ def mark_run(
     dataset_fp: str,
     config_json: str,
     seed: int,
+    config_hash: str,
 ) -> None:
-    """Upsert a run row (idempotent)."""
-    store.insert_run(run_id, dataset_fp, config_json, seed)
+    """Upsert a run row (idempotent).
+
+    *config_hash* is required, no default -- see this module's docstring on
+    why every function here takes it explicitly rather than deriving one.
+    """
+    store.insert_run(run_id, dataset_fp, config_json, seed, config_hash=config_hash)
 
 
 def mark_group(

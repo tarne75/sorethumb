@@ -230,6 +230,26 @@ diff against.
 
 ### Fixed
 
+- `Store.insert_run` independently re-hashed the full (redacted)
+  `config_json` string and stored *that* under the `run` table's
+  `config_hash` column, while `RunResult.config_hash`, `run_id` itself, and
+  the `totals`/`period_execution` tables all used `Config.config_hash()` (a
+  narrower hash that deliberately excludes purely cosmetic/execution-only
+  fields — `run.workdir`, `run.log_level`, the entire `report` section —
+  so trivial changes there don't bust artefact caches or count as a
+  different configuration for history purposes). Same column name, two
+  different values for the same execution — any join or comparison across
+  `run`/`totals`/`period_execution` on `config_hash` was comparing
+  incompatible values. `insert_run` now takes `config_hash` as an explicit
+  parameter (`run_detection`/`score_forward` pass `Config.config_hash()`,
+  matching every other consumer) and no longer computes one itself; no
+  replacement "config snapshot digest" was added, since nothing in the
+  codebase currently needs one. New cross-layer contract test
+  (`tests/contract/test_config_hash_consistency.py`) runs a real pipeline
+  and asserts the `run` row, `totals`, and `period_execution` all agree
+  with `RunResult.config_hash` under the one canonical value, and that two
+  configs differing only in cosmetic/execution-only fields hash identically
+  and resolve to the same `run_id`.
 - `score_forward` (`sorethumb score --from-run`) recorded the *caller's*
   config verbatim for the new run, even though it reuses the source run's
   fitted `FeaturePlan` and persisted detectors unconditionally and re-fits
