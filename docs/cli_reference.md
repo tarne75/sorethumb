@@ -172,6 +172,16 @@ across runs. Schema drift and library-version drift are detected per group
 (`--strict` promotes both to errors). A new, distinct run is written
 (`score_…` id) that records the source run.
 
+Only `scoring`, `explain`, `report` and `run` settings can legally differ
+from the source run — they really are recomputed fresh on every
+`score --from-run` call. `columns`, `profiling`, `features`, and any enabled
+detector's `params`/`train_row_cap` are baked into the source run's fitted
+plan and persisted models; a config that claims different values there is
+rejected outright (regardless of `--strict`), since score-forward has no way
+to actually apply them — re-run `sorethumb run` instead if you need
+different fit-time settings. `run_id`, `--json` output, and the rendered
+report all show `source_run_id` for a score-forward run.
+
 Loading the source run unpickles its persisted estimator and calibrator
 files (`joblib`), which is code execution with no sandboxing — not safe
 data loading. The SHA-256 file digests checked on load catch corruption or

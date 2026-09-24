@@ -230,6 +230,23 @@ diff against.
 
 ### Fixed
 
+- `score_forward` (`sorethumb score --from-run`) recorded the *caller's*
+  config verbatim for the new run, even though it reuses the source run's
+  fitted `FeaturePlan` and persisted detectors unconditionally and re-fits
+  nothing — so a config requesting different `columns`/`profiling`/
+  `features` settings, or different `params`/`train_row_cap` for a detector
+  the source run actually fit, was silently ignored in favour of what was
+  actually persisted, while the new run's `config_json` still claimed the
+  caller's (unused) values. A config making any such fit-time-affecting
+  claim is now rejected outright (`StoreError`, regardless of `--strict` —
+  this is a provenance-correctness issue, not environmental drift) before
+  any data is even loaded; `scoring`/`explain`/`report`/`run` settings are
+  unaffected, since those genuinely are recomputed fresh on every
+  score-forward call. Separately, `RunResult.source_run_id` (previously
+  only on the database row, invisible to `RunResult`, `--json` output, and
+  every report) is now populated for a score-forward run and surfaced in
+  `sorethumb run`'s console summary, `--json` output, and the HTML/JSON
+  report's provenance block.
 - `cli._redact_config` (dead code, never called by any shipped command)
   mutated `os.environ` in place — overwriting `SORETHUMB_TOKEN`/
   `SORETHUMB_PASSWORD` with the literal string `"REDACTED"` — instead of
