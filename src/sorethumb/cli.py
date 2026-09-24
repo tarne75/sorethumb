@@ -1883,6 +1883,8 @@ def _print_run_summary(result: RunResult) -> None:
         f"\n[{status_color}]Run {result.run_id}[/{status_color}]  "
         f"succeeded={result.n_succeeded}  skipped={result.n_skipped}  failed={result.n_failed}"
     )
+    if result.source_run_id:
+        console.print(f"  [dim]Scored forward from run {result.source_run_id} (no re-fitting).[/dim]")
 
     total_rows = sum(g.n_records for g in result.groups if g.status in ("success", "skipped"))
     if result.n_anomalies or total_rows:
@@ -1950,6 +1952,7 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
         "dataset_uri": result.dataset_uri,
         "dataset_fp": result.dataset_fp,
         "snapshot_fp": result.snapshot_fp,
+        "source_run_id": result.source_run_id,
         "period_label": result.period_label,
         "n_succeeded": result.n_succeeded,
         "n_skipped": result.n_skipped,

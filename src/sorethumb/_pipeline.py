@@ -257,6 +257,9 @@ class RunResult:
     #   results to report on. Never conflate this with "skipped".
     # "skipped": no_report=True, or there were no groups to report on.
     report_status: str = "skipped"
+    # The fitted run this run reused persisted models/plan from, via
+    # score_forward -- None for an ordinary run_detection run (it fit its own).
+    source_run_id: str | None = None
 
     # Convenience helpers
 
@@ -715,6 +718,73 @@ def _make_score_run_id(
     return "score_" + hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
+# Config sections that only ever take effect during fit_features/detector
+# construction -- never during score_forward (it calls apply_feature_plan
+# against the source run's persisted FeaturePlan, and unpickles already-fitted
+# detectors; neither reads these sections at all). If the caller's config
+# claims different values here than what the source run actually fit with,
+# persisting the caller's config verbatim (the pre-P0-6 behaviour) would
+# describe a computation that never happened.
+_FIT_TIME_SECTIONS = ("columns", "profiling", "features")
+
+
+def _validate_score_forward_config(config: Config, source_cfg: Config, source_run_id: str) -> None:
+    """Reject a score-forward config that claims fit-time settings the source run didn't use.
+
+    score-time sections (``scoring``, ``explain``, ``report``, ``run``) are
+    exempt -- they really are recomputed fresh on every score-forward call,
+    so the caller's values for those are the true, honestly-recorded ones.
+
+    For each *enabled* detector in ``config.detectors``: if the same name was
+    also enabled in ``source_cfg.detectors``, its ``params``/``train_row_cap``
+    must match exactly -- the persisted model was fit with the source run's
+    values, not the caller's, and score-forward has no way to honour a
+    different hyperparameter (it never re-fits). A name the source run never
+    enabled (or disabled) needs no check here: no persisted model can exist
+    for it either way, and ``score_with_existing`` already degrades that to
+    "missing" and scores with whatever else is available -- a deliberate,
+    separate, already-tested lenient path this validation must not disturb.
+
+    Unconditional -- not gated on ``strict`` -- since this is a config lying
+    about what computation actually ran, not environmental drift (schema,
+    library versions) that a caller might reasonably choose to tolerate.
+    """
+    mismatches: list[str] = []
+    for section in _FIT_TIME_SECTIONS:
+        new_val = getattr(config, section)
+        old_val = getattr(source_cfg, section)
+        if new_val != old_val:
+            mismatches.append(
+                f"config.{section} differs from source run {source_run_id!r}'s fit-time "
+                f"{section} (requested={new_val.model_dump()!r}, "
+                f"fitted={old_val.model_dump()!r})"
+            )
+
+    source_detectors_by_name = {d.name: d for d in source_cfg.detectors}
+    for det in config.detectors:
+        if not det.enabled:
+            continue
+        source_det = source_detectors_by_name.get(det.name)
+        if source_det is None or not source_det.enabled:
+            continue
+        if det.params != source_det.params or det.train_row_cap != source_det.train_row_cap:
+            mismatches.append(
+                f"detector {det.name!r} requests params={det.params!r} "
+                f"train_row_cap={det.train_row_cap!r}, but source run {source_run_id!r} "
+                f"fit it with params={source_det.params!r} train_row_cap={source_det.train_row_cap!r}"
+            )
+
+    if mismatches:
+        detail = "\n  - ".join(mismatches)
+        msg = (
+            f"Config is not compatible with score-forward from run {source_run_id!r}; "
+            "score-forward reuses the source run's fitted FeaturePlan and persisted "
+            "detectors verbatim and cannot honour different fit-time settings. "
+            f"Re-run `sorethumb run` instead if you need these:\n  - {detail}"
+        )
+        raise StoreError(msg)
+
+
 def score_forward(
     config: Config,
     source_run_id: str,
@@ -780,6 +850,17 @@ def score_forward(
                 "not another score-forward run."
             )
             raise StoreError(msg)
+
+        try:
+            source_cfg = Config.model_validate_json(source_run["config_json"])
+        except Exception as exc:
+            msg = (
+                f"Source run {source_run_id!r} has no readable config_json "
+                "(it may predate config persistence); score-forward cannot verify "
+                "fit-time settings without it."
+            )
+            raise StoreError(msg) from exc
+        _validate_score_forward_config(config, source_cfg, source_run_id)
 
         # The exact fitted plan from the source run (frequency maps, scaler
         # params, PCA components, correlation-drop list). Raises if the source
@@ -904,6 +985,7 @@ def score_forward(
             finished_at=datetime.now(UTC).isoformat(),
             warnings_issued=issued_warnings,
             report_status=report_status,
+            source_run_id=source_run_id,
         )
 
 
@@ -1806,6 +1888,7 @@ def render_report_for_run(ws: Workspace, run_id: str, *, formats: list[str] | No
             or f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
             config_json=run_row["config_json"],
             started_at=run_row.get("started_at") or "",
+            source_run_id=run_row.get("source_run_id"),
         )
 
         try:

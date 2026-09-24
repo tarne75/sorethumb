@@ -15,7 +15,7 @@ import pytest
 
 from sorethumb import Config, score_forward
 from sorethumb._pipeline import run_detection
-from sorethumb.config import DetectorConfig
+from sorethumb.config import DetectorConfig, ExplainConfig, FeaturesConfig, ProfilingConfig, ReportConfig
 from sorethumb.errors import StoreError
 from sorethumb.store.workspace import Workspace
 from tests.factories.configs import make_config
@@ -288,3 +288,198 @@ def test_score_forward_rejects_drifted_schema(tmp_path: Path) -> None:
     err = result.groups[0].error or ""
     assert "PlanError" in err
     assert "schema fingerprint" in err
+
+
+# ---------------------------------------------------------------------------
+# Fit-time vs. score-time config validation (P0-6)
+# ---------------------------------------------------------------------------
+
+
+def test_score_forward_rejects_different_detector_params(tmp_path: Path) -> None:
+    """A score-forward config that requests different hyperparameters for a
+    detector the source run actually fit must be rejected outright -- the
+    persisted model was fit with the source's params, not these, and
+    score-forward never re-fits."""
+    ws = tmp_path / "ws"
+    csv = tmp_path / "data.csv"
+    _planted_csv(csv, seed=0)
+    src = run_detection(_cfg(csv, ws), no_report=True)  # isolation_forest, default params
+    assert src.n_succeeded >= 1
+
+    fwd_cfg = make_config(
+        csv,
+        ws,
+        combination="composite",
+        detectors=[DetectorConfig(name="isolation_forest", params={"n_estimators": 17})],
+    )
+    with pytest.raises(StoreError, match="isolation_forest"):
+        score_forward(fwd_cfg, src.run_id, no_report=True)
+
+
+def test_score_forward_rejects_different_train_row_cap(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    csv = tmp_path / "data.csv"
+    _planted_csv(csv, seed=0)
+    src = run_detection(_cfg(csv, ws), no_report=True)
+    assert src.n_succeeded >= 1
+
+    fwd_cfg = make_config(
+        csv,
+        ws,
+        combination="composite",
+        detectors=[DetectorConfig(name="isolation_forest", train_row_cap=3)],
+    )
+    with pytest.raises(StoreError, match="train_row_cap"):
+        score_forward(fwd_cfg, src.run_id, no_report=True)
+
+
+def test_score_forward_rejects_different_columns_config(tmp_path: Path) -> None:
+    """columns is feature-plan-affecting: apply_feature_plan never reads it,
+    so a different id_column here would silently not be what actually ran."""
+    ws = tmp_path / "ws"
+    csv = tmp_path / "data.csv"
+    _planted_csv(csv, seed=0)
+    src = run_detection(_cfg(csv, ws), no_report=True)  # id_column="id" (make_config's default)
+    assert src.n_succeeded >= 1
+
+    fwd_cfg = make_config(csv, ws, combination="composite", id_column="row_id_that_does_not_exist")
+    with pytest.raises(StoreError, match="columns"):
+        score_forward(fwd_cfg, src.run_id, no_report=True)
+
+
+def test_score_forward_rejects_different_features_config(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    csv = tmp_path / "data.csv"
+    _planted_csv(csv, seed=0)
+    src = run_detection(_cfg(csv, ws), no_report=True)
+    assert src.n_succeeded >= 1
+
+    fwd_cfg = _cfg(csv, ws).model_copy(update={"features": FeaturesConfig(scaler="standard")})
+    with pytest.raises(StoreError, match="features"):
+        score_forward(fwd_cfg, src.run_id, no_report=True)
+
+
+def test_score_forward_rejects_different_profiling_config(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    csv = tmp_path / "data.csv"
+    _planted_csv(csv, seed=0)
+    src = run_detection(_cfg(csv, ws), no_report=True)
+    assert src.n_succeeded >= 1
+
+    fwd_cfg = _cfg(csv, ws).model_copy(update={"profiling": ProfilingConfig(null_ratio_drop=0.42)})
+    with pytest.raises(StoreError, match="profiling"):
+        score_forward(fwd_cfg, src.run_id, no_report=True)
+
+
+def test_score_forward_config_mismatch_rejected_regardless_of_strict(tmp_path: Path) -> None:
+    """The fit-time config guard is a correctness check, not a data-drift
+    warning -- it must reject a mismatch the same way whether strict=True or
+    strict=False (unlike schema/library-version drift, which strict does
+    genuinely gate)."""
+    ws = tmp_path / "ws"
+    csv = tmp_path / "data.csv"
+    _planted_csv(csv, seed=0)
+    src = run_detection(_cfg(csv, ws), no_report=True)
+    assert src.n_succeeded >= 1
+
+    fwd_cfg = make_config(
+        csv,
+        ws,
+        combination="composite",
+        detectors=[DetectorConfig(name="isolation_forest", params={"n_estimators": 17})],
+    )
+    with pytest.raises(StoreError, match="isolation_forest"):
+        score_forward(fwd_cfg, src.run_id, no_report=True, strict=False)
+    with pytest.raises(StoreError, match="isolation_forest"):
+        score_forward(fwd_cfg, src.run_id, no_report=True, strict=True)
+
+
+def test_score_forward_ignores_param_mismatch_for_a_detector_never_fit(tmp_path: Path) -> None:
+    """A detector the source run never enabled (so never fit, no persisted
+    model exists for it either way) needs no params validation -- it's
+    caught downstream as a "missing model", a separate, already-lenient
+    path this guard must not disturb."""
+    ws = tmp_path / "ws"
+    csv = tmp_path / "data.csv"
+    _planted_csv(csv, seed=0)
+    src = run_detection(_cfg(csv, ws), no_report=True)  # isolation_forest + kmeans_distance only
+    assert src.n_succeeded >= 1
+
+    fwd_cfg = make_config(
+        csv,
+        ws,
+        combination="composite",
+        detectors=[DetectorConfig(name="one_class_svm", params={"nu": 0.2})],
+    )
+    fwd = score_forward(fwd_cfg, src.run_id, no_report=True)
+    assert fwd.n_failed == 1
+    assert "No persisted models" in (fwd.groups[0].error or "")
+
+
+def test_score_forward_allows_legal_scoring_explain_report_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """scoring/explain/report/run genuinely are recomputed fresh at score
+    time -- overriding them is not a lie about what ran, it's the honest,
+    real behaviour, so it must not be rejected."""
+    ws = tmp_path / "ws"
+    src_csv, new_csv = tmp_path / "train.csv", tmp_path / "new.csv"
+    _planted_csv(src_csv, seed=0)
+    _planted_csv(new_csv, seed=1)
+    src = run_detection(_cfg(src_csv, ws), no_report=True)  # combination="composite"
+    assert src.n_succeeded >= 1
+
+    _ban_all_fitting(monkeypatch)
+    fwd_cfg = make_config(
+        new_csv,
+        ws,
+        combination="composite",
+        weighting="agreement",
+        contamination=0.2,
+        detectors=[DetectorConfig(name="isolation_forest"), DetectorConfig(name="kmeans_distance")],
+    ).model_copy(
+        update={
+            "explain": ExplainConfig(top_n=1),
+            "report": ReportConfig(formats=["json"]),
+        }
+    )
+    fwd = score_forward(fwd_cfg, src.run_id, no_report=True)
+    assert fwd.n_failed == 0, [g.error for g in fwd.groups if g.error]
+    assert fwd.n_succeeded >= 1
+
+
+# ---------------------------------------------------------------------------
+# Provenance surfacing (P0-6)
+# ---------------------------------------------------------------------------
+
+
+def test_score_forward_run_result_carries_source_run_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = tmp_path / "ws"
+    csv = tmp_path / "data.csv"
+    _planted_csv(csv, seed=0)
+    src = run_detection(_cfg(csv, ws), no_report=True)
+    assert src.source_run_id is None  # an ordinary fit has no source
+
+    _ban_all_fitting(monkeypatch)
+    fwd = score_forward(_cfg(csv, ws), src.run_id, no_report=True)
+    assert fwd.source_run_id == src.run_id
+
+
+def test_score_forward_report_provenance_includes_source_run_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = tmp_path / "ws"
+    csv = tmp_path / "data.csv"
+    _planted_csv(csv, seed=0)
+    src = run_detection(_cfg(csv, ws), no_report=True)
+
+    _ban_all_fitting(monkeypatch)
+    fwd_cfg = _cfg(csv, ws).model_copy(update={"report": ReportConfig(formats=["json"])})
+    fwd = score_forward(fwd_cfg, src.run_id, no_report=False)
+    assert fwd.report_path is not None
+    assert fwd.report_path.name == "index.json"  # formats=["json"] only -> render_report returns it directly
+
+    payload = json.loads(fwd.report_path.read_text(encoding="utf-8"))
+    assert payload["source_run_id"] == src.run_id

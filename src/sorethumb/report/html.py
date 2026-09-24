@@ -47,6 +47,9 @@ class RunMeta:
     python_version: str
     config_json: str
     started_at: str = ""
+    # The fitted run this run reused persisted models/plan from (score-forward
+    # only) -- None for an ordinary run that fit its own detectors.
+    source_run_id: str | None = None
 
 
 @dataclass
@@ -127,6 +130,7 @@ def _write_json_report(run_meta: RunMeta, groups: list[GroupSection], out_dir: P
         "library_version": run_meta.library_version,
         "python_version": run_meta.python_version,
         "started_at": run_meta.started_at,
+        "source_run_id": run_meta.source_run_id,
         "groups": [
             {
                 "group_key": g.group_key,
@@ -215,6 +219,7 @@ def _provenance_block(meta: RunMeta) -> str:
         f"<strong>sorethumb:</strong> {html.escape(meta.library_version)}&nbsp;&nbsp;"
         f"<strong>Python:</strong> {html.escape(meta.python_version)}"
         f"{'&nbsp;&nbsp;<strong>Started:</strong> ' + html.escape(meta.started_at) if meta.started_at else ''}"
+        f"{'&nbsp;&nbsp;<strong>Scored forward from:</strong> ' + html.escape(meta.source_run_id) if meta.source_run_id else ''}"
         "<br><details><summary>Resolved config</summary>"
         f"<pre>{html.escape(config_pretty)}</pre>"
         "</details>"
