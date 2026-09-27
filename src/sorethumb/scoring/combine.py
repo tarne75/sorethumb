@@ -52,9 +52,14 @@ agreement:
 
 Combination strategies
 ----------------------
+The *flag* decision (``anomaly_flag``, boolean) and the *continuous ranking*
+(``combined_score``, used to order flagged rows and for ROC-AUC/AP
+evaluation) are computed independently and can use different logic -- see
+"Continuous ranking" below. Each mode's flag rule:
+
 composite:
-    Weighted average of calibrated scores. A single global threshold is applied
-    to the combined score. Smooth, suitable for ranking.
+    A single global threshold is applied to the weighted-average score (see
+    "Continuous ranking"). Smooth, suitable for ranking.
 intersection:
     Each detector independently flags its top-contamination fraction of rows
     (or its natural boundary when contamination="auto"). A row is anomalous
@@ -64,6 +69,30 @@ union:
     Each detector independently flags its top-contamination fraction of rows
     (or its natural boundary when contamination="auto"). A row is anomalous
     when ANY detector flags it. Permissive; maximises recall.
+
+Continuous ranking (P0-8)
+--------------------------
+``combined_score`` -- used to order flagged rows severity-first and as the
+score ROC-AUC/AP are computed against -- is a *separate* computation from the
+flag rule above, not derived from it:
+
+composite:
+    Weighted average of calibrated scores (see "Weighting strategies").
+intersection:
+    The per-row *median* across detectors' calibrated scores. Not min():
+    min() lets a single anti-correlated member dominate the ranking for
+    every row -- on the benchmark's ``local``/``varying_density`` scenarios,
+    one badly-misranking OneClassSVM member previously made the whole
+    ensemble's ranking *worse than random* (ROC-AUC as low as 0.04) even
+    though the other two members individually scored well above 0.9 on the
+    same data (see docs/approximations.md, tests/benchmark/
+    test_pipeline_accuracy_floors.py). The median cannot be dominated by a
+    single outlier out of three; the flag rule (an AND of all three
+    detectors' independent votes) is unaffected by this choice.
+union:
+    The per-row *max* across detectors' calibrated scores -- already robust
+    for the same reason (a bad member's low score simply loses to the best
+    member's opinion, never wins).
 
 Thresholding
 ------------
@@ -450,13 +479,23 @@ class ScoreEnsemble:
         return w / total
 
     def _combine(self, score_matrix: np.ndarray, weights: np.ndarray) -> np.ndarray:
+        """Compute the continuous ranking (``combined_score``) -- see module docstring.
+
+        Independent of the flag rule (``_set_combine_flags``): a mode's flag
+        semantics are unaffected by how its ranking is computed here.
+        """
         if self._combination == "composite":
             return score_matrix @ weights  # weighted average, shape (n,)
 
         if self._combination == "intersection":
-            return score_matrix.min(axis=1)
+            # median, not min() (P0-8): robust to a single anti-correlated
+            # member out of three -- min() let one bad member's low score
+            # dominate the ranking for every row, tanking it below random on
+            # some scenarios even though the other members ranked well.
+            return np.median(score_matrix, axis=1)
 
-        # union
+        # union: max() -- already robust the same way (a bad member's low
+        # score simply loses to the best member's opinion, never wins).
         return score_matrix.max(axis=1)
 
     def _set_combine_flags(

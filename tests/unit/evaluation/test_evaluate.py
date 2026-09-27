@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sorethumb.evaluate.metrics import Metrics, evaluate_scores
+from sorethumb.evaluate.metrics import FlagMetrics, Metrics, evaluate_flags, evaluate_scores
 from tests.factories.benchmark_rows import make_benchmark_row
 
 pytestmark = pytest.mark.unit
@@ -225,6 +225,138 @@ def test_evaluate_scores_rejects_out_of_range_contamination(bad_contamination):
     scores, labels = _random_scores()
     with pytest.raises(ValueError, match="contamination"):
         evaluate_scores(scores, labels, contamination=bad_contamination)
+
+
+# ---------------------------------------------------------------------------
+# evaluate_flags / FlagMetrics (P0-8): metrics of a real, already-decided
+# boolean flag -- as opposed to evaluate_scores' hypothetical top-k cut on a
+# continuous ranking.
+# ---------------------------------------------------------------------------
+
+
+def test_flag_metrics_fields_present():
+    m = FlagMetrics(
+        precision=0.7,
+        recall=0.6,
+        f1=0.65,
+        false_positive_rate=0.05,
+        flag_count=12,
+        n_positives=20,
+        n_total=200,
+    )
+    assert m.precision == pytest.approx(0.7)
+    assert m.recall == pytest.approx(0.6)
+    assert m.flag_count == 12
+
+
+def test_flag_metrics_str_contains_key_fields():
+    m = FlagMetrics(
+        precision=0.7,
+        recall=0.6,
+        f1=0.65,
+        false_positive_rate=0.05,
+        flag_count=12,
+        n_positives=20,
+        n_total=200,
+    )
+    s = str(m)
+    assert "flag_count" in s
+    assert "F1" in s
+    assert "FPR" in s
+
+
+def test_evaluate_flags_perfect_flag():
+    labels = np.array([0, 0, 0, 1, 1])
+    flag = np.array([False, False, False, True, True])
+    m = evaluate_flags(flag, labels)
+    assert m.precision == pytest.approx(1.0)
+    assert m.recall == pytest.approx(1.0)
+    assert m.f1 == pytest.approx(1.0)
+    assert m.false_positive_rate == pytest.approx(0.0)
+    assert m.flag_count == 2
+    assert m.n_positives == 2
+    assert m.n_total == 5
+
+
+def test_evaluate_flags_all_false_positives():
+    labels = np.array([0, 0, 0, 1, 1])
+    flag = np.array([True, True, True, False, False])
+    m = evaluate_flags(flag, labels)
+    assert m.precision == pytest.approx(0.0)
+    assert m.recall == pytest.approx(0.0)
+    assert m.f1 == pytest.approx(0.0)
+    assert m.false_positive_rate == pytest.approx(1.0)
+    assert m.flag_count == 3
+
+
+def test_evaluate_flags_no_flags_at_all():
+    """A real, distinguishing case evaluate_scores' top-k cut cannot express:
+    the actual decision flagged nothing (e.g. a genuinely empty three-way
+    intersection). Precision is 0 by convention (zero_division=0), not
+    undefined/crashing."""
+    labels = np.array([0, 0, 1, 1])
+    flag = np.zeros(4, dtype=bool)
+    m = evaluate_flags(flag, labels)
+    assert m.flag_count == 0
+    assert m.precision == pytest.approx(0.0)
+    assert m.recall == pytest.approx(0.0)
+    assert m.false_positive_rate == pytest.approx(0.0)
+
+
+def test_evaluate_flags_differs_from_evaluate_scores_top_k():
+    """The exact gap P0-8 closes: a top-k cut on the ranking (evaluate_scores)
+    is not the same operating point as the real flag decision -- an
+    intersection's real flag count can be much smaller than round(n *
+    contamination), so its precision/recall are genuinely different
+    numbers, not two names for one."""
+    n = 100
+    labels = np.zeros(n, dtype=int)
+    labels[:10] = 1  # 10 true positives
+    scores = np.linspace(1.0, 0.0, n)  # highest score first -- matches the true-positive block
+    # Real flag: much more conservative than the top-10-by-score cut below --
+    # only 2 rows flagged, both true positives.
+    flag = np.zeros(n, dtype=bool)
+    flag[:2] = True
+
+    ranking_metrics = evaluate_scores(scores, labels, contamination=0.10)
+    flag_metrics = evaluate_flags(flag, labels)
+
+    assert ranking_metrics.k_used == 10
+    assert flag_metrics.flag_count == 2
+    assert flag_metrics.precision == pytest.approx(1.0)
+    assert flag_metrics.recall == pytest.approx(0.2)  # 2 of the 10 true positives
+    assert flag_metrics.recall != ranking_metrics.recall_at_k
+
+
+def test_evaluate_flags_accepts_0_1_int_flag():
+    """flag need not already be bool -- 0/1 ints (e.g. straight off a numpy
+    comparison) are accepted too."""
+    labels = np.array([0, 1, 0, 1])
+    flag = np.array([0, 1, 1, 1])
+    m = evaluate_flags(flag, labels)
+    assert isinstance(m, FlagMetrics)
+
+
+def test_evaluate_flags_rejects_2d_flag():
+    with pytest.raises(ValueError, match="1-D"):
+        evaluate_flags(np.zeros((10, 2), dtype=bool), np.zeros(10, dtype=int))
+
+
+def test_evaluate_flags_rejects_mismatched_length():
+    with pytest.raises(ValueError, match="equal length"):
+        evaluate_flags(np.zeros(10, dtype=bool), np.zeros(9, dtype=int))
+
+
+def test_evaluate_flags_rejects_empty_input():
+    with pytest.raises(ValueError, match="non-empty"):
+        evaluate_flags(np.array([], dtype=bool), np.array([]))
+
+
+def test_evaluate_flags_rejects_non_binary_labels():
+    flag = np.array([True, False, True])
+    labels = np.array([0, 1, 2])
+    with pytest.raises(ValueError, match="binary"):
+        evaluate_flags(flag, labels)
 
 
 # ---------------------------------------------------------------------------

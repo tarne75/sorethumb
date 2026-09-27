@@ -6,26 +6,32 @@ Marked ``benchmark``, so it is deselected by default and run explicitly::
 
     pytest -m benchmark
 
-Floors were set from an observed run (2026-09-20) with margin below the
+Floors were set from an observed run (2026-09-20, ``local``/``varying_density``
+default-ablation floors added 2026-09-27 after P0-8) with margin below the
 measured value. Ratchet a floor UP when a change reliably improves it; do not
 lower one without a documented reason in this file.
 
-Known, deliberately undocumented-as-floors weak spots
--------------------------------------------------------
-The *default* ablation (``combination="intersection"``, the pipeline's real
-shipped default) is not floor-tested on ``local`` or ``varying_density``:
-OneClassSVM badly misranks both regimes (observed ROC-AUC as low as 0.04 on
-``local``), and intersection's ``min()`` aggregation across detectors lets
-that one bad member drag the whole ensemble's continuous ranking down with
-it -- observed default-ablation ROC-AUC on those two scenarios is *worse
-than random*. This is a real, measured property of the shipped default, not
-a synthetic-data artifact (see docs/approximations.md), and mirrors the
-existing precedent of documenting ``lof``'s weakness on ``clustered``
-anomalies (tests/benchmark/test_accuracy_floors.py) rather than asserting
-something known to be false. The ``combination_union`` ablation -- which
-takes the *best*-performing detector's opinion per row instead of the
-worst's -- clears a real floor on both, and *that* is floor-tested here:
-if union's robustness on these scenarios regresses, this suite catches it.
+``local``/``varying_density`` under the default ablation (P0-8, 2026-09-27)
+-----------------------------------------------------------------------------
+Previously undocumented-as-floors here: the *default* ablation
+(``combination="intersection"``) scored **worse than random** on these two
+scenarios (ROC-AUC as low as 0.04), because the combined *ranking* used
+``min()`` across detectors -- letting OneClassSVM's badly-misranked score on
+these regimes dominate the whole ensemble's ranking, even with two other
+members ranking well. Fixed by ranking on the per-row *median* across
+detectors instead (``scoring/combine.py::ScoreEnsemble._combine``,
+``combination="intersection"``) -- a statistic that cannot be dominated by a
+single anti-correlated member out of three, unlike ``min()``. The *flag*
+decision (an AND of all three detectors' independent votes) is unchanged by
+this fix and is not floor-tested for accuracy here -- intersection's
+naturally conservative, unanimous-agreement requirement still produces very
+few flags on these two scenarios, most of them false positives (0.0
+flag_precision/flag_recall observed even post-fix; see
+``PipelineBenchmarkRow.flag_precision``/``flag_recall`` computed against the
+real ``anomaly_flag``, not the ranking) -- a separate, genuine limitation of
+requiring unanimous agreement on data these detectors individually misjudge,
+not something this phase changed or was asked to fix. See
+docs/approximations.md for the full writeup.
 
 ``contextual`` is not floor-tested as "beats random" under any ablation: every
 combination mode tried (default/intersection, composite, union, all_detectors)
@@ -50,7 +56,8 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.benchmark
 
 # (scenario, ablation) -> ROC-AUC floor. Observed values on the 2026-09-20
-# reference run are in the trailing comments.
+# reference run are in the trailing comments; local/varying_density default
+# floors observed 2026-09-27 (post P0-8's median-ranking fix).
 _FLOORS: dict[tuple[str, str], float] = {
     ("point", "default"): 0.85,  # observed 0.97
     ("clustered", "default"): 0.85,  # observed 0.98 (default ensemble excludes lof)
@@ -58,6 +65,8 @@ _FLOORS: dict[tuple[str, str], float] = {
     ("swamping", "default"): 0.70,  # observed 0.97 -- training contamination cost less than expected
     ("local", "combination_union"): 0.65,  # observed 0.84
     ("varying_density", "combination_union"): 0.65,  # observed 0.86
+    ("local", "default"): 0.55,  # observed 0.71 -- was 0.04 (worse than random) before P0-8
+    ("varying_density", "default"): 0.55,  # observed 0.68 -- was 0.24 before P0-8
 }
 
 # Sanity-only, not "beats random": contextual anomalies genuinely sit at

@@ -129,6 +129,17 @@ class PipelineBenchmarkRow:
 
     error: str | None = None
 
+    # Metrics of the *actual* anomaly_flag this cell's ensemble decided on --
+    # as opposed to roc_auc/average_precision/precision_at_k/recall_at_k/
+    # f1_at_contamination above, which all describe the continuous ranking
+    # (or a hypothetical top-k cut on it), never the real flag decision. None
+    # for a "sklearn:*" baseline row (no ensemble/flag concept there).
+    flag_precision: float | None = None
+    flag_recall: float | None = None
+    flag_f1: float | None = None
+    flag_false_positive_rate: float | None = None
+    flag_count: float | None = None
+
     def as_dict(self) -> dict[str, Any]:
         """Flatten to a JSON/CSV-serialisable dict."""
         return {
@@ -150,6 +161,11 @@ class PipelineBenchmarkRow:
             "score_seconds": self.score_seconds,
             "peak_memory_mb": self.peak_memory_mb,
             "error": self.error,
+            "flag_precision": self.flag_precision,
+            "flag_recall": self.flag_recall,
+            "flag_f1": self.flag_f1,
+            "flag_false_positive_rate": self.flag_false_positive_rate,
+            "flag_count": self.flag_count,
         }
 
 
@@ -231,7 +247,7 @@ def _fit_score_one_seed_pipeline(
 ) -> dict[str, Any]:
     """Fit on train, score holdout, through the real feature pipeline. One seed."""
     from sorethumb.detectors import registry  # noqa: PLC0415
-    from sorethumb.evaluate.metrics import evaluate_scores  # noqa: PLC0415
+    from sorethumb.evaluate.metrics import evaluate_flags, evaluate_scores  # noqa: PLC0415
     from sorethumb.features.build import apply_feature_plan, fit_features  # noqa: PLC0415
     from sorethumb.profiling.plan import build_feature_plan  # noqa: PLC0415
     from sorethumb.scoring.calibrate import Calibrator  # noqa: PLC0415
@@ -286,6 +302,7 @@ def _fit_score_one_seed_pipeline(
     scores = combined["combined_score"]
 
     metrics = evaluate_scores(scores, holdout_y, contamination=scenario.review_budget)
+    flag_metrics = evaluate_flags(combined["anomaly_flag"], holdout_y)
     return {
         "n_train": len(train_df),
         "n_holdout": len(holdout_df),
@@ -296,6 +313,11 @@ def _fit_score_one_seed_pipeline(
         "f1_at_contamination": metrics.f1_at_contamination,
         "fit_seconds": fit_seconds,
         "score_seconds": score_seconds,
+        "flag_precision": flag_metrics.precision,
+        "flag_recall": flag_metrics.recall,
+        "flag_f1": flag_metrics.f1,
+        "flag_false_positive_rate": flag_metrics.false_positive_rate,
+        "flag_count": float(flag_metrics.flag_count),
     }
 
 
@@ -369,6 +391,13 @@ def _aggregate(
     def _mean(key: str) -> float:
         return float(np.nanmean([r[key] for r in per_seed]))
 
+    def _mean_or_none(key: str) -> float | None:
+        # Absent for a "sklearn:*" baseline row -- no ensemble/flag concept
+        # there (see _fit_score_one_seed_baseline) -- rather than a fake 0.0.
+        if key not in per_seed[0]:
+            return None
+        return _mean(key)
+
     return PipelineBenchmarkRow(
         scenario=scenario.name,
         kind=scenario.kind,
@@ -387,6 +416,11 @@ def _aggregate(
         fit_seconds=_mean("fit_seconds"),
         score_seconds=_mean("score_seconds"),
         peak_memory_mb=batch.get("peak_memory_mb"),
+        flag_precision=_mean_or_none("flag_precision"),
+        flag_recall=_mean_or_none("flag_recall"),
+        flag_f1=_mean_or_none("flag_f1"),
+        flag_false_positive_rate=_mean_or_none("flag_false_positive_rate"),
+        flag_count=_mean_or_none("flag_count"),
     )
 
 
@@ -560,6 +594,11 @@ _TABLE_COLS = [
     "average_precision",
     "precision_at_k",
     "recall_at_k",
+    "flag_precision",
+    "flag_recall",
+    "flag_f1",
+    "flag_false_positive_rate",
+    "flag_count",
     "fit_seconds",
     "score_seconds",
     "peak_memory_mb",
@@ -581,6 +620,10 @@ def _fmt_row_for_table(row: PipelineBenchmarkRow) -> dict[str, str]:
         if row.n_seeds > 1
         else f"{row.average_precision:.4f}"
     )
+
+    def _opt(v: float | None, fmt: str = ".4f") -> str:
+        return "n/a" if v is None else f"{v:{fmt}}"
+
     return {
         "scenario": row.scenario,
         "kind": row.kind,
@@ -592,6 +635,11 @@ def _fmt_row_for_table(row: PipelineBenchmarkRow) -> dict[str, str]:
         "average_precision": ap,
         "precision_at_k": f"{row.precision_at_k:.4f}",
         "recall_at_k": f"{row.recall_at_k:.4f}",
+        "flag_precision": _opt(row.flag_precision),
+        "flag_recall": _opt(row.flag_recall),
+        "flag_f1": _opt(row.flag_f1),
+        "flag_false_positive_rate": _opt(row.flag_false_positive_rate),
+        "flag_count": _opt(row.flag_count, ".1f"),
         "fit_seconds": f"{row.fit_seconds:.3f}",
         "score_seconds": f"{row.score_seconds:.3f}",
         "peak_memory_mb": peak,

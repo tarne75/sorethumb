@@ -41,6 +41,106 @@ class Metrics:
         )
 
 
+@dataclass
+class FlagMetrics:
+    """Metrics of a real, already-decided boolean anomaly flag.
+
+    Distinct from :class:`Metrics`/:func:`evaluate_scores`, which describe a
+    continuous *ranking* (or a hypothetical top-k cut on it, chosen to match
+    a target contamination) -- this describes the actual decision an
+    ensemble made (e.g. ``ScoreEnsemble.combine(...)["anomaly_flag"]``),
+    whatever its true positive count happens to be. The two can differ
+    substantially: an intersection/union combination's real flag count is
+    not generally equal to ``round(n * contamination)``.
+    """
+
+    precision: float
+    recall: float
+    f1: float
+    false_positive_rate: float
+    flag_count: int
+    n_positives: int
+    n_total: int
+
+    def __str__(self) -> str:
+        """Return string representation."""
+        return (
+            f"flag_count={self.flag_count}  P={self.precision:.4f}  R={self.recall:.4f}  "
+            f"F1={self.f1:.4f}  FPR={self.false_positive_rate:.4f}"
+        )
+
+
+def _validate_evaluate_flags_inputs(flag_arr: np.ndarray, labels_raw: np.ndarray) -> None:
+    if flag_arr.ndim != 1:
+        msg = f"flag must be 1-D; got shape {flag_arr.shape}"
+        raise ValueError(msg)
+    if labels_raw.ndim != 1:
+        msg = f"labels must be 1-D; got shape {labels_raw.shape}"
+        raise ValueError(msg)
+    if len(flag_arr) == 0:
+        msg = "flag/labels must be non-empty"
+        raise ValueError(msg)
+    if len(flag_arr) != len(labels_raw):
+        msg = f"flag and labels must have equal length; got {len(flag_arr)} and {len(labels_raw)}"
+        raise ValueError(msg)
+    bad_labels = sorted(set(labels_raw.tolist()) - {0.0, 1.0})
+    if bad_labels:
+        msg = f"labels must be binary (0/1); found other value(s): {bad_labels}"
+        raise ValueError(msg)
+
+
+def evaluate_flags(flag: Any, labels: Any) -> FlagMetrics:
+    """Compute precision/recall/F1/false-positive-rate/count for a real boolean flag.
+
+    Parameters
+    ----------
+    flag:
+        1-D boolean (or 0/1) array-like: the actual anomaly decision (True =
+        flagged), not a hypothetical top-k selection.
+    labels:
+        1-D array-like of binary (0/1) ground-truth labels (1 = anomaly).
+
+    Returns
+    -------
+    FlagMetrics.
+
+    Raises
+    ------
+    ValueError
+        flag/labels are not 1-D, not the same length, empty, or labels
+        contain a value other than 0/1.
+
+    """
+    from sklearn.metrics import precision_recall_fscore_support  # noqa: PLC0415
+
+    flag_arr = np.asarray(flag).astype(bool)
+    labels_raw = np.asarray(labels, dtype=float)
+    _validate_evaluate_flags_inputs(flag_arr, labels_raw)
+    labels_arr = labels_raw.astype(int)
+
+    n_total = len(flag_arr)
+    n_positives = int(labels_arr.sum())
+    flag_count = int(flag_arr.sum())
+
+    predicted = flag_arr.astype(int)
+    precision, recall, f1_arr, _ = precision_recall_fscore_support(
+        labels_arr, predicted, average=None, zero_division=0, labels=[0, 1]
+    )
+    n_negatives = n_total - n_positives
+    false_positives = int((flag_arr & (labels_arr == 0)).sum())
+    fpr = false_positives / n_negatives if n_negatives > 0 else 0.0
+
+    return FlagMetrics(
+        precision=float(precision[1]),
+        recall=float(recall[1]),
+        f1=float(f1_arr[1]),
+        false_positive_rate=fpr,
+        flag_count=flag_count,
+        n_positives=n_positives,
+        n_total=n_total,
+    )
+
+
 def _validate_evaluate_inputs(scores_arr: np.ndarray, labels_raw: np.ndarray, contamination: float) -> None:
     """Validate evaluate_scores input.
 

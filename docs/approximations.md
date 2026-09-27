@@ -215,28 +215,40 @@ transitive dependencies, similar to the friction already documented for SHAP)
 purely for a comparison baseline. If PyOD-specific comparisons become valuable
 later, add it as its own optional extra rather than a core/benchmark dependency.
 
-## Full-pipeline scenario benchmark — `intersection` combination is not robust to one bad member
+## Full-pipeline scenario benchmark — intersection's flag decision stays conservative on `local`/`varying_density` even after the ranking fix
 
-`tests/benchmark/test_pipeline_accuracy_floors.py` measured that the pipeline's
-*shipped default* (`scoring.combination = "intersection"`, the default three-
-detector ensemble) scores **worse than random** (ROC-AUC as low as ~0.04) on the
-`local` and `varying_density` scenarios (see `evaluate/scenarios.py`). Root
-cause: `intersection`'s combined score is `min()` across each detector's
-calibrated score (`scoring/combine.py::ScoreEnsemble._combine`) — a principled
-choice for the *flag* decision (only flag when every detector agrees), but it
-means the combined *continuous ranking* is only as good as its single worst
-member. On both scenarios, `OneClassSVM`'s RBF-kernel boundary badly misranks
-points in a low-density gap between clusters or a mixed-density regime
-(individually measured ROC-AUC as low as 0.002), and `min()` lets that one
-detector's bad ranking dominate the ensemble's, even though `isolation_forest`
-alone scores 0.90+ on the same data. `union` (`max()` across detectors) is
-measured to be far more robust on these same two scenarios (ROC-AUC ~0.85) —
-it takes the *best*-performing detector's opinion per row instead of the
-worst's. This is real, measured behaviour of the shipped default on a
-plausible data regime, not a synthetic-data artifact tuned to fail; it is
-surfaced here rather than silently worked around, matching the rest of this
-file's practice of documenting known limitations instead of asserting
-something known to be false.
+`tests/benchmark/test_pipeline_accuracy_floors.py` previously measured that
+the pipeline's *shipped default* (`scoring.combination = "intersection"`, the
+default three-detector ensemble) scored **worse than random** (ROC-AUC as
+low as ~0.04) on the `local` and `varying_density` scenarios (see
+`evaluate/scenarios.py`). Root cause: `intersection`'s combined *ranking* was
+`min()` across each detector's calibrated score
+(`scoring/combine.py::ScoreEnsemble._combine`) — on both scenarios,
+`OneClassSVM`'s RBF-kernel boundary badly misranks points in a low-density
+gap between clusters or a mixed-density regime (individually measured
+ROC-AUC as low as 0.002), and `min()` let that one detector's bad ranking
+dominate the ensemble's, even though `isolation_forest` alone scores 0.90+ on
+the same data. Fixed (P0-8): the ranking now uses the per-row *median* across
+detectors, which cannot be dominated by a single anti-correlated member out
+of three — ROC-AUC on these scenarios is now ~0.68–0.71, comfortably above
+random, and both are floor-tested under the default ablation (see
+`scoring/combine.py`'s "Continuous ranking" docstring section).
+
+The *flag* decision itself (an AND of all three detectors' independent
+votes, deliberately unchanged by the ranking fix) is a separate matter and
+remains a genuine, current limitation on these two scenarios: intersection's
+conservative, unanimous-agreement requirement still produces very few actual
+flags there, and those it does produce are not reliably true positives
+(`flag_precision`/`flag_recall` measured at 0.0 on both scenarios even
+post-fix — see `PipelineBenchmarkRow.flag_precision`/`flag_recall`, computed
+against the real `anomaly_flag`, not the ranking). In other words: the
+*ranking* now correctly says "these rows look most anomalous" even on this
+data, but the *flag* — needing all three detectors' independent, individually
+weaker boundaries to agree exactly — still rarely fires correctly here.
+`union`'s flag rule (any one detector agrees) is markedly more permissive and
+not affected by this; its ranking (`max()` across detectors) was already
+robust to a single bad member for the same reason the new `intersection`
+median is.
 
 ## Full-pipeline scenario benchmark — `contextual` anomalies are near-chance for every combination mode
 

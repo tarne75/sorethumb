@@ -230,6 +230,32 @@ diff against.
 
 ### Fixed
 
+- The shipped default ensemble (`scoring.combination = "intersection"`,
+  three detectors) ranked flagged rows **worse than random** (ROC-AUC as low
+  as ~0.04) on data where one member's boundary badly misranks anomalies
+  (measured on the `local`/`varying_density` benchmark scenarios): the
+  combined continuous ranking was `min()` across detectors, so a single
+  anti-correlated member dominated the whole ensemble's ranking even with
+  two other members scoring well above 0.9 on the same data. The ranking now
+  uses the per-row *median* across detectors instead — a statistic that
+  cannot be dominated by one outlier out of three — recovering ROC-AUC
+  ~0.68-0.71 on those scenarios; `combination = "composite"`/`"union"`'s
+  ranking, and every mode's *flag* decision (an AND/OR of independent
+  per-detector votes, unaffected by how the ranking is computed), are
+  unchanged. Intersection's flag decision itself remains conservative on
+  these two scenarios even post-fix (very few real flags, not reliably true
+  positives) — a separate, genuine limitation of requiring all three
+  detectors' independently weaker boundaries to agree exactly, not something
+  this fix changed or was asked to address (see docs/approximations.md).
+  `PipelineBenchmarkRow`/the pipeline-benchmark CSV/Markdown output gained
+  `flag_precision`/`flag_recall`/`flag_f1`/`flag_false_positive_rate`/
+  `flag_count`, computed against the real `anomaly_flag` (via new
+  `evaluate.metrics.evaluate_flags`) rather than a hypothetical top-k cut on
+  the ranking — the two can differ substantially and previously only the
+  latter was reported. New release-gating ROC-AUC floors for the default
+  ablation on `local`/`varying_density` (`tests/benchmark/
+  test_pipeline_accuracy_floors.py`), previously explicitly excluded because
+  they were known worse-than-random.
 - `Store.insert_run` independently re-hashed the full (redacted)
   `config_json` string and stored *that* under the `run` table's
   `config_hash` column, while `RunResult.config_hash`, `run_id` itself, and

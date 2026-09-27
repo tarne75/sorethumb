@@ -386,7 +386,12 @@ def test_composite_is_weighted_average():
     np.testing.assert_allclose(result["combined_score"], 0.5, atol=1e-9)
 
 
-def test_intersection_is_min():
+def test_intersection_ranking_is_median_not_min():
+    """P0-8: the continuous ranking for combination="intersection" is the
+    per-row median across detectors, not min() -- min() let a single
+    anti-correlated member's score dominate the whole ensemble's ranking
+    (the flag decision, an AND of natural_flag votes, is unaffected either
+    way -- this only concerns combined_score/ranking)."""
     from sorethumb.errors import ZeroAnomalyWarning
 
     n = 100
@@ -399,8 +404,46 @@ def test_intersection_is_min():
     # combined_score.
     with pytest.warns(ZeroAnomalyWarning):
         result = ens.combine({"a": a, "b": b}, {"a": a > 0.5, "b": b > 0.5})
-    expected = np.minimum(a, b)
+    expected = np.median(np.column_stack([a, b]), axis=1)
     np.testing.assert_allclose(result["combined_score"], expected)
+
+
+def test_intersection_ranking_median_is_robust_to_one_anti_correlated_member():
+    """The exact failure mode P0-8 fixes: with three detectors, two of them
+    genuinely rank anomalies high and one is anti-correlated (ranks them
+    low). min() would let the bad member's low score dominate the ranking
+    for every row, including true anomalies; median() cannot be dominated by
+    a single outlier out of three."""
+    n = 50
+    rng = np.random.default_rng(0)
+    anomaly = np.zeros(n, dtype=bool)
+    anomaly[:5] = True  # first 5 rows are the true anomalies
+
+    good_a = np.where(anomaly, 0.9, 0.1) + rng.normal(0, 0.01, n)
+    good_b = np.where(anomaly, 0.85, 0.15) + rng.normal(0, 0.01, n)
+    bad_c = np.where(anomaly, 0.1, 0.9) + rng.normal(0, 0.01, n)  # anti-correlated
+
+    from sorethumb.errors import AntiCorrelatedMemberWarning, ZeroAnomalyWarning
+
+    ens = ScoreEnsemble(combination="intersection", contamination="auto")
+    # Neither warning is what this test is about -- both are expected,
+    # unavoidable side effects of this exact setup, not the thing under
+    # test: bad_c is anti-correlated with the consensus by construction, so
+    # the existing bad-member guard (correctly) flags it (module docstring:
+    # it warns but never drops a member for intersection/union); and since
+    # bad_c's natural_flag fires on the *opposite* rows from a/b's, the
+    # three-way AND is genuinely empty here.
+    with pytest.warns((AntiCorrelatedMemberWarning, ZeroAnomalyWarning)):
+        result = ens.combine(
+            {"a": good_a, "b": good_b, "c": bad_c},
+            {"a": good_a > 0.5, "b": good_b > 0.5, "c": bad_c > 0.5},
+        )
+    # True anomalies must rank ahead of true normals under the combined
+    # score -- would fail under the old min()-across-detectors ranking,
+    # since bad_c's low score for every true anomaly would win the min().
+    anomaly_scores = result["combined_score"][anomaly]
+    normal_scores = result["combined_score"][~anomaly]
+    assert anomaly_scores.min() > normal_scores.max()
 
 
 def test_union_is_max():
