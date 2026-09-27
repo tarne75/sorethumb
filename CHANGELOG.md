@@ -230,6 +230,33 @@ diff against.
 
 ### Fixed
 
+- `run_detection` fit the feature scaler/correlation/PCA on the full dataset
+  (as designed, so parameters are stable across groups), but its returned
+  `FeatureSpace` — a whole-dataset-sized matrix, entirely unused afterwards —
+  stayed bound to a local (`full_space`) captured by the per-group closure,
+  keeping it alive for the *entire* per-group loop on top of whatever the
+  current group's own matrix needed. Now discarded immediately after the fit
+  call. Separately, every group's matrix was unconditionally upcast to
+  `float64` before detector fit/score, even though `features.dtype="float32"`
+  (the default) is already correct there (see "Feature matrix dtype" above) —
+  the upcast now only happens when `explain.enabled` (the default; TreeSHAP
+  and the ECOD/HBOS exact decomposition need the full matrix at float64,
+  OneClassSVM/LOF's gradient path needs it for the flagged-row subset) and is
+  skipped entirely (`copy=False`) when `features.dtype` is already float64.
+  The pre-flight `run.max_memory_mb` estimate was a single bare-matrix size
+  that didn't account for either of these — it now applies a 2x/4x
+  multiplier (matrix + polars encode/scale headroom, plus the float64
+  explain copy when applicable); it still does not model detector-internal
+  memory (e.g. a kernel-based fit's O(train_rows²) usage) — see
+  `run.max_memory_mb`'s updated description. New tests: a weakref-based
+  regression guard (`tests/integration/test_feature_matrix_lifetime.py`,
+  confirmed to fail without this fix by temporarily reverting it) proving
+  the full-dataset `FeatureSpace` is never reachable after fitting; new
+  subprocess real-peak-RSS benchmark tests
+  (`tests/benchmark/test_memory_budget.py`) for a multi-group run and for
+  the expanded budget check rejecting before a run completes; new unit
+  tests for the multiplier logic itself
+  (`tests/unit/features/test_features.py`).
 - The shipped default ensemble (`scoring.combination = "intersection"`,
   three detectors) ranked flagged rows **worse than random** (ROC-AUC as low
   as ~0.04) on data where one member's boundary badly misranks anomalies

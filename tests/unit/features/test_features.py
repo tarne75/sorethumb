@@ -10,6 +10,7 @@ import pytest
 from sorethumb.config import (
     ColumnsConfig,
     Config,
+    ExplainConfig,
     FeaturesConfig,
     ProfilingConfig,
     RunConfig,
@@ -22,7 +23,13 @@ from sorethumb.errors import (
     NonFiniteWarning,
     PlanError,
 )
-from sorethumb.features.build import _sanitize, apply_feature_plan, fit_features
+from sorethumb.features.build import (
+    _check_memory_budget,
+    _peak_matrix_multiplier,
+    _sanitize,
+    apply_feature_plan,
+    fit_features,
+)
 from sorethumb.features.correlate import correlated_pairs, drop_correlated
 from sorethumb.features.encode import (
     _array_derive_exprs,
@@ -991,15 +998,15 @@ def test_fit_features_dtype_float64():
     assert space.matrix.dtype == np.float64
 
 
-def test_memory_budget_exceeded_raises():
-    n = 100
-    # +0.5 keeps these non-integer-valued so they aren't misread as a dense
-    # unique integer sequence by the numeric-identifier heuristic.
-    df = pl.DataFrame({f"col_{i}": [float(j) + 0.5 for j in range(n)] for i in range(5)})
-    # Bypass pydantic ge=256 constraint to test the budget logic with a tiny limit
+def _memory_test_config(
+    *, max_memory_mb: int, dtype: str = "float32", explain_enabled: bool = True
+) -> Config:
+    """Build a Config for memory-budget tests, bypassing pydantic's ge=256
+    floor on max_memory_mb (via model_construct) so arbitrarily small/precise
+    test budgets are possible."""
     run = RunConfig.model_construct(
         workdir="/tmp/test",
-        max_memory_mb=0,
+        max_memory_mb=max_memory_mb,
         seed=42,
         strict=False,
         max_rows=None,
@@ -1008,21 +1015,74 @@ def test_memory_budget_exceeded_raises():
         log_level="INFO",
         slow_stage_seconds=300,
     )
-    config = Config.model_construct(
+    return Config.model_construct(
         source=SourceConfig(uri="file://dummy"),
         columns=ColumnsConfig(),
         profiling=ProfilingConfig(),
-        features=FeaturesConfig(),
+        features=FeaturesConfig(dtype=dtype),
         run=run,
         detectors=[],
         scoring=None,
-        explain=None,
+        explain=ExplainConfig(enabled=explain_enabled),
         history=None,
         report=None,
     )
+
+
+def test_memory_budget_exceeded_raises():
+    n = 100
+    # +0.5 keeps these non-integer-valued so they aren't misread as a dense
+    # unique integer sequence by the numeric-identifier heuristic.
+    df = pl.DataFrame({f"col_{i}": [float(j) + 0.5 for j in range(n)] for i in range(5)})
+    config = _memory_test_config(max_memory_mb=0)  # bypasses pydantic's ge=256 floor
     plan = build_feature_plan(df, config)
     with pytest.raises(MemoryBudgetError):
         fit_features(df, plan, config)
+
+
+# ---------------------------------------------------------------------------
+# _peak_matrix_multiplier / _check_memory_budget (P1-1): the preflight
+# estimate must reflect how many copies of the matrix can be alive at once,
+# not just one -- see src/sorethumb/features/build.py's docstrings.
+# ---------------------------------------------------------------------------
+
+
+def test_peak_matrix_multiplier_default_config_is_4x():
+    config = _memory_test_config(max_memory_mb=8192, dtype="float32", explain_enabled=True)
+    assert _peak_matrix_multiplier(config) == pytest.approx(4.0)
+
+
+def test_peak_matrix_multiplier_explain_disabled_is_2x():
+    config = _memory_test_config(max_memory_mb=8192, dtype="float32", explain_enabled=False)
+    assert _peak_matrix_multiplier(config) == pytest.approx(2.0)
+
+
+def test_peak_matrix_multiplier_dtype_float64_is_2x_even_with_explain():
+    """dtype=float64 means the explain-path upcast (astype(..., copy=False))
+    is a no-op -- no second copy, so no extra multiplier over the flat
+    group-matrix + encode/scale-headroom base, regardless of explain.enabled."""
+    config = _memory_test_config(max_memory_mb=8192, dtype="float64", explain_enabled=True)
+    assert _peak_matrix_multiplier(config) == pytest.approx(2.0)
+
+
+def test_check_memory_budget_expanded_estimate_catches_what_bare_matrix_would_miss():
+    """The exact regression this phase fixes: a budget the *expanded*
+    estimate correctly flags but a bare single-matrix estimate would have
+    let through. n_rows x n_cols x 4 bytes alone fits comfortably under the
+    budget; x4 (explain enabled, the default) does not."""
+    n_rows, n_cols = 1000, 100
+    base_mb = n_rows * n_cols * 4 / (1024 * 1024)
+    budget = round(base_mb * 2)  # between the bare estimate (1x) and 4x
+    assert base_mb < budget < base_mb * 4
+
+    exceeds_config = _memory_test_config(max_memory_mb=budget, explain_enabled=True)
+    with pytest.raises(MemoryBudgetError):
+        _check_memory_budget(n_rows, n_cols, exceeds_config)
+
+    # Same n_rows/n_cols/budget, but explain disabled -> multiplier is 2x,
+    # not 4x -- comfortably under the same budget, so it must NOT raise.
+    fits_config = _memory_test_config(max_memory_mb=budget, explain_enabled=False)
+    _check_memory_budget(n_rows, n_cols, fits_config)  # must not raise
 
 
 def test_missing_indicators_emitted():

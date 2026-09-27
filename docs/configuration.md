@@ -120,7 +120,7 @@ so trivial changes do not invalidate cached artefacts.
 | `run.workdir` | str | **required** | Workspace root directory where all run artefacts are stored. |
 | `run.seed` | int | 42 | Global random seed for reproducible results. |
 | `run.strict` | bool | false | Promote all SorethumbWarnings to errors. Always active in the test suite. |
-| `run.max_memory_mb` | int | 8192 | Pre-flight cap on the projected feature-matrix size (rows x encoded columns x dtype bytes). A run whose estimate exceeds this aborts with MemoryBudgetError before any model is fitted. It is not a live RSS ceiling -- actual peak memory can still exceed the budget. |
+| `run.max_memory_mb` | int | 8192 | Pre-flight cap on the projected feature matrix's memory, sized for how many copies of it (rows x encoded columns x dtype bytes) can realistically be alive at once -- 2x the bare matrix size (one group's matrix plus polars encode/scale headroom), or 4x when explain.enabled (the default) and features.dtype='float32' (explain needs an additional float64 copy of the full matrix). A run whose estimate exceeds this aborts with MemoryBudgetError before any model is fitted. It is not a live RSS ceiling, and does not include detector-internal memory (e.g. a kernel-based fit's O(train_rows^2) usage) -- actual peak memory can still exceed the budget. |
 | `run.max_rows` | int \| null | null | Truncate the input to at most this many rows (after filtering). Triggers SampleTruncatedWarning. None uses all rows. |
 | `run.reuse_models` | bool | false | If a matching model artefact exists in workdir, skip retraining. Useful for score-forward runs. |
 | `run.retention_days` | int | 90 | Prune run artefacts older than this many days from workdir. |

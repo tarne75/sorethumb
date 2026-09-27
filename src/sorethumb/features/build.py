@@ -56,6 +56,61 @@ def _extract_row_ids(df: pl.DataFrame) -> np.ndarray:
     return np.arange(len(df), dtype=np.int64)
 
 
+def _peak_matrix_multiplier(config: Config) -> float:
+    """Estimate how many "base matrix" units can be alive simultaneously (P1-1).
+
+    The base unit is one matrix at the configured dtype (``n_rows x n_cols x
+    dtype_bytes`` -- what ``estimated_mb`` below already computes). Real
+    per-group peak memory is a multiple of that, not that figure itself:
+
+    - 1x for the group's own matrix (``apply_feature_plan``'s
+      ``FeatureSpace.matrix``, always at the configured dtype).
+    - Up to 2x more when ``explain.enabled`` (the default) and the configured
+      dtype is float32: TreeSHAP, the ECOD/HBOS exact decomposition, and the
+      OneClassSVM/LOF gradient path all need a float64 copy (see
+      ``_pipeline._group_feature_matrix``) -- float64 is 8 bytes/element vs
+      float32's 4, i.e. 2 "base units" on top of the 1x original. Zero extra
+      when the configured dtype is already float64 (that copy is skipped
+      entirely, ``astype(..., copy=False)``) or when explain is disabled
+      (nothing needs the upcast).
+    - +1x flat headroom for polars encode/scale intermediates
+      (``_encode``/``apply_scaler``'s output frames), transiently alive
+      alongside the matrix during fitting/apply, win or lose depending on
+      polars' own column-store overhead relative to a dense numpy array.
+
+    Deliberately does *not* attempt to model detector-internal memory (e.g.
+    OneClassSVM's kernel-based fit can need O(train_rows^2), dwarfing the
+    feature matrix for a large, uncapped ``train_row_cap``) -- that is
+    detector- and hyperparameter-specific in a way a single matrix-shaped
+    formula cannot honestly capture; ``train_row_cap`` remains the lever for
+    it. This estimates matrix memory only, same as before P1-1, just less
+    wrong about how many copies of it actually coexist.
+    """
+    multiplier = 1.0 + 1.0  # the group's own matrix + encode/scale headroom
+    if config.explain.enabled and config.features.dtype == "float32":
+        multiplier += 2.0
+    return multiplier
+
+
+def _check_memory_budget(n_rows: int, n_cols: int, config: Config) -> None:
+    """Raise MemoryBudgetError if the projected matrix (see ``_peak_matrix_multiplier``) is too big."""
+    dtype_bytes = 4 if config.features.dtype == "float32" else 8
+    base_mb = n_rows * n_cols * dtype_bytes / (1024 * 1024)
+    multiplier = _peak_matrix_multiplier(config)
+    estimated_mb = base_mb * multiplier
+    if estimated_mb > config.run.max_memory_mb:
+        raise MemoryBudgetError(
+            f"Projected feature matrix ({n_rows} x {n_cols} x {dtype_bytes}B = "
+            f"{base_mb:.0f} MB), x{multiplier:.0f} for matrices/copies live at once "
+            f"(explain={config.explain.enabled}, dtype={config.features.dtype!r}) "
+            f"= {estimated_mb:.0f} MB, exceeds run.max_memory_mb={config.run.max_memory_mb}. "
+            "Reduce one_hot_max_cardinality, enable correlation_reduction, or increase the "
+            "budget; setting explain.enabled=False also drops the x4 (vs x2) multiplier above "
+            "by skipping the float64 explain copy. Detector-internal memory (e.g. a "
+            "kernel-based fit's O(train_rows^2) usage) is not included here; see train_row_cap."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -110,16 +165,9 @@ def fit_features(df: pl.DataFrame, plan: FeaturePlan, config: Config) -> Feature
     enc_df = _encode(df, plan, demoted, extra_freq)
     _assert_encoded_frame_is_usable(enc_df)
 
-    # Pre-flight memory check
-    n_rows, n_cols = len(enc_df), len(enc_df.columns)
-    dtype_bytes = 4 if config.features.dtype == "float32" else 8
-    estimated_mb = n_rows * n_cols * dtype_bytes / (1024 * 1024)
-    if estimated_mb > config.run.max_memory_mb:
-        raise MemoryBudgetError(
-            f"Projected feature matrix ({n_rows} x {n_cols} x {dtype_bytes}B = "
-            f"{estimated_mb:.0f} MB) exceeds run.max_memory_mb={config.run.max_memory_mb}. "
-            "Reduce one_hot_max_cardinality, enable correlation_reduction, or increase the budget."
-        )
+    # Pre-flight memory check (P1-1: sized for how many copies of this
+    # matrix can realistically be alive at once, not just one).
+    _check_memory_budget(len(enc_df), len(enc_df.columns), config)
 
     feature_cols = enc_df.columns
 

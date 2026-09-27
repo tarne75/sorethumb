@@ -589,8 +589,14 @@ def run_detection(
             plan = build_feature_plan(df_raw, config)
 
             # Fit scaler / correlation / PCA on the full frame so parameters are
-            # stable across groups — each group's matrix is a subset of this space.
-            full_space = fit_features(df_raw, plan, config)
+            # stable across groups -- each group's matrix is a subset of this
+            # space. The fitted parameters land on *plan* (mutated in place);
+            # the returned FeatureSpace's matrix -- a full-dataset-sized copy
+            # -- is discarded immediately (P1-1): nothing downstream uses it,
+            # each group re-derives its own matrix from df_raw + plan via
+            # apply_feature_plan(), and keeping it bound to a name would hold
+            # it alive for the whole per-group loop below for no reason.
+            fit_features(df_raw, plan, config)
 
         # Persist the fitted plan so a later `sorethumb score --from-run` can
         # reload and apply it without re-fitting.
@@ -640,7 +646,6 @@ def run_detection(
                     run_id=run_id,
                     config=config,
                     plan=plan,
-                    full_space=full_space,
                     df_raw=df_raw,
                     group_by=group_by,
                     group_values=group_values,
@@ -1222,12 +1227,34 @@ def _execute_group(
         return summary
 
 
+def _group_feature_matrix(group_space: FeatureSpace, config: Config) -> np.ndarray:
+    """Return one group's feature matrix at the dtype fit/score/explain actually need (P1-1).
+
+    The plan's configured dtype (``features.dtype``, float32 by default --
+    see docs/approximations.md) is already correct for every detector's
+    ``fit``/``score_samples``; unconditionally upcasting to float64 (the
+    pre-P1-1 behaviour) doubled this matrix's memory for every group whether
+    or not anything downstream needed the extra precision. Explain is the one
+    consumer that does -- TreeSHAP and the ECOD/HBOS exact decomposition need
+    the *full* matrix at float64 (see their own docstrings), and OneClassSVM/
+    LOF's finite-difference gradient path needs it for the flagged-row subset
+    it receives -- so upcast eagerly whenever ``explain.enabled`` (every
+    consumer reachable from ``_compute_attributions`` only ever runs when
+    it's True) and leave the matrix alone otherwise. ``copy=False`` skips an
+    entirely redundant duplicate allocation when ``features.dtype`` is
+    already float64 (``astype`` copies unconditionally by default, even when
+    the cast is a no-op).
+    """
+    if config.explain.enabled:
+        return group_space.matrix.astype(np.float64, copy=False)
+    return group_space.matrix
+
+
 def _run_group(
     ws: Workspace,
     run_id: str,
     config: Config,
     plan: FeaturePlan,
-    full_space: FeatureSpace,  # noqa: ARG001 — reserved for future row-selection optimisation
     df_raw: pl.DataFrame,
     group_by: list[str],
     group_values: dict[str, Any],
@@ -1254,7 +1281,7 @@ def _run_group(
         return _group_summary(group_key, group_label, n_records, status="too_few_records")
 
     group_space = apply_feature_plan(df_group, plan)
-    X = group_space.matrix.astype(np.float64)
+    X = _group_feature_matrix(group_space, config)
     n_rows = len(X)
 
     # ── Detectors ─────────────────────────────────────────────────────────
@@ -1392,7 +1419,7 @@ def _score_forward_group(
         return _group_summary(group_key, group_label, n_records, status="too_few_records")
 
     group_space = apply_feature_plan(df_group, plan)
-    X = group_space.matrix.astype(np.float64)
+    X = _group_feature_matrix(group_space, config)
 
     enabled_names = [d.name for d in config.detectors if d.enabled]
     res = score_with_existing(
