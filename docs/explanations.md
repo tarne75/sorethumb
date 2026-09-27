@@ -133,6 +133,20 @@ decomposition with a heuristic gradient result doesn't un-corrupt the
 heuristic part, so the blend can only be as trustworthy as its least
 trustworthy input.
 
+A detector `combination="composite"` assigned zero weight — dropped by the
+bad-member guard (see the main scoring docs) as anti-correlated with the
+consensus, or independently zeroed by `weighting="agreement"` — is excluded
+before attribution even runs, not merely weighted to 0 in the blend: it never
+supplies a source, is never counted as covering a row, and can never set the
+blended tag or appear in `reason_1`/`reason_2`/etc, even when it is the only
+detector whose attribution method would otherwise have succeeded (the row
+comes back `attribution_kind="none"` instead). A detector's per-row score
+columns (`score_raw_<name>`, `score_cal_<name>`) are unaffected and always
+recorded for inspection regardless of its weight — only the *blended,
+causal* explanation excludes a zero-weight member. `combination="intersection"`/
+`"union"` never drop anyone (every configured vote is required), so this
+does not apply there.
+
 After blending, `derived → original` aggregation maps one-hot encoded columns
 back to their source column. A row that triggers `cat__A = 1, cat__B = 0` does
 not produce two separate explanation entries for `cat__A` and `cat__B`; it

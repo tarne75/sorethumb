@@ -230,6 +230,36 @@ diff against.
 
 ### Fixed
 
+- A detector `combination="composite"` gave zero ensemble weight — dropped
+  by the bad-member guard as anti-correlated with the consensus, or
+  independently zeroed by `weighting="agreement"` — could still end up
+  supplying the *entire* displayed explanation. `explain/blend.py`'s single-
+  source path returns that one source unweighted, and its all-zero-total-
+  weight path falls back to equal weighting — either could let a detector
+  the composite score never listened to become the row's `attribution_kind`
+  and `reason_1`/`reason_2`/etc, especially when the real, contributing
+  detectors' attribution methods failed or were capped by
+  `explain.max_rows`. A zero-weight detector is now excluded before
+  attribution dispatch entirely — it never supplies a source, is never
+  counted as covering a row, and can never set the blended tag, even when
+  it is the only detector whose attribution method would otherwise have
+  succeeded (the row now correctly comes back `attribution_kind="none"`
+  instead of a misleadingly plausible-looking `"heuristic"` explanation
+  built entirely from a detector with no say in the score). Per-detector
+  score columns (`score_raw_<name>`/`score_cal_<name>`) are unaffected —
+  still recorded for every detector regardless of weight, for inspection.
+  Only meaningful for `combination="composite"`; `"intersection"`/`"union"`
+  never drop anyone (every configured vote is required there) and weight
+  does not determine either mode's flag or ranking. New end-to-end
+  regression tests in `tests/integration/test_pipeline_explain.py`
+  (deterministically trigger the bad-member guard by monkeypatching one
+  detector's scores to invert; both confirmed to fail without this fix by
+  temporarily reverting it): the dropped detector as the sole would-be
+  attribution producer now yields no attribution at all rather than
+  surfacing its reasons, and a mixed-source case's `attribution_kind`
+  reflects only the active, non-dropped members' weakest tag.
+  `docs/explanations.md`'s "Blending and aggregation" section documents the
+  exclusion.
 - `run_detection` fit the feature scaler/correlation/PCA on the full dataset
   (as designed, so parameters are stable across groups), but its returned
   `FeatureSpace` — a whole-dataset-sized matrix, entirely unused afterwards —

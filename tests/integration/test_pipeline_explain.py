@@ -11,6 +11,8 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+import sorethumb.explain.native as native_mod
+import sorethumb.explain.shap_tree as shap_tree_mod
 from sorethumb import Config
 from sorethumb._pipeline import run_detection
 from sorethumb.config import (
@@ -22,9 +24,24 @@ from sorethumb.config import (
     ScoringConfig,
     SourceConfig,
 )
+from sorethumb.detectors.one_class_svm import OneClassSVMDetector
 from tests.factories.frames import write_planted_csv, write_time_sorted_parquet
 
 pytestmark = pytest.mark.integration
+
+
+def _invert_one_class_svm_scores(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make OneClassSVM's calibrated score rank the exact opposite of the
+    other configured detectors', deterministically triggering the bad-member
+    guard's drop (Spearman rho < -0.15 against the consensus median) --
+    real fitting, real data, just a guaranteed-anti-correlated member rather
+    than hoping one emerges by chance from a particular dataset/seed."""
+    real_score_samples = OneClassSVMDetector.score_samples
+
+    def inverted(self: OneClassSVMDetector, X: object) -> object:
+        return -real_score_samples(self, X)  # type: ignore[operator]
+
+    monkeypatch.setattr(OneClassSVMDetector, "score_samples", inverted)
 
 
 def test_explanation_references_perturbed_column(tmp_path: Path) -> None:
@@ -226,4 +243,114 @@ def test_ecod_hbos_get_exact_native_attributions(tmp_path: Path) -> None:
     kinds = df_anomalies["attribution_kind"].to_list()
     reasons = df_anomalies["reason_1"].to_list()
     assert all(k == "exact" for k in kinds), f"expected every flagged row exact; got {kinds}"
+    assert all(r is not None and "=" in r for r in reasons), reasons
+
+
+# ---------------------------------------------------------------------------
+# P1-2: a detector the ensemble dropped (zero weight) must never supply the
+# displayed explanation, even when it is the only detector whose attribution
+# method would otherwise have succeeded.
+# ---------------------------------------------------------------------------
+
+
+def test_dropped_detector_as_sole_would_be_producer_yields_no_attribution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """isolation_forest and ecod are the two real, contributing ensemble
+    members; one_class_svm is forced anti-correlated (dropped by the guard,
+    weight 0) and is the *only* one whose attribution method would succeed
+    (the other two are forced to fail, simulating exactly the scenario the
+    prompt describes: active detectors failing attribution). The pre-P1-2
+    bug returned one_class_svm's gradient attribution anyway (attribution_kind
+    ends up "heuristic" with real, but meaningless, reason values) --
+    confirmed by temporarily removing the P1-2 skip and observing this exact
+    test fail. Post-fix, with no active source, attribution_kind must stay
+    "none" (nothing computed) rather than surface the dropped detector's
+    reasons under a misleadingly plausible-looking tag.
+    """
+    _invert_one_class_svm_scores(monkeypatch)
+
+    def _raise(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("forced attribution failure")
+
+    monkeypatch.setattr(shap_tree_mod, "tree_shap_attributions", _raise)
+    monkeypatch.setattr(native_mod, "ecod_attributions", _raise)
+
+    csv = tmp_path / "data.csv"
+    write_planted_csv(csv, n_normal=180, n_anomaly=10, seed=13)
+
+    cfg = Config(
+        source=SourceConfig(uri=str(csv), format="csv"),
+        run=RunConfig(workdir=str(tmp_path / "ws"), seed=42),
+        columns=ColumnsConfig(id_column="id"),
+        detectors=[
+            DetectorConfig(name="isolation_forest"),
+            DetectorConfig(name="ecod"),
+            DetectorConfig(name="one_class_svm"),
+        ],
+        scoring=ScoringConfig(combination="composite", contamination=0.05, weighting="equal", min_records=5),
+    )
+    result = run_detection(cfg, no_report=True)
+    assert result.n_anomalies > 0
+    assert result.groups[0].dropped_detectors == ["one_class_svm"], (
+        "test precondition failed: one_class_svm was not dropped by the bad-member guard -- "
+        f"got dropped_detectors={result.groups[0].dropped_detectors}"
+    )
+
+    parquet_path = result.groups[0].results_path
+    assert parquet_path is not None
+    df_anomalies = pl.read_parquet(parquet_path)
+
+    kinds = df_anomalies["attribution_kind"].to_list()
+    reasons = df_anomalies["reason_1"].to_list()
+    assert all(k == "none" for k in kinds), (
+        f"expected no attribution at all (the only would-be producer was dropped); got {kinds}"
+    )
+    assert all(r is None for r in reasons), reasons
+
+
+def test_mixed_source_attribution_kind_and_reasons_ignore_the_dropped_detector(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """isolation_forest ("model_specific") and ecod ("exact") both succeed
+    normally here -- one_class_svm is forced anti-correlated (dropped,
+    weight 0) but its own tag would be "heuristic", the weakest of the three.
+    Pre-P1-2, its leaked-in attribution dragged attribution_kind down to
+    "heuristic" for every row (confirmed by temporarily removing the P1-2
+    skip). Post-fix, attribution_kind must reflect only the two active
+    members: the weakest of {model_specific, exact} is "model_specific".
+    """
+    _invert_one_class_svm_scores(monkeypatch)
+
+    csv = tmp_path / "data.csv"
+    write_planted_csv(csv, n_normal=180, n_anomaly=10, seed=13)
+
+    cfg = Config(
+        source=SourceConfig(uri=str(csv), format="csv"),
+        run=RunConfig(workdir=str(tmp_path / "ws"), seed=42),
+        columns=ColumnsConfig(id_column="id"),
+        detectors=[
+            DetectorConfig(name="isolation_forest"),
+            DetectorConfig(name="ecod"),
+            DetectorConfig(name="one_class_svm"),
+        ],
+        scoring=ScoringConfig(combination="composite", contamination=0.05, weighting="equal", min_records=5),
+    )
+    result = run_detection(cfg, no_report=True)
+    assert result.n_anomalies > 0
+    assert result.groups[0].dropped_detectors == ["one_class_svm"], (
+        "test precondition failed: one_class_svm was not dropped by the bad-member guard -- "
+        f"got dropped_detectors={result.groups[0].dropped_detectors}"
+    )
+
+    parquet_path = result.groups[0].results_path
+    assert parquet_path is not None
+    df_anomalies = pl.read_parquet(parquet_path)
+
+    kinds = df_anomalies["attribution_kind"].to_list()
+    reasons = df_anomalies["reason_1"].to_list()
+    assert all(k == "model_specific" for k in kinds), (
+        f"expected the weakest tag among the two *active* members (model_specific), "
+        f"not one dragged down by the dropped detector's heuristic tag; got {kinds}"
+    )
     assert all(r is not None and "=" in r for r in reasons), reasons

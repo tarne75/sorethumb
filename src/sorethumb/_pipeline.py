@@ -1647,14 +1647,20 @@ def _compute_attributions(
 ) -> tuple[dict[str, np.ndarray], str, dict[int, str]] | None:
     """Compute blended attributions for flagged rows. Returns None on failure.
 
-    ``explain.enabled=False`` skips the stage entirely. Dispatch per detector:
-    IsolationForest → TreeSHAP (``model_specific``), KMeans → centroid distance
-    (``heuristic``), ECOD/HBOS → their own exact additive decomposition
-    (``exact`` — see ``explain/native.py``), OneClassSVM/LOF → finite-difference
-    input-gradient by default or KernelSHAP when ``explain.kernel_shap`` is set
-    (both ``heuristic``). Anything else is skipped, logged, uncounted — see the
-    note below on why gradient is not a safe default for an unvetted detector.
-    ``explain.permutation_importance`` runs an extra per-detector cross-check.
+    ``explain.enabled=False`` skips the stage entirely. A detector the
+    ensemble gave zero weight to (composite mode only -- see the skip at the
+    top of the dispatch loop) is excluded before dispatch: it never produces
+    a source, never marks a row "covered", and can never end up as the
+    entire displayed explanation or set ``attribution_kind`` (P1-2). Dispatch
+    per detector: IsolationForest → TreeSHAP (``model_specific``), KMeans →
+    centroid distance (``heuristic``), ECOD/HBOS → their own exact additive
+    decomposition (``exact`` — see ``explain/native.py``), OneClassSVM/LOF →
+    finite-difference input-gradient by default or KernelSHAP when
+    ``explain.kernel_shap`` is set (both ``heuristic``). Anything else is
+    skipped, logged, uncounted — see the note below on why gradient is not a
+    safe default for an unvetted detector. ``explain.permutation_importance``
+    runs an extra per-detector cross-check (diagnostic-only, logged, never
+    presented as a causal explanation, so it is not similarly filtered).
 
     Finite-difference gradients are restricted to detectors whose score is a
     genuinely smooth (or smooth-enough) function of the input: OneClassSVM's
@@ -1719,6 +1725,30 @@ def _compute_attributions(
     covered = np.zeros(n_flagged, dtype=bool)  # True where >=1 source has a real value
 
     for det_name, det in det_instances.items():
+        # P1-2: a detector the ensemble gave zero weight to (dropped by the
+        # bad-member guard, or independently zeroed by weighting="agreement"
+        # -- see scoring/combine.py) contributed nothing to composite_score
+        # and must contribute nothing to the explanation either. Skipping it
+        # here -- not merely weighting its contribution to 0 in blend()
+        # below -- matters because blend() special-cases a single source
+        # (returns it unweighted) and an all-zero total weight (falls back to
+        # equal weighting): either can otherwise let a detector the score
+        # never listened to become the *entire* displayed explanation, and
+        # its coverage of a row would wrongly hide that no real contributor
+        # explained it. Only meaningful for combination="composite" -- the
+        # bad-member guard never drops anyone for "intersection"/"union"
+        # (every configured vote is required there), and weight does not
+        # determine either mode's flag or ranking, so a detector's weight
+        # happening to compute to 0 there says nothing about whether it
+        # actually contributed. Detector-level score columns are unaffected
+        # (see _finalize_group) -- this only concerns the blended
+        # explanation.
+        if config.scoring.combination == "composite" and weights_used.get(det_name, 1.0) == 0.0:
+            logger.debug(
+                "Attribution skipped for detector %r: zero ensemble weight in the composite combination.",
+                det_name,
+            )
+            continue
         try:
             if isinstance(det, IsolationForestDetector):
                 # Full matrix needed; SHAP attributes all rows — never capped.
