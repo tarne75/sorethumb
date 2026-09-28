@@ -230,6 +230,26 @@ diff against.
 
 ### Fixed
 
+- `source.read_options["infer_schema_length"]` — the documented way to
+  override Polars' CSV/NDJSON schema-inference sample size — raised
+  `TypeError: got multiple values for keyword argument 'infer_schema_length'`
+  instead of taking effect: `read_frame` hard-coded `infer_schema_length=
+  10_000` on the `pl.scan_csv`/`pl.scan_ndjson` call and then separately
+  expanded the user's `read_options` dict as `**opts` into the same call, so
+  a caller-supplied `infer_schema_length` collided with the hard-coded one.
+  Fixed by folding the default in via `opts.setdefault("infer_schema_length",
+  10_000)` before the call, so it's passed exactly once — a caller's value
+  wins, and the default only applies when absent. Applies to CSV, TSV (which
+  shares the CSV code path) and NDJSON/JSONL; Parquet and JSON never had this
+  option and are unaffected. New unit tests in `tests/unit/io/test_io.py`
+  cover the exact end-to-end flow this restores: a too-small
+  `infer_schema_length` sampling only null rows trips the existing "all
+  columns String" `SchemaError` (whose message already recommended a larger
+  value), and retrying with a larger explicit override succeeds and recovers
+  the real dtypes — plus compressed (`.csv.gz`) input, a delimiter override
+  combined with the schema-length override, and confirmation that an
+  invalid option value still raises (the fix changes how the option is
+  passed, not Polars' own validation of it).
 - HBOS clipped any value outside its fitted per-feature histogram range into
   the nearest edge bin, so an arbitrarily distant, never-before-seen value
   inherited that edge bin's density — if the edge bin happened to be dense

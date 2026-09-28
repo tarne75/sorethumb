@@ -49,11 +49,13 @@ def read_frame(path: Path, config: SourceConfig) -> pl.LazyFrame:
     elif fmt in ("csv", "tsv"):
         if fmt == "tsv" and "separator" not in opts and "delimiter" not in opts:
             opts["separator"] = "\t"
-        lf = pl.scan_csv(path, infer_schema_length=10_000, **opts)  # type: ignore[arg-type]
+        opts.setdefault("infer_schema_length", 10_000)
+        lf = pl.scan_csv(path, **opts)  # type: ignore[arg-type]
     elif fmt == "json":
         lf = pl.read_json(path, **opts).lazy()  # type: ignore[arg-type]
     elif fmt == "jsonl":
-        lf = pl.scan_ndjson(path, infer_schema_length=10_000, **opts)  # type: ignore[arg-type]
+        opts.setdefault("infer_schema_length", 10_000)
+        lf = pl.scan_ndjson(path, **opts)  # type: ignore[arg-type]
     elif fmt == "tsf":
         lf = _read_tsf(path)
     else:

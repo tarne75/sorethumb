@@ -208,6 +208,118 @@ def test_read_tsv_explicit_separator_not_overridden(tmp_path: Path) -> None:
     assert result.shape[0] == 2
 
 
+# ---------------------------------------------------------------------------
+# P1-6: documented `read_options["infer_schema_length"]` override (was passed
+# to polars twice -- once hard-coded, once via **opts -- raising TypeError)
+# ---------------------------------------------------------------------------
+
+
+def _write_null_heavy_csv(path: Path, *, n_null_rows: int = 3, n_data_rows: int = 17) -> None:
+    """A 2-column CSV whose leading rows are entirely empty (null) -- with a
+    small enough `infer_schema_length` to sample only those rows, polars
+    infers both columns as String; a large enough value sees the real
+    (float) data and infers correctly. Both columns are affected so the
+    small-sample case trips the reader's "all columns String" SchemaError."""
+    rows = ["num_a,num_b"]
+    rows.extend([","] * n_null_rows)
+    rows.extend(f"{i}.5,{i * 2}.5" for i in range(n_null_rows, n_null_rows + n_data_rows))
+    path.write_text("\n".join(rows) + "\n")
+
+
+def test_read_csv_honors_explicit_infer_schema_length_override(tmp_path: Path) -> None:
+    """Regression: supplying the documented `read_options["infer_schema_length"]`
+    override used to raise TypeError (passed to `pl.scan_csv` twice -- once
+    hard-coded, once via the expanded `**opts`)."""
+    from sorethumb.config import SourceConfig
+
+    p = tmp_path / "data.csv"
+    p.write_text("a,b\n1,2\n3,4\n")
+
+    cfg = SourceConfig(uri=str(p), read_options={"infer_schema_length": 500})
+    result = read_frame(p, cfg).collect()
+    assert result.shape == (2, 2)
+
+
+def test_read_ndjson_honors_explicit_infer_schema_length_override(tmp_path: Path) -> None:
+    """Same regression as the CSV case, for the NDJSON/JSONL reader."""
+    from sorethumb.config import SourceConfig
+
+    p = tmp_path / "data.jsonl"
+    p.write_text('{"a": 1, "b": 2}\n{"a": 3, "b": 4}\n')
+
+    cfg = SourceConfig(uri=str(p), read_options={"infer_schema_length": 500})
+    result = read_frame(p, cfg).collect()
+    assert result.shape == (2, 2)
+
+
+def test_read_csv_small_infer_schema_length_then_successful_retry_with_larger(
+    tmp_path: Path,
+) -> None:
+    """The exact user-facing flow the fix restores: a too-small
+    `infer_schema_length` (sampling only null rows) trips the "all columns
+    String" `SchemaError` -- whose own message recommends a larger
+    `infer_schema_length` -- and passing one via `read_options` on retry
+    succeeds and recovers the real (float) dtypes."""
+    from sorethumb.config import SourceConfig
+
+    p = tmp_path / "data.csv"
+    _write_null_heavy_csv(p, n_null_rows=3, n_data_rows=17)
+
+    cfg_small = SourceConfig(uri=str(p), read_options={"infer_schema_length": 3})
+    with pytest.raises(SchemaError, match="infer_schema_length"):
+        read_frame(p, cfg_small).collect()
+
+    cfg_larger = SourceConfig(uri=str(p), read_options={"infer_schema_length": 20})
+    result = read_frame(p, cfg_larger).collect()
+    assert result.schema["num_a"] == pl.Float64
+    assert result.schema["num_b"] == pl.Float64
+    assert result.shape[0] == 20
+
+
+def test_read_csv_gz_honors_explicit_infer_schema_length_override(tmp_path: Path) -> None:
+    """The override must also apply cleanly to a compressed CSV input."""
+    import gzip
+
+    from sorethumb.config import SourceConfig
+
+    p = tmp_path / "data.csv.gz"
+    content = "a,b\n" + "\n".join(f"{i},{i * 2}" for i in range(5))
+    with gzip.open(p, "wt") as f:
+        f.write(content)
+
+    cfg = SourceConfig(uri=str(p), read_options={"infer_schema_length": 500})
+    result = read_frame(p, cfg).collect()
+    assert result.shape == (5, 2)
+
+
+def test_read_csv_delimiter_and_infer_schema_length_overrides_combine(tmp_path: Path) -> None:
+    """A delimiter override and an `infer_schema_length` override must both
+    take effect together -- the fix must not special-case one at the expense
+    of the other."""
+    from sorethumb.config import SourceConfig
+
+    p = tmp_path / "data.csv"
+    p.write_text("a|b\n1|2\n3|4\n")
+
+    cfg = SourceConfig(uri=str(p), read_options={"separator": "|", "infer_schema_length": 500})
+    result = read_frame(p, cfg).collect()
+    assert result.shape == (2, 2)
+    assert set(result.columns) == {"a", "b"}
+
+
+def test_read_csv_invalid_infer_schema_length_type_still_raises(tmp_path: Path) -> None:
+    """An invalid option value must still surface as an error -- the fix
+    changes how the option is passed, not polars' own validation of it."""
+    from sorethumb.config import SourceConfig
+
+    p = tmp_path / "data.csv"
+    p.write_text("a,b\n1,2\n3,4\n")
+
+    cfg = SourceConfig(uri=str(p), read_options={"infer_schema_length": "not-an-int"})
+    with pytest.raises(TypeError):
+        read_frame(p, cfg).collect()
+
+
 def test_read_json(tmp_path: Path) -> None:
     from sorethumb.config import SourceConfig
 
