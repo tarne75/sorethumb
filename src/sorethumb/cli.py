@@ -1953,6 +1953,7 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
         "dataset_fp": result.dataset_fp,
         "snapshot_fp": result.snapshot_fp,
         "source_run_id": result.source_run_id,
+        "id_identity_scope": result.id_identity_scope,
         "period_label": result.period_label,
         "n_succeeded": result.n_succeeded,
         "n_skipped": result.n_skipped,

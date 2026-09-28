@@ -50,6 +50,11 @@ class RunMeta:
     # The fitted run this run reused persisted models/plan from (score-forward
     # only) -- None for an ordinary run that fit its own detectors.
     source_run_id: str | None = None
+    # What "unique" meant for columns.id_column when this run's identity
+    # contract was validated ("dataset" or "group" -- see
+    # _pipeline._resolve_id_identity_scope) -- None if no id_column is
+    # configured (P1-3).
+    id_identity_scope: str | None = None
 
 
 @dataclass
@@ -131,6 +136,7 @@ def _write_json_report(run_meta: RunMeta, groups: list[GroupSection], out_dir: P
         "python_version": run_meta.python_version,
         "started_at": run_meta.started_at,
         "source_run_id": run_meta.source_run_id,
+        "id_identity_scope": run_meta.id_identity_scope,
         "groups": [
             {
                 "group_key": g.group_key,
@@ -220,6 +226,7 @@ def _provenance_block(meta: RunMeta) -> str:
         f"<strong>Python:</strong> {html.escape(meta.python_version)}"
         f"{'&nbsp;&nbsp;<strong>Started:</strong> ' + html.escape(meta.started_at) if meta.started_at else ''}"
         f"{'&nbsp;&nbsp;<strong>Scored forward from:</strong> ' + html.escape(meta.source_run_id) if meta.source_run_id else ''}"
+        f"{'&nbsp;&nbsp;<strong>id_column unique per:</strong> ' + html.escape(meta.id_identity_scope) if meta.id_identity_scope else ''}"
         "<br><details><summary>Resolved config</summary>"
         f"<pre>{html.escape(config_pretty)}</pre>"
         "</details>"

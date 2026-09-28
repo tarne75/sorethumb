@@ -146,6 +146,99 @@ def _stamp_source_row_id(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+def _resolve_id_identity_scope(config: Config) -> str | None:
+    """Which identity scope ``columns.id_scope`` resolves to for *config*.
+
+    Pure function of config alone (no data needed) -- ``"auto"`` depends
+    only on whether ``columns.group_by`` is set, so this is reusable both by
+    the real validation (``_validate_id_column_identity``, which additionally
+    checks the data) and by ``render_report_for_run`` (re-rendering a past
+    run from its persisted config_json, with no live DataFrame to check
+    against, but where the resolved scope is still worth reporting).
+    Returns ``None`` if no ``id_column`` is configured.
+    """
+    if not config.columns.id_column:
+        return None
+    scope = config.columns.id_scope
+    use_group_scope = bool(config.columns.group_by) and scope in ("group", "auto")
+    return "group" if use_group_scope else "dataset"
+
+
+def _validate_id_column_identity(df: pl.DataFrame, config: Config) -> str | None:
+    """Validate ``columns.id_column``'s identity contract over the full source population (P1-3).
+
+    Called before any period/group/anomaly filtering narrows the population.
+    Returns the resolved scope actually validated (``"dataset"`` or
+    ``"group"``), or ``None`` if no ``id_column`` is configured (nothing to
+    check). Raises ``SchemaError`` if ``id_column`` is missing, contains a
+    null, or is not unique at the resolved scope.
+
+    Checking only after anomaly filtering (or not at all, the pre-P1-3
+    state) misses the common case: two rows sharing a duplicate id_column
+    value, only one of which is ever flagged. Nothing downstream can then
+    tell the flagged row's ``row_id`` apart from its unflagged duplicate's --
+    only the flagged subset is ever persisted -- so a join back to the
+    source silently lands on whichever row happens to match, whether or not
+    it is the one sorethumb actually scored.
+
+    ``columns.id_scope`` controls what "unique" means -- see its own
+    description for the full contract; ``"auto"`` (the default) picks
+    ``"group"`` (composite of ``columns.group_by`` + ``id_column``) when
+    ``group_by`` is configured, else ``"dataset"`` (unique across every
+    row), so an existing config using group-scoped identifiers (e.g. an
+    ``order_id`` that resets per ``store_id``) is not broken by this
+    validation being added.
+    """
+    id_col = config.columns.id_column
+    if not id_col:
+        return None
+
+    if id_col not in df.columns:
+        msg = f"columns.id_column={id_col!r} is not in the dataset."
+        raise SchemaError(msg)
+
+    n_null = df[id_col].null_count()
+    if n_null > 0:
+        msg = (
+            f"columns.id_column={id_col!r} has {n_null} null value(s) out of "
+            f"{len(df)} rows. A configured id_column must be non-null for every "
+            "row -- it is what a result's row_id is taken from, and downstream "
+            "joins back to the source rely on it identifying exactly one row."
+        )
+        raise SchemaError(msg)
+
+    group_by = config.columns.group_by
+    resolved_scope = _resolve_id_identity_scope(config)
+    use_group_scope = resolved_scope == "group"
+    key_cols = [*group_by, id_col] if use_group_scope else [id_col]
+
+    keyed = df.select(key_cols)
+    n_rows = len(keyed)
+    n_unique = keyed.n_unique()
+    if n_unique < n_rows:
+        example = keyed.filter(keyed.is_duplicated()).unique().head(5).to_dicts()
+        scope_desc = (
+            f"within its columns.group_by={group_by!r} group" if use_group_scope else "across the dataset"
+        )
+        hint = (
+            "Set columns.id_scope='group' (with columns.group_by set) if identifiers "
+            "are only meant to be unique within each group."
+            if resolved_scope == "dataset"
+            else "Set columns.id_scope='dataset' if identifiers are meant to be globally "
+            "unique instead, or fix the source data."
+        )
+        msg = (
+            f"columns.id_column={id_col!r} is not unique {scope_desc}: "
+            f"{n_rows - n_unique} duplicate row(s) (e.g. {example}). Each "
+            f"{'(group, id)' if use_group_scope else 'id'} must identify exactly one "
+            f"source row -- otherwise a result's row_id cannot be joined back to a "
+            f"single source record. {hint}"
+        )
+        raise SchemaError(msg)
+
+    return resolved_scope
+
+
 def _apply_row_cap(df: pl.DataFrame, max_rows: int | None) -> pl.DataFrame:
     """Truncate *df* to ``run.max_rows`` (deterministic head), warning if it bites."""
     if max_rows is not None and len(df) > max_rows:
@@ -260,6 +353,12 @@ class RunResult:
     # The fitted run this run reused persisted models/plan from, via
     # score_forward -- None for an ordinary run_detection run (it fit its own).
     source_run_id: str | None = None
+    # The identity scope columns.id_column was actually validated against
+    # ("dataset" or "group" -- see _validate_id_column_identity/
+    # columns.id_scope), or None if no id_column is configured. Persisted so
+    # a reader of this run's provenance knows exactly what uniqueness
+    # guarantee its row_id carries (P1-3).
+    id_identity_scope: str | None = None
 
     # Convenience helpers
 
@@ -537,6 +636,11 @@ def run_detection(
         # is what lets fallback row_id stay unique and joinable across groups.
         df_raw = _stamp_source_row_id(df_raw)
 
+        # A configured id_column's identity contract is validated here, over
+        # the full population, before any filtering below could hide a
+        # violation (P1-3) -- see _validate_id_column_identity.
+        id_identity_scope = _validate_id_column_identity(df_raw, config)
+
         # ── 2. Period resolution + window filter ────────────────────────
         df_raw, period_label, period_window = _resolve_and_filter_period(
             df_raw, config, period_label_override
@@ -582,6 +686,7 @@ def run_detection(
                 report_path=None,
                 started_at=started_at,
                 finished_at=datetime.now(UTC).isoformat(),
+                id_identity_scope=id_identity_scope,
             )
 
         # ── 4. Build feature plan on full dataset ────────────────────────
@@ -696,6 +801,7 @@ def run_detection(
             finished_at=finished_at,
             warnings_issued=issued_warnings,
             report_status=report_status,
+            id_identity_scope=id_identity_scope,
         )
 
 
@@ -899,6 +1005,9 @@ def score_forward(
         # happen before any filter/sort below.
         df_raw = _stamp_source_row_id(df_raw)
 
+        # See run_detection for why this must happen before any filter below.
+        id_identity_scope = _validate_id_column_identity(df_raw, config)
+
         # ── Period resolution + window filter (same rules as run_detection) ──
         # score-forward does not write history: its numbers come from a reused
         # model, not a period compute.
@@ -993,6 +1102,7 @@ def score_forward(
             warnings_issued=issued_warnings,
             report_status=report_status,
             source_run_id=source_run_id,
+            id_identity_scope=id_identity_scope,
         )
 
 
@@ -1948,6 +2058,7 @@ def render_report_for_run(ws: Workspace, run_id: str, *, formats: list[str] | No
             config_json=run_row["config_json"],
             started_at=run_row.get("started_at") or "",
             source_run_id=run_row.get("source_run_id"),
+            id_identity_scope=_resolve_id_identity_scope(config),
         )
 
         try:

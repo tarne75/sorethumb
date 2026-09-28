@@ -115,6 +115,20 @@ class ColumnsConfig(BaseModel):
         None,
         description="Row-identifier column to carry through to the output but exclude from features.",
     )
+    id_scope: Literal["auto", "dataset", "group"] = Field(
+        "auto",
+        description=(
+            "What 'unique' means for id_column, validated once over the full source "
+            "population before any period/group/anomaly filtering: 'dataset' requires "
+            "id_column unique across every row; 'group' requires it unique only within "
+            "each group_by combination (a row_id can then repeat across groups, e.g. an "
+            "order_id that resets per store_id); 'auto' picks 'group' when group_by is "
+            "set, else 'dataset'. Ignored when id_column is unset. A violation raises "
+            "SchemaError -- a duplicate or null id_column would otherwise make an output "
+            "row_id ambiguous between multiple source records, undetectable downstream "
+            "since only the flagged subset is ever persisted."
+        ),
+    )
     reference_column: str | None = Field(
         None,
         description="Optional binary reference label (0/1) used only for evaluation, not training.",

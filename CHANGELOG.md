@@ -230,6 +230,35 @@ diff against.
 
 ### Fixed
 
+- A configured `columns.id_column` was never validated: a duplicate or null
+  value could silently make a result's `row_id` ambiguous between multiple
+  source records. Since only the flagged subset of rows is ever persisted, a
+  duplicate id where only one of the two rows is actually anomalous was
+  completely invisible — a check that only looked at the flagged rows (or
+  no check at all, the prior state) would see a single, unique id and never
+  notice its unflagged duplicate existed. `id_column` is now validated once
+  over the *full* source population, immediately after loading and before
+  any period/group/anomaly filtering: it must exist, be non-null for every
+  row, and be unique at the identity scope new `columns.id_scope`
+  (`"auto"`/`"dataset"`/`"group"`, default `"auto"`) resolves to — unique
+  across the whole dataset, or (when `columns.group_by` is set and scope
+  resolves to `"group"`) unique only within each group, so an existing
+  config using a legitimately group-scoped identifier (e.g. an `order_id`
+  that resets per `store_id`) is not broken by this validation being added.
+  A violation raises `SchemaError` naming the duplicate/null values found.
+  The resolved scope is persisted in provenance:
+  `RunResult.id_identity_scope`, the CLI `--json` output, and the HTML/JSON
+  report's provenance block (`"id_identity_scope"` in the JSON payload,
+  "id_column unique per:" in the HTML header) all now surface it, and
+  re-rendering a past run's report (`sorethumb report`) re-derives it from
+  that run's own persisted config rather than needing a new database
+  column. New tests in `tests/integration/test_id_column_identity.py`
+  covering: a duplicate where only one row is flagged, a legitimate
+  cross-group repeat under group scope vs. a genuine duplicate within one
+  group, the explicit `id_scope="dataset"` override catching a cross-group
+  repeat "group"/"auto" scope allows, null ids, a missing `id_column`, both
+  string and integer id dtypes, and a full round-trip join from a result's
+  `row_id` back to its exact source row.
 - A detector `combination="composite"` gave zero ensemble weight — dropped
   by the bad-member guard as anti-correlated with the consensus, or
   independently zeroed by `weighting="agreement"` — could still end up
