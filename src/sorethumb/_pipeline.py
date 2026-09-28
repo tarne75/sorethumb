@@ -32,6 +32,7 @@ import polars as pl
 from sorethumb.config import Config, SourceConfig
 from sorethumb.detectors import registry
 from sorethumb.errors import (
+    ConfigError,
     ReportGenerationWarning,
     SampleTruncatedWarning,
     SchemaError,
@@ -359,6 +360,13 @@ class RunResult:
     # a reader of this run's provenance knows exactly what uniqueness
     # guarantee its row_id carries (P1-3).
     id_identity_scope: str | None = None
+    # Set when only_groups/group_filter_regex matched none of the groups
+    # discovered in the data, so nothing was processed -- distinct from a
+    # genuinely empty source period (no group_by: one group attempted at
+    # n_records=0, status "too_few_records"; group_by: 0 groups discovered
+    # in the first place, before any selector is even applied), which stays
+    # a normal, unflagged outcome. None otherwise (P1-4).
+    group_selection_error: str | None = None
 
     # Convenience helpers
 
@@ -564,14 +572,23 @@ def run_detection(
         Fully resolved configuration.
     only_groups:
         When set, run only these group labels. Applied before group_filter_regex.
+        If this (together with group_filter_regex) matches none of the groups
+        discovered in the data, no group is processed, the run is marked
+        failed (not complete), and ``RunResult.group_selection_error`` names
+        the reason (P1-4) -- distinct from a genuinely empty source period,
+        which still attempts one group and is not treated as an error.
     group_filter_regex:
         Regex applied to group labels; only matching groups run.
         Unanchored search semantics — use ``^`` / ``$`` to anchor explicitly.
+        See only_groups for what happens when nothing matches.
     limit_groups:
         Cap the number of groups processed, applied after only_groups and
         group_filter_regex. Groups are sorted by label first, so the same
         limit always keeps the same groups regardless of the order the
-        source data happened to be discovered in.
+        source data happened to be discovered in. Raises ConfigError if
+        given and less than 1 (P1-4) -- 0 would silently process no groups,
+        and Python's slice semantics would make a negative value keep "all
+        but the last N" groups instead of capping to N.
     force:
         Re-run groups that are already marked complete in the ledger.
     no_report:
@@ -589,6 +606,15 @@ def run_detection(
     RunResult with per-group outcomes and the report path.
 
     """
+    # P1-4: a pure input-shape check, before any I/O. limit_groups < 1 would
+    # otherwise reach `groups_info[:limit_groups]` -- Python slice semantics
+    # make a *negative* limit silently keep "all but the last N" groups
+    # instead of raising or (as every other value does) capping to N, and
+    # 0 would silently process no groups at all.
+    if limit_groups is not None and limit_groups < 1:
+        msg = f"limit_groups must be at least 1 when supplied; got {limit_groups}."
+        raise ConfigError(msg)
+
     started_at = datetime.now(UTC).isoformat()
     ws_path = Path(config.run.workdir)
 
@@ -715,6 +741,17 @@ def run_detection(
         else:
             groups_info = [{"__n__": len(df_raw)}]
 
+        # A genuinely empty source period is a legitimate, pre-existing,
+        # separately-tested outcome: 0 groups discovered here (group_by set,
+        # no data) is unaffected by anything below since no selector even
+        # runs against an already-empty list; without group_by there is
+        # always exactly one natural "group" (n_records may be 0, which
+        # _run_group already turns into a normal "too_few_records" summary,
+        # not zero groups processed). n_natural_groups is captured *before*
+        # any selector below so a selector that removes everything can be
+        # told apart from that case (P1-4).
+        n_natural_groups = len(groups_info)
+
         # Apply user filters (only_groups first, then regex, then a
         # deterministic limit -- sorted by label so the same limit always
         # keeps the same groups, regardless of discovery order).
@@ -725,6 +762,22 @@ def run_detection(
             groups_info = [g for g in groups_info if pat.search(_group_label(g, group_by))]
         if limit_groups is not None:
             groups_info = sorted(groups_info, key=lambda g: _group_label(g, group_by))[:limit_groups]
+
+        group_selection_error: str | None = None
+        if n_natural_groups > 0 and not groups_info and (only_groups or group_filter_regex):
+            selectors = ", ".join(
+                s
+                for s in (
+                    f"only_groups={only_groups!r}" if only_groups else "",
+                    f"group_filter_regex={group_filter_regex!r}" if group_filter_regex else "",
+                )
+                if s
+            )
+            group_selection_error = (
+                f"{selectors} matched none of the {n_natural_groups} group(s) discovered in the "
+                "data; no group was processed. This is distinct from a genuinely empty source "
+                "period (which still attempts one group) -- check for a typo."
+            )
 
         # ── 6. Per-group pipeline ────────────────────────────────────────
         group_results: list[GroupSummary] = []
@@ -766,7 +819,13 @@ def run_detection(
 
         # ── 7. Mark run complete / failed ────────────────────────────────
         any_failed = any(g.status == "failed" for g in group_results)
-        if any_failed:
+        if group_selection_error is not None:
+            # Not "one or more groups failed" -- zero groups even ran. Marking
+            # this "complete" (the pre-P1-4 behaviour, since an empty
+            # group_results makes any_failed False too) would let a typo'd
+            # --only-group/--group-filter look like a successful no-op run.
+            ws.store.mark_run_failed(run_id, group_selection_error)
+        elif any_failed:
             ws.store.mark_run_failed(run_id, "one or more groups failed")
         else:
             ws.store.mark_run_complete(run_id)
@@ -774,8 +833,13 @@ def run_detection(
         # ── 7b. History ledger: period + per-group totals rows ──────────
         # This is what makes `sorethumb backfill` idempotent (a processed
         # period gets a totals row, so it is not re-queued) and gives
-        # `sorethumb history` something to aggregate.
-        if period_label is not None and period_window is not None:
+        # `sorethumb history` something to aggregate. Skipped on a
+        # group_selection_error (P1-4): group_results is empty, so
+        # _record_period_history would otherwise write a totals-free but
+        # complete=1 period record -- the exact "invalid no-op recorded as
+        # done" this phase closes, just in the history ledger instead of the
+        # run table.
+        if period_label is not None and period_window is not None and group_selection_error is None:
             _record_period_history(
                 ws, dataset_fp, config.config_hash(), run_id, period_label, period_window, group_results
             )
@@ -802,6 +866,7 @@ def run_detection(
             warnings_issued=issued_warnings,
             report_status=report_status,
             id_identity_scope=id_identity_scope,
+            group_selection_error=group_selection_error,
         )
 
 

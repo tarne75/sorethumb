@@ -140,6 +140,14 @@ sorethumb run -d if,ecod,hbos
 Groups that are already marked complete in the ledger are skipped unless
 `--force` is passed. This makes repeated invocations cheap.
 
+If `--only-group`/`--group-filter` matches none of the groups actually
+discovered in the data, the run processes zero groups and fails outright
+(exit code 2; `--json` output's `"group_selection_error"` names the reason)
+rather than silently completing a no-op — no group/period history marker is
+written either, so a later `sorethumb backfill` still sees the gap. This is
+distinct from a genuinely empty source period (a period with no matching
+rows at all), which is not treated as an error.
+
 **Arguments:**
 
 | Argument | Description |
@@ -156,7 +164,7 @@ Groups that are already marked complete in the ledger are skipped unless
 | `--only-group STR` | — | Run only these group label(s). Repeatable. |
 | `--group-filter REGEX` | — | Run only groups whose label matches this regex. |
 | `--period YYYY-MM-DD` | — | Force a specific period label (for time-series datasets). |
-| `--limit-groups INT` | — | Cap the number of groups processed (reserved for future use). |
+| `--limit-groups INT` | — | Cap the number of groups processed, applied after `--only-group`/`--group-filter`. Groups are sorted by label first, so the same limit always keeps the same groups. Must be >= 1 when given (exit code 2 otherwise). |
 | `--detectors STR`, `-d` | — | Comma-separated detector aliases, replacing the config list for this invocation only. Aliases: `if`=isolation_forest · `km`=kmeans_distance · `oc`=one_class_svm · `ecod` · `lof` · `hbos`. Full names also accepted. Never modifies `sorethumb.toml`. |
 | `--json` | off | Machine-readable JSON summary on stdout. |
 | `--dry-run` | off | Resolve the plan and register the run, but fit no models. Still writes the workspace + schema migrations, the `dataset` / `dataset_snapshot` rows, and the `run` row (left in status `running`). Skips the feature plan, detector models, per-group results, history rows and the report. |

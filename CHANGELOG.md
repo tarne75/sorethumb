@@ -230,6 +230,40 @@ diff against.
 
 ### Fixed
 
+- `sorethumb run --only-group`/`--group-filter` matching none of the groups
+  actually discovered in the data silently processed zero groups and still
+  marked the run *complete* — `any(g.status == "failed" for g in [])` is
+  `False`, same as a real success, so a typo'd group label or filter regex
+  looked exactly like "nothing to do, all fine" with no signal anywhere
+  that it might be wrong. `--limit-groups 0` (or a negative value) was
+  worse: `groups_info[:0]` silently processed nothing, and a negative
+  value hit Python's slice semantics — `[:-1]` keeps "all but the last
+  one", not "cap to N" — the opposite of what `--limit-groups` promises.
+  `--limit-groups` now raises `ConfigError` outright when given and less
+  than 1 (checked immediately, before any I/O). A selector that matches
+  zero of the groups discovered in the data (checked *before* any
+  selector is applied, so a genuinely empty source period — which still
+  attempts one group at `n_records=0`, status `"too_few_records"` — is
+  never confused with this) now marks the run failed, not complete, writes
+  no group/period history marker (so a later `sorethumb backfill` still
+  sees the gap), and names the reason in the new
+  `RunResult.group_selection_error` — surfaced in `sorethumb run`'s console
+  output (now red, where it silently stayed green before), `--json`
+  output, and now a real exit code: `run_detection`'s `SorethumbError`s
+  were never caught by the `run` CLI command at all (unlike `score
+  --from-run`, which already did) — this exact `ConfigError` would
+  otherwise have crashed with a raw Python traceback instead of a clean
+  error and exit code 2; `run` now catches `SorethumbError` the same way
+  `score` does. New tests in `tests/integration/test_group_selection.py`
+  (API-level: unmatched `only_groups`, unmatched `group_filter_regex`,
+  `limit_groups` of 0 and -1, a genuinely empty/sparse period staying a
+  non-error outcome, and no period-history marker written on a match
+  failure — the first of these confirmed to fail without this fix by
+  temporarily reverting it) and `tests/integration/test_cli.py` (the same
+  scenarios through the CLI: exit code, stderr message, `--json` payload).
+  `docs/cli_reference.md`'s `sorethumb run` section documents the new
+  behaviour and corrects a stale "`--limit-groups` reserved for future
+  use" note that predated it actually being wired up.
 - A configured `columns.id_column` was never validated: a duplicate or null
   value could silently make a result's `row_id` ambiguous between multiple
   source records. Since only the flagged subset of rows is ever persisted, a

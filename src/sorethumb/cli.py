@@ -719,7 +719,7 @@ def run(
             help=(
                 "Cap the number of groups processed, applied after --only-group/"
                 "--group-filter. Groups are sorted by label first, so the same "
-                "limit always keeps the same groups."
+                "limit always keeps the same groups. Must be >= 1 when given."
             ),
         ),
     ] = None,
@@ -790,16 +790,20 @@ def run(
                 "  skips:  feature plan, detector models, per-group results, history rows, report."
             )
 
-    result: RunResult = run_detection(
-        cfg,
-        only_groups=only_group,
-        group_filter_regex=group_filter,
-        limit_groups=limit_groups,
-        force=force,
-        no_report=no_report,
-        dry_run=dry_run,
-        period_label_override=period,
-    )
+    try:
+        result: RunResult = run_detection(
+            cfg,
+            only_groups=only_group,
+            group_filter_regex=group_filter,
+            limit_groups=limit_groups,
+            force=force,
+            no_report=no_report,
+            dry_run=dry_run,
+            period_label_override=period,
+        )
+    except SorethumbError as exc:
+        err_console.print(f"[red]run failed:[/red] {exc}")
+        raise typer.Exit(2) from exc
 
     if json_output:
         typer.echo(json.dumps(_run_result_to_dict(result), default=str))
@@ -1868,21 +1872,28 @@ def benchmark(
 
 
 def _exit_code_for(result: RunResult) -> int:
-    """1 if any group failed, or a requested report failed to render; 0 otherwise.
+    """1 if any group failed, a requested report failed to render, or a group selector matched nothing.
 
-    A report failure never means the detection/scoring results are wrong --
+    0 otherwise. A report failure never means the detection/scoring results are wrong --
     but the user explicitly asked for a report and didn't get one, and a
-    silent success-shaped exit code would hide that.
+    silent success-shaped exit code would hide that. A group_selection_error
+    (P1-4) means the run processed *zero* groups because --only-group/
+    --group-filter matched none of them -- n_failed alone can't catch this,
+    since an empty groups list makes it (and n_succeeded/n_skipped) 0 too,
+    which would otherwise print and exit exactly like "nothing to do, all
+    fine" rather than "your selector likely has a typo".
     """
-    return 1 if (result.n_failed or result.report_status == "failed") else 0
+    return 1 if (result.n_failed or result.report_status == "failed" or result.group_selection_error) else 0
 
 
 def _print_run_summary(result: RunResult) -> None:
-    status_color = "red" if result.n_failed else "green"
+    status_color = "red" if (result.n_failed or result.group_selection_error) else "green"
     console.print(
         f"\n[{status_color}]Run {result.run_id}[/{status_color}]  "
         f"succeeded={result.n_succeeded}  skipped={result.n_skipped}  failed={result.n_failed}"
     )
+    if result.group_selection_error:
+        err_console.print(f"  [red]{result.group_selection_error}[/red]")
     if result.source_run_id:
         console.print(f"  [dim]Scored forward from run {result.source_run_id} (no re-fitting).[/dim]")
 
@@ -1954,6 +1965,7 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
         "snapshot_fp": result.snapshot_fp,
         "source_run_id": result.source_run_id,
         "id_identity_scope": result.id_identity_scope,
+        "group_selection_error": result.group_selection_error,
         "period_label": result.period_label,
         "n_succeeded": result.n_succeeded,
         "n_skipped": result.n_skipped,

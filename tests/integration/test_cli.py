@@ -268,6 +268,63 @@ def test_run_limit_groups_caps_deterministically(workspace_grouped):
 
 
 # ---------------------------------------------------------------------------
+# P1-4: group selectors that match nothing must fail loudly, not silently
+# complete a zero-group no-op
+# ---------------------------------------------------------------------------
+
+
+def test_run_only_group_matching_nothing_exits_nonzero_and_names_the_reason(workspace_grouped):
+    _, toml_path, workdir = workspace_grouped  # group labels "G0", "G1"
+    result = runner.invoke(
+        app, ["run", "--config", str(toml_path), "--no-report", "--only-group", "does-not-exist"]
+    )
+    assert result.exit_code != 0, result.stdout + (result.stderr or "")
+    assert "does-not-exist" in (result.stdout + (result.stderr or ""))
+
+    from sorethumb import Workspace
+
+    with Workspace.open(workdir) as ws:
+        run_id = ws.store.list_runs(limit=1)[0]["run_id"]
+        assert ws.store.run_status(run_id) == "failed"
+        assert ws.store.all_run_groups(run_id) == []
+
+
+def test_run_group_filter_matching_nothing_exits_nonzero(workspace_grouped):
+    _, toml_path, _ = workspace_grouped
+    result = runner.invoke(
+        app, ["run", "--config", str(toml_path), "--no-report", "--group-filter", "^ZZZ_no_match$"]
+    )
+    assert result.exit_code != 0, result.stdout + (result.stderr or "")
+
+
+def test_run_limit_groups_zero_exits_nonzero_with_clear_message(workspace_grouped):
+    _, toml_path, _ = workspace_grouped
+    result = runner.invoke(app, ["run", "--config", str(toml_path), "--no-report", "--limit-groups", "0"])
+    assert result.exit_code == 2, result.stdout + (result.stderr or "")
+    assert "at least 1" in (result.stdout + (result.stderr or ""))
+
+
+def test_run_limit_groups_negative_exits_nonzero_with_clear_message(workspace_grouped):
+    _, toml_path, _ = workspace_grouped
+    result = runner.invoke(app, ["run", "--config", str(toml_path), "--no-report", "--limit-groups", "-1"])
+    assert result.exit_code == 2, result.stdout + (result.stderr or "")
+    assert "at least 1" in (result.stdout + (result.stderr or ""))
+
+
+def test_run_json_output_reports_group_selection_error(workspace_grouped):
+    _, toml_path, _ = workspace_grouped
+    result = runner.invoke(
+        app, ["run", "--config", str(toml_path), "--no-report", "--only-group", "does-not-exist", "--json"]
+    )
+    assert result.exit_code != 0
+    payload = json.loads(result.stdout)
+    assert payload["group_selection_error"] is not None
+    assert "does-not-exist" in payload["group_selection_error"]
+    assert payload["n_succeeded"] == 0
+    assert payload["n_failed"] == 0  # no group ever ran to fail -- the error is structural, not per-group
+
+
+# ---------------------------------------------------------------------------
 # --strict overrides an explicit TOML value; not passing it respects TOML (P2-7)
 # ---------------------------------------------------------------------------
 
