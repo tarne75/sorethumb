@@ -30,6 +30,26 @@ Download hardening
   hop is refused outright (not just stripped of credentials), since it
   silently drops transport security for the response body too.
 
+Conditional (validator-aware) caching
+--------------------------------------
+A "cache hit" previously still fully downloaded and hashed the body before
+checking whether that content was already on disk -- it saved a rename, not
+network traffic, latency, or temporary disk I/O. When ``source.cache`` is
+True, each successful download's ``ETag``/``Last-Modified`` response headers
+are now recorded (keyed by the exact configured ``source.uri`` -- never by a
+redirect's final target, so the cache survives the target varying between
+calls) alongside the content fingerprint they belong to. The *next* request
+for that URL, if the recorded fingerprint's cached file still exists on
+disk, is sent with ``If-None-Match``/``If-Modified-Since``; a ``304 Not
+Modified`` response reuses that cached file without transferring or writing
+a body at all. See ``_load_cache_meta``/``_save_cache_meta`` and
+``_conditional_request_headers``. Falls back to an ordinary unconditional
+download -- logged as such, never as a "cache hit" -- whenever there is
+nothing to condition on: the first request for a URL, an origin that never
+returns either validator, ``source.cache=False`` (no validators are ever
+recorded for it), or a stale index entry whose referenced cache file has
+since been deleted.
+
 Redaction
 ---------
 :func:`redact_source_uri` strips URI userinfo (``user:pass@``) and known
@@ -43,7 +63,9 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import hashlib
 import ipaddress
+import json
 import logging
 import os
 import re
@@ -51,6 +73,7 @@ import socket
 import tempfile
 import time
 from pathlib import Path
+from typing import TypedDict
 from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse, urlunparse
 from urllib.request import url2pathname
 
@@ -68,6 +91,18 @@ _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 _MAX_ATTEMPTS = 3
 _BACKOFF_BASE = 2.0
 _MAX_REDIRECTS = 5
+
+# Subdirectory (under a source's cache_dir) holding one small JSON file per
+# cached URL's caching validators -- see "Conditional (validator-aware)
+# caching" above.
+_CACHE_META_DIRNAME = ".http_meta"
+
+
+class _CacheMeta(TypedDict):
+    etag: str | None
+    last_modified: str | None
+    fingerprint: str
+
 
 # "C:\..." or "C:/..." -- urlparse would otherwise read the drive letter as a
 # URL scheme ("c"), rejecting every Windows absolute path as an unsupported
@@ -124,13 +159,19 @@ def redact_source_uri(uri: str) -> str:
     return urlunparse(parsed._replace(netloc=netloc, query=query))
 
 
-def resolve_source(config: SourceConfig, cache_dir: Path) -> Path:
+def resolve_source(
+    config: SourceConfig, cache_dir: Path, *, transport: httpx.BaseTransport | None = None
+) -> Path:
     """Return a local ``Path`` for the source described by *config*.
 
     For local paths (including Windows drive-letter/UNC paths and
     ``file://`` URIs): expand ``~`` and resolve relative paths.
     For HTTP(S) URIs: download to *cache_dir*, using cached copy when content
-    has not changed (content-fingerprint match).
+    has not changed (content-fingerprint match, or a validator-aware
+    conditional request's 304 response -- see the module docstring).
+
+    *transport* is a test-injection point (``httpx.MockTransport``) forwarded
+    to the HTTP path only; production callers never pass it.
 
     Raises:
         SourceError: URI scheme is not supported, or the download fails.
@@ -150,7 +191,7 @@ def resolve_source(config: SourceConfig, cache_dir: Path) -> Path:
         return _resolve_local(uri)
 
     if parsed.scheme in ("http", "https"):
-        return _resolve_http(config, cache_dir)
+        return _resolve_http(config, cache_dir, transport=transport)
 
     raise SourceError(f"Unsupported URI scheme '{parsed.scheme}' in '{redact_source_uri(config.uri)}'")
 
@@ -177,11 +218,129 @@ def _resolve_local(uri: str) -> Path:
     return path
 
 
-def _resolve_http(config: SourceConfig, cache_dir: Path) -> Path:
-    """Download the URI, cache by content fingerprint, return cached path."""
+def _cache_meta_path(cache_dir: Path, url: str) -> Path:
+    """Sidecar JSON path for *url*'s caching validators.
+
+    Keyed on the exact configured URL string -- stable across redirects to
+    a varying target.
+    """
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    return cache_dir / _CACHE_META_DIRNAME / f"{digest}.json"
+
+
+def _load_cache_meta(cache_dir: Path, url: str) -> _CacheMeta | None:
+    """Return *url*'s previously recorded validators, or None if there are none.
+
+    "None" covers both "never fetched before" and "the sidecar file is
+    missing/corrupt" -- the latter is treated the same as the former, not
+    as an error.
+    """
+    try:
+        raw = json.loads(_cache_meta_path(cache_dir, url).read_text())
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(raw, dict) or not isinstance(raw.get("fingerprint"), str):
+        return None
+    etag = raw.get("etag")
+    last_modified = raw.get("last_modified")
+    return _CacheMeta(
+        etag=etag if isinstance(etag, str) else None,
+        last_modified=last_modified if isinstance(last_modified, str) else None,
+        fingerprint=raw["fingerprint"],
+    )
+
+
+def _save_cache_meta(cache_dir: Path, url: str, meta: _CacheMeta) -> None:
+    """Atomically persist *url*'s caching validators.
+
+    Same fsync + rename hardening as a downloaded file's own promotion.
+    """
+    path = _cache_meta_path(cache_dir, url)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".meta-", suffix=".tmp")
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    tmp_path.write_text(json.dumps(meta))
+    _promote(tmp_path, path)
+
+
+def _conditional_request_headers(meta: _CacheMeta) -> dict[str, str]:
+    """Build If-None-Match / If-Modified-Since headers from recorded validators.
+
+    Empty if *meta* carries neither (shouldn't happen -- ``_save_cache_meta``
+    is only ever called with at least one -- but fails safe to an
+    unconditional request rather than sending a request no server can act on).
+    """
+    headers: dict[str, str] = {}
+    if meta["etag"]:
+        headers["If-None-Match"] = meta["etag"]
+    if meta["last_modified"]:
+        headers["If-Modified-Since"] = meta["last_modified"]
+    return headers
+
+
+def _conditional_request_candidate(cache_dir: Path, url: str, ext: str) -> tuple[Path | None, dict[str, str]]:
+    """Look up a still-valid cache entry for *url* to condition a request on.
+
+    Returns ``(candidate_file, extra_headers)``. *candidate_file* is None
+    (and *extra_headers* empty) whenever there's nothing to condition on:
+    no prior validators recorded, or the fingerprint they name no longer has
+    a cache file on disk (a stale index entry must never produce a false
+    "not modified" for data that no longer exists).
+    """
+    prior = _load_cache_meta(cache_dir, url)
+    if prior is None:
+        return None, {}
+    candidate = cache_dir / prior["fingerprint"] / f"data{ext}"
+    if not candidate.exists():
+        logger.debug(
+            "Cache index for '%s' names a cache entry that no longer exists; requesting unconditionally.",
+            redact_source_uri(url),
+        )
+        return None, {}
+    return candidate, _conditional_request_headers(prior)
+
+
+def _save_cache_meta_if_validated(cache_dir: Path, url: str, fp: str, meta_out: dict[str, object]) -> None:
+    """Persist validators from a completed download's response, if any were given.
+
+    Logs instead of persisting anything when the origin supplied neither
+    ETag nor Last-Modified -- there is nothing to condition a future
+    request on, so every future read of this URL will need a full download
+    too, which is worth saying plainly rather than staying silent about.
+    """
+    etag = meta_out.get("etag")
+    last_modified = meta_out.get("last_modified")
+    etag = etag if isinstance(etag, str) else None
+    last_modified = last_modified if isinstance(last_modified, str) else None
+    if etag or last_modified:
+        _save_cache_meta(cache_dir, url, _CacheMeta(etag=etag, last_modified=last_modified, fingerprint=fp))
+    else:
+        logger.info(
+            "No caching validators (ETag/Last-Modified) from origin for '%s': "
+            "every future read of this URL will require a full download too.",
+            redact_source_uri(url),
+        )
+
+
+def _resolve_http(
+    config: SourceConfig, cache_dir: Path, *, transport: httpx.BaseTransport | None = None
+) -> Path:
+    """Download the URI, cache by content fingerprint, return cached path.
+
+    *transport* is the same test-injection point ``_download_to`` exposes;
+    production callers never pass it.
+    """
     url = config.uri
     headers = _build_auth_headers(config)
     cache_dir.mkdir(parents=True, exist_ok=True)
+    ext = _extension_from_url(url, config)
+
+    candidate_file: Path | None = None
+    request_headers = headers
+    if config.cache:
+        candidate_file, extra_headers = _conditional_request_candidate(cache_dir, url, ext)
+        request_headers = {**headers, **extra_headers}
 
     # A unique per-attempt scratch file -- never a fixed shared name.
     # Several concurrent downloads into the same cache_dir (different URLs,
@@ -195,13 +354,29 @@ def _resolve_http(config: SourceConfig, cache_dir: Path) -> Path:
 
     try:
         logger.debug("Downloading source: %s", redact_source_uri(url))
-        _download_to(url, headers, tmp_path, max_bytes=config.max_download_bytes)
+        meta_out: dict[str, object] = {}
+        _download_to(
+            url,
+            request_headers,
+            tmp_path,
+            max_bytes=config.max_download_bytes,
+            transport=transport,
+            meta_out=meta_out,
+        )
 
-        ext = _extension_from_url(url, config)
+        if candidate_file is not None and meta_out.get("modified") is False:
+            logger.info(
+                "Source not modified (304, fp=%s): reusing cached copy without downloading.",
+                candidate_file.parent.name[:8],
+            )
+            tmp_path.unlink(missing_ok=True)
+            return candidate_file
 
         if not config.cache:
             # source.cache = False: keep only a single transient copy, overwritten
-            # every call, and never a fingerprint-keyed cache dir.
+            # every call, and never a fingerprint-keyed cache dir (so no
+            # validators are ever recorded for it either -- there is no cache
+            # entry a conditional request could reuse).
             uncached_file = cache_dir / f"uncached_data{ext}"
             _promote(tmp_path, uncached_file)
             logger.info("Source not cached (source.cache=False): %s", uncached_file)
@@ -210,15 +385,19 @@ def _resolve_http(config: SourceConfig, cache_dir: Path) -> Path:
         fp = content_fingerprint(tmp_path)
         cached_dir = cache_dir / fp
         cached_file = cached_dir / f"data{ext}"
+        _save_cache_meta_if_validated(cache_dir, url, fp, meta_out)
 
         if cached_file.exists():
-            logger.info("Source cache hit (fp=%s): skipping download", fp[:8])
+            logger.info(
+                "Source downloaded (fp=%s) but content matches an existing cache entry; discarding duplicate.",
+                fp[:8],
+            )
             tmp_path.unlink(missing_ok=True)
             return cached_file
 
         cached_dir.mkdir(parents=True, exist_ok=True)
         _promote(tmp_path, cached_file)
-        logger.info("Source cached (fp=%s): %s", fp[:8], cached_file)
+        logger.info("Source downloaded and cached (fp=%s): %s", fp[:8], cached_file)
         return cached_file
     except BaseException:
         with contextlib.suppress(OSError):
@@ -305,19 +484,29 @@ def _download_to(
     *,
     max_bytes: int,
     transport: httpx.BaseTransport | None = None,
+    meta_out: dict[str, object] | None = None,
 ) -> None:
     """Download *url* to *dest*.
 
     *transport* is an injection point for tests (e.g. ``httpx.MockTransport``)
     to simulate redirects, oversized responses, or unsafe-host targets
     without a real network call; production callers never pass it.
+
+    *meta_out*, if given, is populated in place with ``"modified"`` (bool),
+    ``"etag"`` and ``"last_modified"`` (each ``str | None``) describing the
+    final response: a 304 leaves *dest* untouched and sets ``modified`` to
+    False; a 200 writes *dest* and sets it to True. Callers that don't pass
+    it (most existing tests, and any caller uninterested in conditional
+    caching) get the same unconditional-download behaviour as before.
     """
+    if meta_out is None:
+        meta_out = {}
     if transport is None:
         transport = httpx.HTTPTransport(retries=1)
     with httpx.Client(transport=transport, timeout=120.0) as client:
         for attempt in range(_MAX_ATTEMPTS):
             try:
-                _download_once(client, url, headers, dest, max_bytes=max_bytes)
+                _download_once(client, url, headers, dest, max_bytes=max_bytes, meta_out=meta_out)
                 return
             except httpx.TransportError as exc:
                 if attempt < _MAX_ATTEMPTS - 1:
@@ -372,12 +561,21 @@ def _strip_authorization(headers: dict[str, str]) -> dict[str, str]:
 
 
 def _download_once(
-    client: httpx.Client, url: str, headers: dict[str, str], dest: Path, *, max_bytes: int
+    client: httpx.Client,
+    url: str,
+    headers: dict[str, str],
+    dest: Path,
+    *,
+    max_bytes: int,
+    meta_out: dict[str, object],
 ) -> None:
     """One download attempt.
 
     Follows redirects manually (host-checked, capped), then streams the
-    final response to *dest* with a hard size ceiling.
+    final response to *dest* with a hard size ceiling -- unless the response
+    is ``304 Not Modified`` (only possible when *headers* carries a
+    conditional ``If-None-Match``/``If-Modified-Since``), in which case
+    *dest* is left untouched and ``meta_out["modified"]`` is set to False.
 
     Authorization is only ever sent to the exact origin (scheme, host,
     effective port) the original request targeted -- a redirect to any
@@ -385,7 +583,10 @@ def _download_once(
     that other host's resolved address looks. An HTTPS -> HTTP downgrade
     at any hop is refused outright, independent of whether credentials are
     even configured, since it silently drops transport security for the
-    response body too, not just for an auth header.
+    response body too, not just for an auth header. Any conditional
+    headers travel with the request across redirects the same way -- they
+    aren't a secret, so there's no reason to strip them cross-origin the way
+    Authorization is.
     """
     request = client.build_request("GET", url, headers=headers)
     original_host = request.url.host
@@ -397,6 +598,19 @@ def _download_once(
 
         resp = client.send(request, stream=True)
         try:
+            if resp.status_code == 304:
+                # Only reachable when *headers* sent a conditional validator
+                # (a server has no reason to emit 304 otherwise) -- the
+                # caller's recorded cache entry is still current. Leave
+                # *dest* untouched: there is no body to write, and the
+                # caller reuses its existing cached file instead. Checked
+                # before `resp.is_redirect` -- httpx treats any 3xx as a
+                # redirect regardless of whether a Location header is
+                # present, and 304 never carries one.
+                meta_out["modified"] = False
+                meta_out["etag"] = resp.headers.get("etag")
+                meta_out["last_modified"] = resp.headers.get("last-modified")
+                return
             if resp.is_redirect:
                 next_url = resp.headers.get("location")
                 if not next_url:
@@ -438,6 +652,9 @@ def _download_once(
                             f"exceeded source.max_download_bytes={max_bytes:,}."
                         )
                     fh.write(chunk)
+            meta_out["modified"] = True
+            meta_out["etag"] = resp.headers.get("etag")
+            meta_out["last_modified"] = resp.headers.get("last-modified")
             return
         finally:
             resp.close()

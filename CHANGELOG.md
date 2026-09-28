@@ -230,6 +230,40 @@ diff against.
 
 ### Fixed
 
+- HTTP source caching reported a "cache hit" after still fully downloading
+  and hashing the body -- it saved a rename, not network traffic, latency,
+  or temporary disk I/O. `resolve_source`/`_resolve_http` now record each
+  successful download's `ETag`/`Last-Modified` response headers (keyed by
+  the exact configured `source.uri`, never by a redirect's final target, so
+  the cache survives that target varying between calls) alongside the
+  content fingerprint they belong to. The next request for that URL, when
+  the recorded fingerprint's cache file still exists on disk, is sent with
+  `If-None-Match`/`If-Modified-Since`; a genuine `304 Not Modified` response
+  now reuses the cached file without transferring or writing a body at all.
+  Falls back to an ordinary full download -- logged as such, never claimed
+  as a cache hit -- whenever there's nothing to condition on: the first
+  request for a URL, an origin that never returns either validator,
+  `source.cache=False` (no validators are ever recorded for it), or a stale
+  index entry whose referenced cache file has since been deleted (never
+  trusted into a false "not modified" for data that no longer exists). Also
+  fixed a related bug this work surfaced before it ever shipped: httpx
+  treats any 3xx response as `is_redirect`, 304 included, regardless of
+  whether it carries a `Location` header -- the 304 check in `_download_once`
+  now runs before the redirect-handling branch, not after it, or every
+  conditional request would have crashed with "redirect had no Location
+  header" instead of being recognised as a cache hit. New tests in
+  `tests/unit/io/test_io.py` cover the wire-level mechanics directly
+  (`_download_to`/`_download_once`: 304 leaves the destination file
+  untouched, conditional headers survive a redirect hop unlike
+  `Authorization`) and the full `resolve_source` orchestration (200-then-304
+  reuse with no new content written, a changed ETag correctly downloading
+  and re-caching new content, an origin with no validators always
+  downloading but still deduplicating by content fingerprint, `cache=False`
+  never sending conditional headers, the cache key staying the configured
+  URL even when the redirect target varies between calls, a stale index
+  entry pointing at a deleted cache file falling back to an unconditional
+  request, and an interrupted download never persisting bogus validator
+  metadata).
 - `source.read_options["infer_schema_length"]` — the documented way to
   override Polars' CSV/NDJSON schema-inference sample size — raised
   `TypeError: got multiple values for keyword argument 'infer_schema_length'`

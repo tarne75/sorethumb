@@ -1101,6 +1101,321 @@ def test_download_rejects_oversized_streamed_body_without_content_length(tmp_pat
         )
 
 
+# ---------------------------------------------------------------------------
+# Validator-aware HTTP caching (P1-7): a "cache hit" must actually skip the
+# network transfer, not just the final rename after a full download.
+# ---------------------------------------------------------------------------
+
+
+def test_download_to_sends_no_conditional_headers_without_meta_out(tmp_path: Path) -> None:
+    """Baseline: a plain call (no meta_out) behaves exactly as before --
+    unconditional request, dest written, nothing else to check."""
+    import httpx
+
+    from sorethumb.io.source import _download_to
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"a,b\n1,2\n")
+
+    dest = tmp_path / "out.csv"
+    _download_to(
+        "http://8.8.8.8/data.csv", {}, dest, max_bytes=10_000, transport=httpx.MockTransport(handler)
+    )
+    assert dest.read_bytes() == b"a,b\n1,2\n"
+
+
+def test_download_to_captures_etag_and_last_modified_on_200(tmp_path: Path) -> None:
+    import httpx
+
+    from sorethumb.io.source import _download_to
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"etag": '"abc123"', "last-modified": "Wed, 01 Jan 2025 00:00:00 GMT"},
+            content=b"x,y\n1,2\n",
+        )
+
+    dest = tmp_path / "out.csv"
+    meta: dict[str, object] = {}
+    _download_to(
+        "http://8.8.8.8/data.csv",
+        {},
+        dest,
+        max_bytes=10_000,
+        transport=httpx.MockTransport(handler),
+        meta_out=meta,
+    )
+    assert dest.read_bytes() == b"x,y\n1,2\n"
+    assert meta == {"modified": True, "etag": '"abc123"', "last_modified": "Wed, 01 Jan 2025 00:00:00 GMT"}
+
+
+def test_download_to_304_leaves_dest_untouched_and_reports_not_modified(tmp_path: Path) -> None:
+    """A 304 response (only sent because the request carried a conditional
+    header) must write nothing -- the whole point is skipping the transfer."""
+    import httpx
+
+    from sorethumb.io.source import _download_to
+
+    seen_headers: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_headers.append(dict(request.headers))
+        return httpx.Response(304)
+
+    dest = tmp_path / "out.csv"
+    dest.write_bytes(b"pre-existing sentinel content")
+    meta: dict[str, object] = {}
+    _download_to(
+        "http://8.8.8.8/data.csv",
+        {"If-None-Match": '"abc123"'},
+        dest,
+        max_bytes=10_000,
+        transport=httpx.MockTransport(handler),
+        meta_out=meta,
+    )
+    assert dest.read_bytes() == b"pre-existing sentinel content"  # untouched
+    assert meta["modified"] is False
+    assert seen_headers[0]["if-none-match"] == '"abc123"'
+
+
+def test_download_to_conditional_headers_survive_a_redirect(tmp_path: Path) -> None:
+    """A conditional header (unlike Authorization) is not a secret -- it must
+    travel across a redirect hop the same as any other ordinary header."""
+    import httpx
+
+    from sorethumb.io.source import _download_to
+
+    seen_at_final: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "8.8.8.8":
+            return httpx.Response(302, headers={"location": "http://1.1.1.1/final.csv"})
+        seen_at_final.append(request.headers.get("if-none-match"))
+        return httpx.Response(304)
+
+    dest = tmp_path / "out.csv"
+    meta: dict[str, object] = {}
+    _download_to(
+        "http://8.8.8.8/data.csv",
+        {"If-None-Match": '"abc123"'},
+        dest,
+        max_bytes=10_000,
+        transport=httpx.MockTransport(handler),
+        meta_out=meta,
+    )
+    assert seen_at_final == ['"abc123"']
+    assert meta["modified"] is False
+
+
+def test_resolve_http_caches_etag_then_reuses_via_304_without_writing_new_content(tmp_path: Path) -> None:
+    """The core P1-7 fix, end to end through resolve_source: the second
+    request for the same URL must be answered with a 304 the server can only
+    send because it recognised our conditional header, and no new download
+    output should be written for that second call."""
+    import httpx
+
+    from sorethumb.config import SourceConfig
+    from sorethumb.io.source import resolve_source
+
+    request_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_count["n"] += 1
+        if request.headers.get("if-none-match") == '"v1"':
+            return httpx.Response(304)
+        return httpx.Response(200, headers={"etag": '"v1"'}, content=b"a,b\n1,2\n")
+
+    cache_dir = tmp_path / "cache"
+    cfg = SourceConfig(uri="http://8.8.8.8/data.csv")
+
+    first = resolve_source(cfg, cache_dir, transport=httpx.MockTransport(handler))
+    assert first.read_bytes() == b"a,b\n1,2\n"
+    assert request_count["n"] == 1
+
+    second = resolve_source(cfg, cache_dir, transport=httpx.MockTransport(handler))
+    assert second == first
+    assert second.read_bytes() == b"a,b\n1,2\n"
+    assert request_count["n"] == 2  # a request was sent (conditional) -- just no body transferred
+
+
+def test_resolve_http_changed_etag_downloads_new_content_and_updates_cache(tmp_path: Path) -> None:
+    """When the origin's content and ETag actually change, the conditional
+    request must come back 200 (not a stale 304), and the new content --
+    under its own fingerprint -- must become what resolve_source returns."""
+    import httpx
+
+    from sorethumb.config import SourceConfig
+    from sorethumb.io.source import resolve_source
+
+    state = {"etag": '"v1"', "body": b"a,b\n1,2\n"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.headers.get("if-none-match") == state["etag"]:
+            return httpx.Response(304)
+        return httpx.Response(200, headers={"etag": state["etag"]}, content=state["body"])
+
+    cache_dir = tmp_path / "cache"
+    cfg = SourceConfig(uri="http://8.8.8.8/data.csv")
+
+    first = resolve_source(cfg, cache_dir, transport=httpx.MockTransport(handler))
+    assert first.read_bytes() == b"a,b\n1,2\n"
+
+    state["etag"] = '"v2"'
+    state["body"] = b"a,b\n9,9\n"
+    second = resolve_source(cfg, cache_dir, transport=httpx.MockTransport(handler))
+    assert second.read_bytes() == b"a,b\n9,9\n"
+    assert second != first  # different content fingerprint -> different cache dir
+
+    # A third call with the now-current ETag correctly gets a 304 this time.
+    third = resolve_source(cfg, cache_dir, transport=httpx.MockTransport(handler))
+    assert third == second
+    assert third.read_bytes() == b"a,b\n9,9\n"
+
+
+def test_resolve_http_no_validators_always_downloads_but_still_dedupes_by_fingerprint(
+    tmp_path: Path,
+) -> None:
+    """An origin that never sends ETag or Last-Modified can never produce a
+    304 -- every call must fully re-download -- but content-fingerprint
+    dedup (the pre-existing mechanism) must still return the same cached
+    path for unchanged content, and no meta sidecar should be written."""
+    import httpx
+
+    from sorethumb.config import SourceConfig
+    from sorethumb.io.source import resolve_source
+
+    request_count = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        request_count["n"] += 1
+        return httpx.Response(200, content=b"a,b\n1,2\n")  # no etag, no last-modified
+
+    cache_dir = tmp_path / "cache"
+    cfg = SourceConfig(uri="http://8.8.8.8/data.csv")
+
+    first = resolve_source(cfg, cache_dir, transport=httpx.MockTransport(handler))
+    second = resolve_source(cfg, cache_dir, transport=httpx.MockTransport(handler))
+
+    assert first == second  # fingerprint-based dedup still works
+    assert request_count["n"] == 2  # but a full request was made both times
+    assert not (cache_dir / ".http_meta").exists()  # nothing to persist without a validator
+
+
+def test_resolve_http_cache_false_never_sends_conditional_headers(tmp_path: Path) -> None:
+    """source.cache=False must behave exactly as before: no validators ever
+    recorded or consulted, even when the origin would happily supply them."""
+    import httpx
+
+    from sorethumb.config import SourceConfig
+    from sorethumb.io.source import resolve_source
+
+    seen_headers: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_headers.append(dict(request.headers))
+        return httpx.Response(200, headers={"etag": '"v1"'}, content=b"a,b\n1,2\n")
+
+    cache_dir = tmp_path / "cache"
+    cfg = SourceConfig(uri="http://8.8.8.8/data.csv", cache=False)
+
+    resolve_source(cfg, cache_dir, transport=httpx.MockTransport(handler))
+    resolve_source(cfg, cache_dir, transport=httpx.MockTransport(handler))
+
+    assert all("if-none-match" not in h for h in seen_headers)
+    assert not (cache_dir / ".http_meta").exists()
+
+
+def test_resolve_http_cache_key_is_the_configured_url_not_the_redirect_target(tmp_path: Path) -> None:
+    """P1-7 "redirect identity": the recorded validators must be keyed on
+    the URL the caller configured, not on wherever a redirect happens to
+    land -- so a second call still gets a conditional request/304 reuse even
+    if the redirect target the origin points to changes between calls (e.g.
+    load-balanced backends), exactly as long as the *configured* URL is the
+    same."""
+    import httpx
+
+    from sorethumb.config import SourceConfig
+    from sorethumb.io.source import resolve_source
+
+    redirect_target = {"host": "1.1.1.1"}
+    final_request_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "8.8.8.8":
+            return httpx.Response(302, headers={"location": f"http://{redirect_target['host']}/final.csv"})
+        final_request_count["n"] += 1
+        if request.headers.get("if-none-match") == '"v1"':
+            return httpx.Response(304)
+        return httpx.Response(200, headers={"etag": '"v1"'}, content=b"a,b\n1,2\n")
+
+    cache_dir = tmp_path / "cache"
+    cfg = SourceConfig(uri="http://8.8.8.8/data.csv")
+
+    first = resolve_source(cfg, cache_dir, transport=httpx.MockTransport(handler))
+    assert first.read_bytes() == b"a,b\n1,2\n"
+
+    redirect_target["host"] = "9.9.9.9"  # the redirect target varies between calls...
+    second = resolve_source(cfg, cache_dir, transport=httpx.MockTransport(handler))
+
+    assert second == first  # ...but the cache identity (keyed on config.uri) does not
+    assert final_request_count["n"] == 2  # both calls reached a final host; the second was a 304
+
+
+def test_resolve_http_stale_meta_pointing_at_deleted_cache_entry_falls_back_unconditionally(
+    tmp_path: Path,
+) -> None:
+    """If the cache file a recorded fingerprint names has been deleted out
+    from under the index (manual cleanup, partial workspace reset, ...), the
+    next request must not send a conditional header that could produce a
+    false 304 for data that no longer exists -- it must fall back to an
+    ordinary full download."""
+    import shutil
+
+    import httpx
+
+    from sorethumb.config import SourceConfig
+    from sorethumb.io.source import resolve_source
+
+    seen_headers: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_headers.append(dict(request.headers))
+        return httpx.Response(200, headers={"etag": '"v1"'}, content=b"a,b\n1,2\n")
+
+    cache_dir = tmp_path / "cache"
+    cfg = SourceConfig(uri="http://8.8.8.8/data.csv")
+
+    first = resolve_source(cfg, cache_dir, transport=httpx.MockTransport(handler))
+    shutil.rmtree(first.parent)  # simulate the referenced cache entry vanishing
+
+    second = resolve_source(cfg, cache_dir, transport=httpx.MockTransport(handler))
+    assert second.read_bytes() == b"a,b\n1,2\n"
+    assert "if-none-match" not in seen_headers[1]  # second request was unconditional
+
+
+def test_resolve_http_interrupted_download_does_not_persist_cache_meta(tmp_path: Path) -> None:
+    """A failed/interrupted download must never leave behind validator
+    metadata for content that was never actually completed and cached."""
+    import httpx
+
+    from sorethumb.config import SourceConfig
+    from sorethumb.errors import SourceError
+    from sorethumb.io.source import resolve_source
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"etag": '"v1"'}, content=b"x" * 1000)  # exceeds max below
+
+    cache_dir = tmp_path / "cache"
+    cfg = SourceConfig(uri="http://8.8.8.8/data.csv", max_download_bytes=100)
+
+    with pytest.raises(SourceError, match="max_download_bytes"):
+        resolve_source(cfg, cache_dir, transport=httpx.MockTransport(handler))
+
+    assert not (cache_dir / ".http_meta").exists()
+    assert list(cache_dir.glob(".download-*")) == []  # no stray temp file left behind either
+
+
 def test_concurrent_downloads_do_not_corrupt_or_cross_contaminate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
