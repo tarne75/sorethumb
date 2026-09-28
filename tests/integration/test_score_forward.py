@@ -17,6 +17,7 @@ from sorethumb import Config, score_forward
 from sorethumb._pipeline import run_detection
 from sorethumb.config import DetectorConfig, ExplainConfig, FeaturesConfig, ProfilingConfig, ReportConfig
 from sorethumb.errors import StoreError
+from sorethumb.store.models import load_model
 from sorethumb.store.workspace import Workspace
 from tests.factories.configs import make_config
 from tests.factories.detectors import ban_all_fitting as _ban_all_fitting
@@ -235,6 +236,41 @@ def test_score_forward_rejects_swapped_manifest(tmp_path: Path) -> None:
     assert fwd.n_failed == 1
     err = fwd.groups[0].error or ""
     assert "ModelIntegrityError" in err
+
+
+def test_score_forward_hbos_out_of_range_not_scored_as_normal(tmp_path: Path) -> None:
+    """P1-5 regression at the score-forward layer: after a fitted HBOS model
+    is persisted and reloaded from disk (the exact path ``score_forward``
+    uses -- no refit), a value far outside the training range must not
+    inherit a dense edge bin's normal-looking score.
+
+    ``group.results_path`` only ever holds *flagged* rows
+    (``write_results(..., df_anomalies)``), so this loads the persisted
+    detector directly via ``load_model`` rather than trying to read
+    non-anomalous rows back out of that file.
+    """
+    ws = tmp_path / "ws"
+    train_csv = tmp_path / "train.csv"
+
+    rng = np.random.default_rng(0)
+    train_num = np.concatenate([np.full(180, 0.01), rng.uniform(1.0, 10.0, 20)])
+    pl.DataFrame({"id": list(range(len(train_num))), "num_a": train_num.tolist()}).write_csv(train_csv)
+
+    cfg = make_config(train_csv, ws, detectors=[DetectorConfig(name="hbos")], min_records=5)
+    src = run_detection(cfg, no_report=True)
+    assert src.n_succeeded >= 1
+    src_group = next(g for g in src.groups if g.status == "success")
+
+    with Workspace.open(ws) as w:
+        det, _cal, _manifest = load_model(w, src.run_id, src_group.group_key, "hbos")
+
+    dense_bin_value, ordinary_value, far_below, far_above = det.score_samples(
+        np.array([[0.01], [5.0], [-1000.0], [1000.0]])
+    )
+    assert far_below < dense_bin_value
+    assert far_above < dense_bin_value
+    assert far_below < ordinary_value
+    assert far_above < ordinary_value
 
 
 def test_score_forward_multi_detector_round_trip_succeeds(

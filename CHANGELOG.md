@@ -230,6 +230,33 @@ diff against.
 
 ### Fixed
 
+- HBOS clipped any value outside its fitted per-feature histogram range into
+  the nearest edge bin, so an arbitrarily distant, never-before-seen value
+  inherited that edge bin's density — if the edge bin happened to be dense
+  (a common shape: a pile of common values at one extreme, a long tail of
+  everything else), a wildly out-of-range value could score as *more
+  normal* than genuine in-range points, defeating the point of the
+  detector. `HBOSDetector._per_feature_terms` (the single source of truth
+  both `score_samples` and `feature_contributions` build on, so both are
+  fixed together) now treats a value strictly outside `[edges[0],
+  edges[-1]]` as an unseen region and scores it at the same density floor
+  (`1e-10`) already used for empty bins at fit time, regardless of how far
+  outside the range it falls — an unseen value 1 unit away and one 10⁹
+  units away now score identically, rather than the old edge-bin behaviour
+  which (accidentally, via floating-point bin-width effects) could vary.
+  Values exactly on an outer edge are unaffected: `np.histogram`'s bins are
+  inclusive of both outer edges, so those still resolve to their ordinary
+  bin density, not the floor. New unit tests in
+  `tests/unit/detectors/test_detectors.py` cover a deliberately dense edge
+  bin (confirming an out-of-range value scores worse than a point that
+  genuinely lands in that dense bin), exact-edge values, just-inside
+  values, and that increasingly distant out-of-range values all score
+  identically (checked directly reverting the fix to confirm each new test
+  fails without it). A new integration test in
+  `tests/integration/test_score_forward.py` confirms the same behaviour
+  survives a real `save_model`/`load_model` round trip — the exact path
+  `score --from-run` uses to reuse a previously fitted HBOS model without
+  refitting.
 - `sorethumb run --only-group`/`--group-filter` matching none of the groups
   actually discovered in the data silently processed zero groups and still
   marked the run *complete* — `any(g.status == "failed" for g in [])` is

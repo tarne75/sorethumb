@@ -490,6 +490,100 @@ def test_hbos_feature_contributions_higher_for_planted_outlier_feature():
     assert contrib[0, 1] > contrib[0, [0, 2, 3]].sum()
 
 
+def _dense_edge_bin_data() -> np.ndarray:
+    """One feature with a dense pile at the low end and a sparse spread above
+    it, so the outer bins (especially the first) are far denser than typical —
+    the exact condition where clipping an out-of-range value into the edge
+    bin would let it inherit a misleadingly low (normal-looking) score."""
+    rng = np.random.default_rng(0)
+    col = np.concatenate([np.full(900, 0.01), rng.uniform(1.0, 10.0, 100)])
+    return col.reshape(-1, 1)
+
+
+def test_hbos_out_of_range_value_not_scored_as_normal_via_dense_edge_bin():
+    """A value far outside the fitted range must not inherit the dense first
+    bin's low outlier score just because it clips into that bin index."""
+    X = _dense_edge_bin_data()
+    det = HBOSDetector(n_bins=10)
+    det.fit(X, seed=0)
+
+    in_range_dense = det.score_samples(np.array([[0.01]]))[0]  # sits in the dense bin
+    far_below = det.score_samples(np.array([[-1000.0]]))[0]
+    far_above = det.score_samples(np.array([[1000.0]]))[0]
+
+    # score_samples: higher = more normal. An unseen, far-outside value must
+    # score much less "normal" than a point that actually lands in the dense bin.
+    assert far_below < in_range_dense
+    assert far_above < in_range_dense
+
+
+def test_hbos_out_of_range_score_is_flat_regardless_of_distance():
+    """Once a value is outside the fitted range it is entirely unseen — an
+    arbitrarily more distant value must not score as either more or less
+    anomalous than a value just barely outside the range."""
+    X = _dense_edge_bin_data()
+    det = HBOSDetector(n_bins=10)
+    det.fit(X, seed=0)
+    lo, hi = det._edges[0][0], det._edges[0][-1]
+
+    below = np.array([[lo - 1e-6], [lo - 1.0], [lo - 1e6]])
+    above = np.array([[hi + 1e-6], [hi + 1.0], [hi + 1e6]])
+
+    below_scores = det.score_samples(below)
+    above_scores = det.score_samples(above)
+    np.testing.assert_allclose(below_scores, below_scores[0])
+    np.testing.assert_allclose(above_scores, above_scores[0])
+    # Both directions share the same density-floor penalty.
+    np.testing.assert_allclose(below_scores, above_scores)
+
+
+def test_hbos_exact_edge_values_use_ordinary_bin_not_floor():
+    """A value exactly on an outer histogram edge is in-range (np.histogram's
+    bins are inclusive of both outer edges) and must not be treated as
+    unseen, even though it is adjacent to the out-of-range region."""
+    X = _dense_edge_bin_data()
+    det = HBOSDetector(n_bins=10)
+    det.fit(X, seed=0)
+    lo, hi = det._edges[0][0], det._edges[0][-1]
+
+    on_edge_scores = det.score_samples(np.array([[lo], [hi]]))
+    just_outside_scores = det.score_samples(np.array([[lo - 1e-9], [hi + 1e-9]]))
+
+    # The exact-edge values must differ from (be more "normal" than) the
+    # density-floor penalty applied just past each edge.
+    assert on_edge_scores[0] > just_outside_scores[0]
+    assert on_edge_scores[1] > just_outside_scores[1]
+
+
+def test_hbos_just_inside_value_uses_ordinary_bin_density():
+    """A value just inside the fitted range must score identically to the
+    rest of its bin -- the fix only changes behaviour strictly outside the
+    fitted edges."""
+    X = _dense_edge_bin_data()
+    det = HBOSDetector(n_bins=10)
+    det.fit(X, seed=0)
+    lo = det._edges[0][0]
+    second_edge = det._edges[0][1]
+
+    just_inside = det.score_samples(np.array([[lo + 1e-9]]))[0]
+    mid_first_bin = det.score_samples(np.array([[(lo + second_edge) / 2]]))[0]
+    assert just_inside == pytest.approx(mid_first_bin)
+
+
+def test_hbos_feature_contributions_sum_to_score_for_out_of_range_row():
+    """The exact-decomposition invariant must still hold once a row contains
+    an out-of-range value -- feature_contributions and score_samples share
+    the same underlying per-feature terms."""
+    X = _dense_edge_bin_data()
+    det = HBOSDetector(n_bins=10)
+    det.fit(X, seed=0)
+
+    row = np.array([[1_000_000.0]])
+    contrib = det.feature_contributions(row)
+    score = det.score_samples(row)
+    np.testing.assert_allclose(contrib.sum(axis=1), -score, rtol=1e-10, atol=1e-10)
+
+
 def test_auto_bins_normal_data():
     rng = np.random.default_rng(0)
     col = rng.standard_normal(1000)

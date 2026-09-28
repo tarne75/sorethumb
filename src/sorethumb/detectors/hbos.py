@@ -30,6 +30,12 @@ from sorethumb.detectors._hyperparams import validate_extra_params
 
 logger = logging.getLogger(__name__)
 
+# Density floor applied both to empty histogram bins (at fit time) and to
+# values that fall entirely outside the fitted histogram range (at score
+# time) — an unseen region is never denser than the sparsest observed bin.
+_MIN_DENSITY = 1e-10
+_MIN_LOG_DENSITY = float(np.log(_MIN_DENSITY))
+
 
 def _auto_bins(col: np.ndarray) -> int:
     """Freedman-Diaconis bin count estimate, clamped to [10, 256]."""
@@ -78,7 +84,7 @@ class HBOSDetector:
             widths = np.where(widths < 1e-10, 1e-10, widths)
             densities = counts / (n * widths)
             self._edges.append(edges)
-            self._log_densities.append(np.log(np.maximum(densities, 1e-10)))
+            self._log_densities.append(np.log(np.maximum(densities, _MIN_DENSITY)))
 
         logger.info("HBOS: fit on %d rows x %d features.", n, d)
         train_outlier_scores = self._hbos_score(X)
@@ -97,13 +103,25 @@ class HBOSDetector:
 
         for j, (edges, log_dens) in enumerate(zip(self._edges, self._log_densities, strict=True)):
             col = X[:, j]
-            # Map each value to its bin index, clipped to valid range
+            # Map each value to its bin index. searchsorted against the interior
+            # edges alone already bounds the result to [0, len(log_dens) - 1],
+            # so np.clip here is belt-and-suspenders, not what keeps
+            # out-of-range values from landing in an edge bin.
             bin_idx = np.clip(
                 np.searchsorted(edges[1:-1], col),
                 0,
                 len(log_dens) - 1,
             )
-            terms[:, j] = -log_dens[bin_idx]
+            term = -log_dens[bin_idx]
+            # A value strictly outside the fitted range is an unseen region,
+            # not a member of the nearest edge bin — score it at the density
+            # floor regardless of how dense that edge bin happens to be.
+            # Values exactly on an outer edge are in-range (np.histogram
+            # includes both outer edges in their bins) and keep the ordinary
+            # bin lookup above.
+            out_of_range = (col < edges[0]) | (col > edges[-1])
+            term = np.where(out_of_range, -_MIN_LOG_DENSITY, term)
+            terms[:, j] = term
 
         return terms
 
