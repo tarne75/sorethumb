@@ -1,0 +1,105 @@
+name: Publish (TestPyPI rehearsal)
+
+# Disposable rehearsal of the exact production publish path (P2-5) against
+# TestPyPI instead of PyPI -- proves the reusable validation suite, the
+# build-once/no-rebuild artifact hand-off, the environment-approval gate,
+# and the actual upload mechanics all work end to end before ever trusting
+# them with a real v0.1.0 tag against production PyPI. Manually triggered
+# only (workflow_dispatch), never on a tag push or any other automatic
+# trigger -- this must never fire by accident alongside, or instead of, a
+# real release.
+#
+# Deliberately does NOT include publish.yml's verify-tag-on-main job: there
+# is no tag here to check reachability for. Everything else -- the reusable
+# release-validation.yml suite, the download-artifact (never rebuild) step,
+# the version-agreement check, the pinned pypa/gh-action-pypi-publish
+# action -- mirrors publish.yml exactly, with only the index and secret
+# swapped.
+#
+# One-time setup required before this can run for real (none of this is
+# done by this workflow, and none of it touches the real PYPI_TOKEN/pypi
+# environment publish.yml uses):
+#   1. Create a TestPyPI account at https://test.pypi.org/account/register/
+#      -- a separate index with its own accounts, entirely independent of
+#      your real PyPI account.
+#   2. Generate an API token there. Account-scoped, same reasoning as
+#      PYPI_TOKEN (see publish.yml's header comment): sorethumb-ml won't
+#      exist on TestPyPI yet either, and a project-scoped token can't be
+#      created for a project that doesn't exist yet.
+#   3. Add it as a repository secret named TEST_PYPI_TOKEN:
+#        gh secret set TEST_PYPI_TOKEN --repo tarne75/sorethumb
+#   4. Create the `testpypi` GitHub Environment referenced below (a
+#      required-reviewers rule is optional here -- this is a disposable
+#      rehearsal, not the real thing -- but adding one costs nothing and
+#      keeps the rehearsal honest about what the approval gate feels like):
+#        gh api --method PUT repos/tarne75/sorethumb/environments/testpypi
+#   5. Trigger it: gh workflow run publish-testpypi.yml
+#
+# After a successful run, verify by hand:
+#   - The project appears at https://test.pypi.org/project/sorethumb-ml/
+#     with the expected version.
+#   - `pip install -i https://test.pypi.org/simple/ sorethumb-ml` succeeds
+#     in a clean venv, and `sorethumb --version` / `import sorethumb` work.
+#
+# TestPyPI file uploads are just as immutable as real PyPI's -- the same
+# exact version can never be re-uploaded, even after being yanked. Re-
+# running this rehearsal against an already-used version will fail at the
+# upload step with "File already exists", which is expected, not a bug; see
+# docs/release-rollback.md for the yank procedure (same mechanism on
+# TestPyPI as on production PyPI) if a rehearsal release needs cleaning up.
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: publish-testpypi
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    uses: ./.github/workflows/release-validation.yml
+
+  verify-and-publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/sorethumb-ml
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist/
+      - name: Verify pyproject, wheel metadata, and imported runtime version all agree
+        # No tag to check here (unlike publish.yml) -- this rehearses
+        # whatever pyproject.toml's version currently says on the dispatched
+        # ref. Still confirms the wheel that's about to be uploaded and the
+        # runtime you'd actually get from installing it agree with that.
+        run: |
+          set -e
+          pkg="$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          whl="$(ls dist/*.whl)"
+          wheel_ver="$(unzip -p "$whl" '*.dist-info/METADATA' | grep -m1 '^Version:' | cut -d' ' -f2 | tr -d '\r')"
+          python -m venv /tmp/verify-version-venv
+          /tmp/verify-version-venv/bin/pip install --upgrade pip -q
+          /tmp/verify-version-venv/bin/pip install "$whl" -q
+          runtime_ver="$(/tmp/verify-version-venv/bin/python -c "import sorethumb; print(sorethumb.__version__)")"
+          echo "pyproject.version=$pkg  wheel_metadata_version=$wheel_ver  imported_runtime_version=$runtime_ver"
+          if [ "$pkg" != "$wheel_ver" ] || [ "$pkg" != "$runtime_ver" ]; then
+            echo "::error::version mismatch -- pyproject=$pkg wheel=$wheel_ver runtime=$runtime_ver"
+            exit 1
+          fi
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          password: ${{ secrets.TEST_PYPI_TOKEN }}
+          repository-url: https://test.pypi.org/legacy/

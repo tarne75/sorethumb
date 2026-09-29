@@ -14,6 +14,22 @@ diff against.
 
 ### Added
 
+- `.github/workflows/publish-testpypi.yml` (P2-5): a `workflow_dispatch`-only
+  rehearsal of the exact production publish path — the same reusable
+  validation suite, build-once/download-artifact hand-off, version-agreement
+  check, and pinned publish action `publish.yml` uses — against TestPyPI
+  instead of production PyPI, so the pipeline can be proven end to end
+  before ever trusting it with a real tag. Needs a one-time TestPyPI
+  account/token/environment setup (documented in the workflow's own header
+  comment); not yet exercised for real, since that setup can only be done
+  by the project owner. New `docs/releasing.md` documents the release
+  process, this rehearsal, and — new — the rollback/yank procedure for a
+  published release that needs pulling (PyPI/TestPyPI files are immutable;
+  the correct mechanism is yanking, a web-UI-only action, never deleting or
+  retagging). Confirmed via read-only `gh api`/`gh secret list` checks that
+  the production `pypi` GitHub Environment (with its required-reviewers
+  rule) and `PYPI_TOKEN` secret set up in an earlier phase are both still
+  correctly in place.
 - Detector `extra_params`: an escape hatch to pass arbitrary constructor kwargs
   straight to the underlying sklearn estimator (`n_jobs`, `max_features`, KMeans
   `tol`/`max_iter`/`algorithm`, LOF `leaf_size`/`metric`/`p`, OCSVM `tol`/

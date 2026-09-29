@@ -87,6 +87,13 @@ reaches 1.0, this section will be updated with an explicit support window.
 | Latest `0.x` release | :white_check_mark: |
 | Older `0.x` releases | :x: |
 
+If a released version needs to be pulled for a security issue, it is yanked
+on PyPI (never deleted — PyPI doesn't allow that), which stops new,
+unpinned installs from picking it up while leaving existing pinned installs
+unaffected. See
+[docs/releasing.md](https://github.com/tarne75/sorethumb/blob/main/docs/releasing.md#rolling-back-a-bad-release)
+for the exact procedure.
+
 ## Reporting a Vulnerability
 
 Please do not report security vulnerabilities through public GitHub issues.

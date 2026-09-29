@@ -11,3 +11,4 @@
 - [Explanations: model-specific vs heuristic](explanations.md)
 - [Approximations and error characteristics](approximations.md)
 - [Contributing](../CONTRIBUTING.md)
+- [Releasing, rehearsing, and rolling back](releasing.md) (maintainer-only)

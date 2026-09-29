@@ -25,6 +25,11 @@
 #     release section -- that section must already exist with real content.
 #   - Does not commit or push anything to `main` -- your working tree must
 #     already be clean and already match origin/main exactly.
+#
+# Before ever running this for a real release, consider rehearsing the
+# publish path against TestPyPI first (.github/workflows/publish-testpypi.yml,
+# P2-5) -- and see docs/releasing.md for the rollback/yank procedure if a
+# published release ever needs pulling.
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
