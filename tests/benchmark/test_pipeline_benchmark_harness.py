@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import io
 
+import numpy as np
 import pytest
 
 pytestmark = pytest.mark.benchmark
@@ -83,6 +84,8 @@ def test_run_pipeline_benchmark_includes_sklearn_baselines():
 
 
 def test_run_pipeline_benchmark_includes_swamping():
+    """P2-1: the matched clean/contaminated pair, both scored against the
+    same at-risk-normal holdout -- see evaluate.scenarios module docstring."""
     from sorethumb.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
 
     cfg = PipelineBenchmarkConfig(
@@ -92,9 +95,20 @@ def test_run_pipeline_benchmark_includes_swamping():
         include_swamping=True,
     )
     rows = run_pipeline_benchmark(cfg)
-    swamping_rows = [r for r in rows if r.scenario == "swamping"]
-    assert len(swamping_rows) == 1
-    assert swamping_rows[0].error is None
+    swamping_rows = {r.scenario: r for r in rows if r.scenario.startswith("swamping_")}
+    assert set(swamping_rows) == {"swamping_clean", "swamping_contaminated"}
+    for row in swamping_rows.values():
+        assert row.error is None
+        assert row.kind == "swamping"
+        # The holdout is genuinely-normal-only by design (see
+        # swamping_at_risk_holdout) -- ROC-AUC/AP are undefined (NaN) for a
+        # single-class population, never a fabricated number.
+        assert row.n_holdout > 0
+        assert np.isnan(row.roc_auc)
+        # flag_false_positive_rate is the metric this scenario actually
+        # demonstrates -- must be a real, well-defined fraction, not None.
+        assert row.flag_false_positive_rate is not None
+        assert 0.0 <= row.flag_false_positive_rate <= 1.0
 
 
 def test_run_pipeline_benchmark_reports_peak_memory():
@@ -186,6 +200,6 @@ def test_scenario_error_is_captured_not_raised():
     row, not crash the whole batch."""
     from sorethumb.evaluate.pipeline_benchmark import DEFAULT_ABLATION, _pipeline_batch_worker, _run_isolated
 
-    batch = _run_isolated(_pipeline_batch_worker, ("does_not_exist", False, DEFAULT_ABLATION, [0]))
+    batch = _run_isolated(_pipeline_batch_worker, ("does_not_exist", None, DEFAULT_ABLATION, [0]))
     assert batch["error"] is not None
     assert batch["per_seed"] == []

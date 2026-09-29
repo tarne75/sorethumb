@@ -41,6 +41,20 @@ detector/combination choices learn the conditional "normal depends on
 context" structure from an ordinary categorical feature column. Rather than
 assert something the data shows is false, this is checked only for a
 catastrophic regression (a real inversion/bug), not for beating random.
+
+``swamping`` (P2-1, 2026-09-29): redesigned as a matched clean/contaminated
+fit pair, both scored against the same designated at-risk-normal holdout --
+see ``evaluate.scenarios`` module docstring. This population is single-class
+by construction, so ROC-AUC/AP are undefined (NaN); it is guarded separately
+below via ``flag_false_positive_rate``, not in ``_FLOORS``. See
+``test_swamping_contamination_does_not_inflate_false_positives_on_at_risk_normals``
+and docs/approximations.md for what was actually measured -- contrary to the
+scenario's original naive premise ("training contamination causes nearby
+genuinely-normal points to be falsely flagged more"), unlabelled training
+contamination in this pipeline measurably *reduces* (never increases) the
+flag rate on these points for the shipped default (intersection) combination
+-- a masking effect (the natural-flag threshold widens to absorb the far-out
+contamination), not the swamping effect the name originally implied.
 """
 
 from __future__ import annotations
@@ -62,7 +76,6 @@ _FLOORS: dict[tuple[str, str], float] = {
     ("point", "default"): 0.85,  # observed 0.97
     ("clustered", "default"): 0.85,  # observed 0.98 (default ensemble excludes lof)
     ("masking", "default"): 0.45,  # observed 0.57 -- masking is deliberately hard
-    ("swamping", "default"): 0.70,  # observed 0.97 -- training contamination cost less than expected
     ("local", "combination_union"): 0.65,  # observed 0.84
     ("varying_density", "combination_union"): 0.65,  # observed 0.86
     ("local", "default"): 0.55,  # observed 0.71 -- was 0.04 (worse than random) before P0-8
@@ -90,10 +103,7 @@ def pipeline_rows() -> dict[tuple[str, str], PipelineBenchmarkRow]:
         ablation_names=ablations,
         n_seeds=3,
         include_baselines=False,
-        # swamping's own generator (point-family) is included separately by
-        # run_pipeline_benchmark(include_swamping=True); "swamping" is not a
-        # name in SCENARIOS, so it isn't filtered out by scenario_names above.
-        include_swamping=("swamping", "default") in _FLOORS,
+        include_swamping=False,  # guarded separately -- see swamping_rows below
     )
     with warnings.catch_warnings():
         # A warning (e.g. ZeroAnomalyWarning, AntiCorrelatedMemberWarning) is
@@ -130,4 +140,78 @@ def test_cell_not_catastrophically_broken(
         f"{scenario}/{ablation}: ROC-AUC {row.roc_auc:.4f} is well below the near-chance "
         f"range this scenario normally sits in ({_SANITY_FLOOR:.2f}) -- likely a real regression, "
         "not the documented 'contextual is hard' limitation."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Swamping (P2-1): guarded separately from _FLOORS -- see module docstring.
+# ROC-AUC is undefined (NaN) on this scenario's single-class at-risk holdout
+# by design, so flag_false_positive_rate is what's actually asserted here.
+# ---------------------------------------------------------------------------
+
+_SWAMPING_ABLATION = "default"  # the shipped default ensemble/combination
+# Observed on a 2026-09-29 reference run (n_seeds=20): clean ~0.0110,
+# contaminated ~0.0100 -- contamination measurably *reduces* the flag rate
+# on at-risk normals here (masking), never inflates it. Generous margins
+# below/above those observed values; update with a note if a real,
+# reproducible change moves them.
+_SWAMPING_CLEAN_FPR_CEILING = 0.05
+_SWAMPING_CONTAMINATED_FPR_REGRESSION_MARGIN = 0.03
+
+
+@pytest.fixture(scope="session")
+def swamping_rows() -> dict[str, PipelineBenchmarkRow]:
+    """Run the matched clean/contaminated swamping pair, 10 seeds.
+
+    More seeds than ``pipeline_rows``' 3: the at-risk holdout is only 150
+    points and the effect measured here is a small single-digit flag-count
+    difference, too noisy at 3 seeds to assert on reliably (confirmed by
+    hand: the observed direction flips seed-to-seed at n_seeds=3 for some
+    ablations, but is stable by n_seeds=10).
+    """
+    from sorethumb.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
+
+    cfg = PipelineBenchmarkConfig(
+        scenario_names=["__no_ordinary_scenarios__"],  # skip the unrelated per-scenario loop entirely
+        ablation_names=[_SWAMPING_ABLATION],
+        n_seeds=10,
+        include_baselines=False,
+        include_swamping=True,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rows = run_pipeline_benchmark(cfg)
+    return {r.scenario: r for r in rows}
+
+
+def test_swamping_contamination_does_not_inflate_false_positives_on_at_risk_normals(
+    swamping_rows: dict[str, PipelineBenchmarkRow],
+) -> None:
+    """The regression this scenario actually guards against: unlabelled
+    training contamination must never cause the shipped default ensemble to
+    flag *more* of the genuinely-normal at-risk holdout than a clean fit
+    does, beyond ordinary noise. Evidence so far shows the opposite (a mild
+    masking effect, contamination reducing the flag rate) -- documented in
+    docs/approximations.md and the module docstring above. This test would
+    fail if a future change introduced a real, meaningful swamping
+    (false-positive-inflating) effect."""
+    clean = swamping_rows["swamping_clean"]
+    contaminated = swamping_rows["swamping_contaminated"]
+    assert clean.error is None, f"swamping_clean errored: {clean.error}"
+    assert contaminated.error is None, f"swamping_contaminated errored: {contaminated.error}"
+
+    assert clean.flag_false_positive_rate is not None
+    assert contaminated.flag_false_positive_rate is not None
+    assert clean.flag_false_positive_rate <= _SWAMPING_CLEAN_FPR_CEILING, (
+        f"swamping_clean: flag_false_positive_rate {clean.flag_false_positive_rate:.4f} "
+        f"exceeds the sanity ceiling {_SWAMPING_CLEAN_FPR_CEILING:.2f} -- the clean-fit baseline "
+        "itself looks broken, not just the contaminated comparison."
+    )
+    assert contaminated.flag_false_positive_rate <= (
+        clean.flag_false_positive_rate + _SWAMPING_CONTAMINATED_FPR_REGRESSION_MARGIN
+    ), (
+        f"swamping_contaminated: flag_false_positive_rate {contaminated.flag_false_positive_rate:.4f} "
+        f"exceeds clean's {clean.flag_false_positive_rate:.4f} by more than the "
+        f"{_SWAMPING_CONTAMINATED_FPR_REGRESSION_MARGIN:.2f} noise margin -- this looks like a real "
+        "swamping (false-positive-inflating) regression, not the documented masking effect."
     )

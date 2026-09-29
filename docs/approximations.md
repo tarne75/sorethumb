@@ -203,6 +203,56 @@ report each detector's realised rate so the resulting flag count is read as a
 shortlist size, not a measurement. Validation against labelled benchmark datasets
 is ongoing; see the benchmark table in the README.
 
+## Full-pipeline scenario benchmark — training contamination masks rather than swamps
+
+`swamping` (`evaluate/scenarios.py`) was originally designed on the intuitive
+premise that unlabelled contamination baked into the *training* split would
+cause genuinely-normal points near where that contamination sat to be
+*swamped* -- falsely flagged more often, because the fitted boundary is
+distorted by the nearby outliers. That premise was never actually verified
+against a controlled comparison: the original design scored a contaminated
+fit against a random holdout slice that mostly never landed anywhere near
+the contamination region, so it could not have demonstrated the mechanism
+either way (`tests/benchmark/test_pipeline_accuracy_floors.py`'s own prior
+floor-test comment flagged this: "training contamination cost less than
+expected").
+
+P2-1 replaced this with a real controlled experiment: `swamping_clean_reference`
+and `swamping_train_reference` share the *identical* normal population (same
+seed -> same draw, differing only by the injected contamination), both
+scored against `swamping_at_risk_holdout` -- genuinely normal points
+*selected* (not fabricated) as the tail nearest the contamination region,
+the population actually susceptible to the claimed effect. Measured this
+way, for the shipped default ensemble (`combination="intersection"`), the
+contaminated fit's `flag_false_positive_rate` on these at-risk points is
+consistently *lower* than the clean fit's (~0.010 vs. ~0.011, stable across
+20 seeds) -- the opposite of the original premise. The mechanism is
+straightforward once measured: `intersection`/`union` combination modes
+flag by each detector's own `natural_flag` boundary, a percentile of that
+detector's *own training-score distribution* (see `scoring/combine.py`). The
+injected contamination sits at the extreme tail of the training data by
+construction, so it inflates the top of that training distribution and
+widens the resulting natural-flag threshold -- the detector becomes
+*less*, not more, willing to flag a moderately-extreme point. This is
+**masking** (contamination causing genuine anomalies/near-anomalies to
+look more normal by comparison), a well-documented but *different*
+phenomenon from swamping (normal points looking more anomalous by
+comparison) -- the two are often confused in casual usage of the terms.
+`composite` mode and any ablation with only one detector select a fixed
+top-`k` fraction of the holdout by score regardless of fit, which makes
+`flag_false_positive_rate` uninformative there by construction (`k` is
+fixed by `n_holdout * contamination`, not by how many points actually cross
+a data-dependent boundary) -- this is why the floor test guards only the
+default (`intersection`) ablation, not every combination mode. The scenario
+keeps the `swamping` name (the underlying concept -- unlabelled training
+contamination -- is still exactly what it tests) but no longer claims the
+naive false-positive-inflation story; see
+`tests/benchmark/test_pipeline_accuracy_floors.py`'s
+`test_swamping_contamination_does_not_inflate_false_positives_on_at_risk_normals`
+for the guard this establishes (contaminated must never exceed clean's rate
+by more than a noise margin) and the module docstring there for the full
+writeup.
+
 ## Full-pipeline scenario benchmark — sklearn baselines only, no PyOD
 
 `src/sorethumb/evaluate/pipeline_benchmark.py`'s `sklearn:*` comparison rows use

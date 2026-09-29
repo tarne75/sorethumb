@@ -50,7 +50,14 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from sorethumb.evaluate.scenarios import SCENARIOS, Scenario, scenario_by_name, swamping_train_reference
+from sorethumb.evaluate.scenarios import (
+    SCENARIOS,
+    Scenario,
+    scenario_by_name,
+    swamping_at_risk_holdout,
+    swamping_clean_reference,
+    swamping_train_reference,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +100,7 @@ DEFAULT_ABLATION = ABLATIONS[0]
 
 
 def _swamping_generate_not_called(seed: int) -> tuple[pl.DataFrame, np.ndarray]:
-    """Never invoked; swamping's data comes from is_swamping=True in the worker, not .generate."""
+    """Never invoked; swamping's data comes from swamping_variant in the worker, not .generate."""
     msg = "swamping_scenario.generate is a placeholder and should never be called directly"
     raise NotImplementedError(msg)
 
@@ -241,11 +248,18 @@ def _build_pipeline_config(ablation: AblationSpec, seed: int) -> Any:
 
 def _fit_score_one_seed_pipeline(
     scenario_name: str,
-    is_swamping: bool,
+    swamping_variant: str | None,
     ablation: AblationSpec,
     seed: int,
 ) -> dict[str, Any]:
-    """Fit on train, score holdout, through the real feature pipeline. One seed."""
+    """Fit on train, score holdout, through the real feature pipeline. One seed.
+
+    *swamping_variant* is None for an ordinary scenario, or "clean"/
+    "contaminated" for the matched swamping comparison -- see
+    ``evaluate.scenarios`` module docstring. *scenario_name* still selects a
+    real ``Scenario`` even when a swamping variant is set: only its
+    ``review_budget`` is used (for calibration/thresholding), never its data.
+    """
     from sorethumb.detectors import registry  # noqa: PLC0415
     from sorethumb.evaluate.metrics import evaluate_flags, evaluate_scores  # noqa: PLC0415
     from sorethumb.features.build import apply_feature_plan, fit_features  # noqa: PLC0415
@@ -258,10 +272,11 @@ def _fit_score_one_seed_pipeline(
         msg = f"Unknown scenario: {scenario_name!r}"
         raise ValueError(msg)
 
-    if is_swamping:
-        train_df, _train_y = swamping_train_reference(seed)
-        holdout_df, holdout_y = scenario.generate(seed)
-        _, _, holdout_df, holdout_y = _split(holdout_df, holdout_y, seed)
+    if swamping_variant is not None:
+        train_df, _train_y = (
+            swamping_clean_reference(seed) if swamping_variant == "clean" else swamping_train_reference(seed)
+        )
+        holdout_df, holdout_y = swamping_at_risk_holdout(seed)
     else:
         df, y = scenario.generate(seed)
         train_df, _train_y, holdout_df, holdout_y = _split(df, y, seed)
@@ -323,14 +338,14 @@ def _fit_score_one_seed_pipeline(
 
 def _pipeline_batch_worker(
     scenario_name: str,
-    is_swamping: bool,
+    swamping_variant: str | None,
     ablation: AblationSpec,
     seeds: list[int],
     conn: Any,
 ) -> None:
     """Run every seed for one (scenario, ablation) cell; send results back via *conn*."""
     try:
-        per_seed = [_fit_score_one_seed_pipeline(scenario_name, is_swamping, ablation, s) for s in seeds]
+        per_seed = [_fit_score_one_seed_pipeline(scenario_name, swamping_variant, ablation, s) for s in seeds]
         conn.send({"per_seed": per_seed, "peak_memory_mb": _peak_memory_mb(), "error": None})
     except Exception as exc:  # noqa: BLE001 -- reported back to the parent, not raised in the child
         conn.send({"per_seed": [], "peak_memory_mb": _peak_memory_mb(), "error": str(exc)[:500]})
@@ -389,7 +404,14 @@ def _aggregate(
         )
 
     def _mean(key: str) -> float:
-        return float(np.nanmean([r[key] for r in per_seed]))
+        values = [r[key] for r in per_seed]
+        # A single-class holdout (the swamping scenario's at-risk-normals-
+        # only population) makes evaluate_scores return NaN for every seed's
+        # roc_auc/average_precision by design (see evaluate.metrics) -- that
+        # is a real "undefined", not a numpy warning-worthy edge case.
+        if all(isinstance(v, float) and np.isnan(v) for v in values):
+            return float("nan")
+        return float(np.nanmean(values))
 
     def _mean_or_none(key: str) -> float | None:
         # Absent for a "sklearn:*" baseline row -- no ensemble/flag concept
@@ -551,7 +573,7 @@ def run_pipeline_benchmark(cfg: PipelineBenchmarkConfig | None = None) -> list[P
     for scenario in selected_scenarios:
         for ablation in selected_ablations:
             logger.info("pipeline_benchmark: %s x %s", scenario.name, ablation.name)
-            batch = _run_isolated(_pipeline_batch_worker, (scenario.name, False, ablation, seeds))
+            batch = _run_isolated(_pipeline_batch_worker, (scenario.name, None, ablation, seeds))
             rows.append(_aggregate(scenario, ablation.name, batch))
 
         if cfg.include_baselines:
@@ -561,22 +583,85 @@ def run_pipeline_benchmark(cfg: PipelineBenchmarkConfig | None = None) -> list[P
                 rows.append(_aggregate(scenario, f"sklearn:{det_name}", batch))
 
     if cfg.include_swamping:
-        # A placeholder Scenario purely to carry (name, kind, review_budget)
-        # through _aggregate -- swamping's actual data comes from
-        # swamping_train_reference (train) + "point" (holdout), wired via
-        # is_swamping=True in _pipeline_batch_worker, not via .generate here.
-        swamping_scenario = Scenario(
-            "swamping",
-            "swamping",
-            "Contamination injected into training; compare against 'point' for the accuracy cost.",
-            generate=_swamping_generate_not_called,
-        )
-        for ablation in selected_ablations:
-            logger.info("pipeline_benchmark: swamping x %s", ablation.name)
-            batch = _run_isolated(_pipeline_batch_worker, ("point", True, ablation, seeds))
-            rows.append(_aggregate(swamping_scenario, ablation.name, batch))
+        # Two placeholder Scenarios purely to carry (name, kind, review_budget)
+        # through _aggregate -- both variants' actual data comes from
+        # swamping_clean_reference/swamping_train_reference (train) +
+        # swamping_at_risk_holdout (holdout), wired via swamping_variant in
+        # _pipeline_batch_worker, not via .generate here. "point" is passed as
+        # scenario_name purely for its review_budget (0.05); its data is
+        # never touched when swamping_variant is set.
+        for variant, description in (
+            (
+                "clean",
+                "Matched swamping comparison: clean fit, at-risk normal holdout (see evaluate.scenarios).",
+            ),
+            (
+                "contaminated",
+                "Matched swamping comparison: contaminated fit, at-risk normal holdout (see evaluate.scenarios).",
+            ),
+        ):
+            variant_scenario = Scenario(
+                f"swamping_{variant}", "swamping", description, generate=_swamping_generate_not_called
+            )
+            for ablation in selected_ablations:
+                logger.info("pipeline_benchmark: swamping_%s x %s", variant, ablation.name)
+                batch = _run_isolated(_pipeline_batch_worker, ("point", variant, ablation, seeds))
+                rows.append(_aggregate(variant_scenario, ablation.name, batch))
 
     return rows
+
+
+def expected_cells(cfg: PipelineBenchmarkConfig) -> set[tuple[str, str]]:
+    """Return the complete set of (scenario, ablation) pairs *cfg* should produce.
+
+    Mirrors ``run_pipeline_benchmark``'s own scenario/ablation/baseline/
+    swamping selection exactly, so the two can never silently drift apart --
+    used by :func:`assert_complete_and_error_free` to catch a *missing* cell
+    (a worker that never even ran) as distinct from an *errored* one
+    (attempted and failed), neither of which should ever ship silently as
+    published benchmark evidence.
+    """
+    selected_scenarios = [s for s in SCENARIOS if not cfg.scenario_names or s.name in cfg.scenario_names]
+    selected_ablation_names = [a.name for a in ABLATIONS if a.name in cfg.ablation_names]
+
+    cells: set[tuple[str, str]] = set()
+    for scenario in selected_scenarios:
+        for ablation_name in selected_ablation_names:
+            cells.add((scenario.name, ablation_name))
+        if cfg.include_baselines:
+            for det_name in _SKLEARN_BASELINE_DETECTORS:
+                cells.add((scenario.name, f"sklearn:{det_name}"))
+    if cfg.include_swamping:
+        for variant in ("clean", "contaminated"):
+            for ablation_name in selected_ablation_names:
+                cells.add((f"swamping_{variant}", ablation_name))
+    return cells
+
+
+def assert_complete_and_error_free(rows: list[PipelineBenchmarkRow], expected: set[tuple[str, str]]) -> None:
+    """Raise if *rows* doesn't cover exactly *expected* (scenario, ablation) pairs error-free.
+
+    Intended for the publication path (the ``sorethumb benchmark`` CLI
+    command, before injecting results into the README) -- a benchmark run
+    that silently drops a cell, gains an unrequested one (a config/harness
+    drift bug), or reports an errored cell must never ship as if it were
+    complete, working evidence.
+    """
+    actual = {(r.scenario, r.ablation) for r in rows}
+    missing = expected - actual
+    unexpected = actual - expected
+    errored = sorted((r.scenario, r.ablation, r.error) for r in rows if r.error is not None)
+
+    problems = []
+    if missing:
+        problems.append(f"missing cell(s): {sorted(missing)}")
+    if unexpected:
+        problems.append(f"unexpected cell(s) not in the requested matrix: {sorted(unexpected)}")
+    if errored:
+        problems.append(f"errored cell(s): {errored}")
+    if problems:
+        msg = "Pipeline benchmark matrix is incomplete or contains errors -- " + "; ".join(problems)
+        raise RuntimeError(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -614,15 +699,22 @@ def _fmt_row_for_table(row: PipelineBenchmarkRow) -> dict[str, str]:
             "roc_auc": f"ERROR: {row.error[:60]}",
         }
     peak = f"{row.peak_memory_mb:.1f}" if row.peak_memory_mb is not None else "n/a"
-    roc = f"{row.roc_auc:.4f} ± {row.roc_auc_ci95:.4f}" if row.n_seeds > 1 else f"{row.roc_auc:.4f}"
-    ap = (
-        f"{row.average_precision:.4f} ± {row.average_precision_ci95:.4f}"
-        if row.n_seeds > 1
-        else f"{row.average_precision:.4f}"
-    )
 
     def _opt(v: float | None, fmt: str = ".4f") -> str:
-        return "n/a" if v is None else f"{v:{fmt}}"
+        # None (no ensemble/flag concept for a baseline row) and NaN (a
+        # single-class holdout -- e.g. swamping's at-risk-normals-only
+        # population -- makes ROC-AUC/AP genuinely undefined, not a
+        # fabricated number) are both rendered the same, honest way.
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            return "n/a"
+        return f"{v:{fmt}}"
+
+    def _opt_with_ci(v: float | None, ci: float) -> str:
+        rendered = _opt(v)
+        return f"{rendered} ± {ci:.4f}" if row.n_seeds > 1 and rendered != "n/a" else rendered
+
+    roc = _opt_with_ci(row.roc_auc, row.roc_auc_ci95)
+    ap = _opt_with_ci(row.average_precision, row.average_precision_ci95)
 
     return {
         "scenario": row.scenario,

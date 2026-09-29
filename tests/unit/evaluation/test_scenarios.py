@@ -13,6 +13,8 @@ from sorethumb.evaluate.scenarios import (
     masking_anomalies,
     point_anomalies,
     scenario_by_name,
+    swamping_at_risk_holdout,
+    swamping_clean_reference,
     swamping_train_reference,
     varying_density_anomalies,
 )
@@ -114,6 +116,66 @@ def test_swamping_train_reference_deterministic():
     df2, y2 = swamping_train_reference(0)
     assert df1.equals(df2)
     assert np.array_equal(y1, y2)
+
+
+def test_swamping_clean_reference_has_no_labelled_anomalies():
+    _, y = swamping_clean_reference(0)
+    assert y.sum() == 0
+
+
+def test_swamping_clean_and_contaminated_share_the_identical_normal_population():
+    """P2-1: the matched-pair design's core invariant -- the two training
+    sets must differ by exactly the injected contamination, nothing else,
+    so any difference in a downstream fit is attributable to the
+    contamination alone."""
+    clean_df, _ = swamping_clean_reference(0)
+    contaminated_df, _ = swamping_train_reference(0)
+    assert len(clean_df) < len(contaminated_df)  # contaminated has the extra injected rows
+    clean_numeric = clean_df.select([c for c in clean_df.columns if c.startswith("num_")])
+    contaminated_numeric = contaminated_df.select(list(clean_numeric.columns))
+    # Every clean-reference numeric row must appear somewhere in the
+    # contaminated reference (as an unordered multiset -- both are
+    # independently shuffled) -- i.e. the contaminated set is the clean set
+    # plus additional rows, not two unrelated draws that merely have the
+    # same length distribution.
+    clean_rows = {tuple(row) for row in clean_numeric.iter_rows()}
+    contaminated_rows = {tuple(row) for row in contaminated_numeric.iter_rows()}
+    assert clean_rows <= contaminated_rows
+
+
+def test_swamping_at_risk_holdout_has_no_labelled_anomalies():
+    """There is no positive class in this holdout by design -- it measures
+    the false-positive rate a contaminated fit inflicts on points that were
+    never actually anomalous, not a ranking metric."""
+    _, y = swamping_at_risk_holdout(0)
+    assert y.sum() == 0
+    assert len(y) > 0
+
+
+def test_swamping_at_risk_holdout_deterministic():
+    df1, y1 = swamping_at_risk_holdout(0)
+    df2, y2 = swamping_at_risk_holdout(0)
+    assert df1.equals(df2)
+    assert np.array_equal(y1, y2)
+
+
+def test_swamping_at_risk_holdout_is_closer_to_contamination_than_a_random_normal_draw():
+    """The whole point of "at-risk" selection: these points must sit
+    meaningfully closer to the contamination region than an ordinary,
+    unselected draw from the same normal law -- otherwise a contaminated fit
+    would have no reason to swamp them any more than typical bulk points."""
+    at_risk_df, _ = swamping_at_risk_holdout(0)
+    numeric_cols = [c for c in at_risk_df.columns if c.startswith("num_")]
+    at_risk_sum = at_risk_df.select(numeric_cols).to_numpy().sum(axis=1)
+
+    rng = np.random.default_rng(999)
+    ordinary_draw = rng.multivariate_normal(np.zeros(len(numeric_cols)), np.eye(len(numeric_cols)), size=1000)
+    ordinary_sum = ordinary_draw.sum(axis=1)
+
+    # Contamination sits at very negative sums (uniform(-8,-6) per axis); the
+    # at-risk holdout's sums must be far more negative, on average, than an
+    # unselected draw's.
+    assert at_risk_sum.mean() < ordinary_sum.mean() - 3.0
 
 
 def test_scenarios_registry_names_are_unique():

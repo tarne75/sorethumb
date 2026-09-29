@@ -32,11 +32,19 @@ masking
     support each other's local density/isolation depth.
 swamping
     Contamination is injected into the *training* split itself (unlabelled),
-    shifting the fitted "normal" boundary; the held-out split's genuinely
-    normal points near where that contamination sat can get swamped
-    (falsely flagged). Compare this scenario's held-out accuracy against
-    "point" (same held-out anomaly pattern, clean training) to see the
-    degradation swamping causes.
+    shifting the fitted "normal" boundary. Unlike every other scenario here,
+    this is a *matched pair*: ``swamping_clean_reference`` and
+    ``swamping_train_reference`` share the identical normal population (same
+    seed -> same draw) and differ by exactly the injected contamination, so
+    any difference in outcome is attributable to the contamination alone,
+    not to sampling noise between two unrelated fits. Both are scored
+    against ``swamping_at_risk_holdout``: genuinely normal points *selected*
+    (not fabricated) from the tail of the same normal law nearest the
+    contamination region -- the specific population actually at risk of
+    being swamped, rather than a random holdout draw that mostly never comes
+    near the contamination in the first place and so cannot demonstrate the
+    mechanism regardless of how much accuracy the contaminated fit actually
+    loses.
 varying_density
     Two normal clusters of different spread (one tight, one loose); a
     distance that is clearly anomalous relative to the tight cluster is
@@ -181,28 +189,84 @@ def masking_anomalies(
     return _shuffle(_assemble(numeric, categorical), y, seed)
 
 
+def _swamping_normal_population(seed: int, n_normal: int, n_numeric: int) -> np.ndarray:
+    """Generate the normal population shared by both halves of the swamping comparison.
+
+    Called with the same ``(seed, n_normal, n_numeric)`` from both
+    ``swamping_clean_reference`` and ``swamping_train_reference`` -- a fresh
+    ``default_rng(seed)`` reproduces the identical first draw regardless of
+    what either caller does with its own rng afterward, so the two training
+    sets differ by exactly the injected contamination and nothing else.
+    """
+    rng = np.random.default_rng(seed)
+    return rng.multivariate_normal(np.zeros(n_numeric), np.eye(n_numeric), size=n_normal)
+
+
+def swamping_clean_reference(
+    seed: int, n_normal: int = 800, n_numeric: int = 5
+) -> tuple[pl.DataFrame, np.ndarray]:
+    """Generate the "clean fit" half of the matched swamping comparison.
+
+    The identical normal population ``swamping_train_reference`` (same seed)
+    trains on, with no contamination injected -- fit both, score each
+    against ``swamping_at_risk_holdout``, and any difference in outcome is
+    attributable to the contamination alone.
+    """
+    normal = _swamping_normal_population(seed, n_normal, n_numeric)
+    categorical = _categorical_columns(np.random.default_rng(seed + 2000), len(normal))
+    numeric = {f"num_{i}": normal[:, i] for i in range(n_numeric)}
+    y = np.zeros(len(normal), dtype=int)
+    return _shuffle(_assemble(numeric, categorical), y, seed)
+
+
 def swamping_train_reference(
     seed: int,
     n_normal: int = 800,
     n_train_contamination: int = 80,
     n_numeric: int = 5,
 ) -> tuple[pl.DataFrame, np.ndarray]:
-    """Generate a *training/reference* split with unlabelled contamination baked in.
+    """Generate the "contaminated fit" half of the matched swamping comparison.
 
-    Returns a frame with no held-out anomalies of its own (``y`` is all
-    zeros) -- pair this with ``point_anomalies`` (same generator family) as
-    the held-out split: fit on this, score that, and compare against fitting
-    on a clean reference to see the accuracy swamping costs.
+    Same normal population as ``swamping_clean_reference`` (same seed), plus
+    unlabelled contamination baked in. Returns a frame with no held-out
+    anomalies of its own (``y`` is all zeros) -- the model never sees ground
+    truth, only the (contaminated) reference distribution it fits on.
     """
-    rng = np.random.default_rng(seed)
-    normal = rng.multivariate_normal(np.zeros(n_numeric), np.eye(n_numeric), size=n_normal)
+    normal = _swamping_normal_population(seed, n_normal, n_numeric)
+    rng = np.random.default_rng(seed + 1)
     contamination = rng.uniform(-8, -6, size=(n_train_contamination, n_numeric))
     X = np.vstack([normal, contamination])
     numeric = {f"num_{i}": X[:, i] for i in range(n_numeric)}
     categorical = _categorical_columns(rng, len(X))
-    # Unlabelled by design: the fitted model never sees ground truth, only
-    # the (contaminated) reference distribution.
     y = np.zeros(len(X), dtype=int)
+    return _shuffle(_assemble(numeric, categorical), y, seed)
+
+
+def swamping_at_risk_holdout(
+    seed: int, n_at_risk: int = 150, n_numeric: int = 5, n_candidates: int = 20_000
+) -> tuple[pl.DataFrame, np.ndarray]:
+    """Generate held-out genuinely-normal points nearest the contamination region.
+
+    The population actually "at risk" of being swamped by a contaminated
+    fit. Selection, not fabrication: every point here is an ordinary draw from
+    the same ``N(0, I)`` law every scenario's normal class comes from (all
+    labelled 0 -- there is no positive class in this holdout, since the
+    point is to measure the false-positive rate a contaminated fit inflicts
+    on points that were never actually anomalous). Of ``n_candidates`` such
+    draws, the ``n_at_risk`` with the most negative sum across dimensions
+    (closest to the uniform(-8, -6)-per-axis contamination region every
+    training dimension shares) are kept -- a random holdout draw would
+    almost never land this close by chance and so could never demonstrate
+    the swamping mechanism regardless of how much accuracy a contaminated
+    fit actually loses.
+    """
+    rng = np.random.default_rng(seed + 4242)
+    candidates = rng.multivariate_normal(np.zeros(n_numeric), np.eye(n_numeric), size=n_candidates)
+    nearest = np.argsort(candidates.sum(axis=1))[:n_at_risk]
+    at_risk = candidates[nearest]
+    categorical = _categorical_columns(rng, len(at_risk))
+    numeric = {f"num_{i}": at_risk[:, i] for i in range(n_numeric)}
+    y = np.zeros(len(at_risk), dtype=int)
     return _shuffle(_assemble(numeric, categorical), y, seed)
 
 

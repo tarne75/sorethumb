@@ -1843,6 +1843,8 @@ def benchmark(
     if pipeline:
         from sorethumb.evaluate.pipeline_benchmark import (  # noqa: PLC0415
             PipelineBenchmarkConfig,
+            assert_complete_and_error_free,
+            expected_cells,
             run_pipeline_benchmark,
         )
         from sorethumb.evaluate.pipeline_benchmark import (  # noqa: PLC0415
@@ -1857,6 +1859,11 @@ def benchmark(
         )
         pcfg = PipelineBenchmarkConfig(n_seeds=pipeline_seeds)
         prows = run_pipeline_benchmark(pcfg)
+        try:
+            assert_complete_and_error_free(prows, expected_cells(pcfg))
+        except RuntimeError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
         if inject_pipeline_readme(prows, readme_path):
             console.print(f"[green]Pipeline benchmark table injected into {readme_path}[/green]")
         pmd_path, pcsv_path = write_pipeline_outputs(prows, Path("benchmark_results"))

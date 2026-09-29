@@ -230,6 +230,40 @@ diff against.
 
 ### Fixed
 
+- The pipeline benchmark harness's `swamping` scenario didn't demonstrate the
+  mechanism its name implied: it scored a contaminated-training fit against a
+  random holdout slice that mostly never landed near the injected
+  contamination, so it could never have shown a swamping effect either way
+  (a prior floor-test comment already flagged this: "training contamination
+  cost less than expected"). Redesigned as a real controlled experiment:
+  `swamping_clean_reference`/`swamping_train_reference` (`evaluate/scenarios.py`)
+  now share the *identical* normal training population (same seed -> same
+  draw, differing only by the injected contamination), both scored against a
+  new `swamping_at_risk_holdout` -- genuinely normal points *selected* (not
+  fabricated) as the tail nearest the contamination region, the population
+  actually susceptible to the claimed effect. This holdout is single-class
+  by design, so `roc_auc`/`average_precision` are `n/a` (not fabricated) for
+  these rows; `flag_false_positive_rate` is what's asserted instead. Measured
+  this way, the shipped default ensemble's contaminated fit actually shows a
+  *lower* false-positive rate on at-risk normals than the clean fit -- a
+  masking effect (contamination widening a percentile-based natural-flag
+  threshold), not the false-positive-inflating swamping the name originally
+  implied; see `docs/approximations.md` for the full writeup and mechanism.
+  `run_pipeline_benchmark` now emits two comparable rows,
+  `swamping_clean`/`swamping_contaminated`, in place of the old single
+  `swamping` row. Also added `expected_cells`/`assert_complete_and_error_free`
+  (`evaluate/pipeline_benchmark.py`), wired into the `sorethumb benchmark`
+  CLI command: it now refuses to inject a benchmark matrix into the README
+  that's missing an expected (scenario, ablation) cell or contains an
+  errored one, rather than silently publishing an incomplete or broken
+  table. The committed README benchmark tables are regenerated: the
+  full-pipeline table now includes the `flag_*` columns (previously stale,
+  predating their introduction) and the new swamping row pair; the
+  real-dataset/legacy table -- previously an empty placeholder
+  ("_No benchmark results._") -- is populated from a real, reproducible,
+  provenance-carrying run (`BenchmarkConfig(max_rows=20_000)`, 3 seeds; the
+  README now discloses this cap and why the full, uncapped datasets aren't
+  committed -- roughly an hour, dominated by `one_class_svm`'s O(n²) cost).
 - HTTP source caching reported a "cache hit" after still fully downloading
   and hashing the body -- it saved a rename, not network traffic, latency,
   or temporary disk I/O. `resolve_source`/`_resolve_http` now record each
