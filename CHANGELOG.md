@@ -230,6 +230,23 @@ diff against.
 
 ### Fixed
 
+- README's Benchmark-results section had drifted to instructing
+  `pip install 'sorethumb-ml[benchmark]'` — a live PyPI-style install
+  command sitting in the same document as, and directly contradicting,
+  the Installation section's own "Not yet on PyPI. Install from a clone"
+  a few sections above (confirmed still genuinely unpublished: PyPI's API
+  returns 404 for `sorethumb-ml` as of this writing). Changed to
+  `pip install ".[benchmark]"`, consistent with the Installation section's
+  own pattern and now actually checked by `docs/check_readme_snippets.py`'s
+  extra-name validation (which only recognises the `.[extra]` local-path
+  form). `scripts/release.sh` gained a new pre-flight step that refuses to
+  proceed if README.md still says "Not yet on PyPI" -- the real
+  `pip install sorethumb-ml` flip (install section, PyPI badge,
+  `blob/main` → tag-stable `blob/vX.Y.Z` links) is deliberately deferred
+  until the distribution name is actually reserved on PyPI, per
+  `prompts/release-launch-plan.md`'s existing scoping note -- but that
+  deferred step can no longer be silently forgotten at tag time, since the
+  release script itself now enforces it before any tag is pushed.
 - macOS was advertised in `pyproject.toml`'s classifiers, but only unit and
   contract tests actually ran there in CI (`fast-tests`'s matrix) -- the
   integration suite (real workspace, SQLite, CLI subprocess, report

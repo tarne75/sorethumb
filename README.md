@@ -288,10 +288,11 @@ sorethumb anomalies --top 100 --json | jq '.[] | {rank, score: .composite_score,
 
 ## Benchmark results
 
-One command regenerates both tables below and injects them into this file:
+One command regenerates both tables below and injects them into this file
+(from a clone — see [Installation](#installation); not yet on PyPI):
 
 ```bash
-pip install 'sorethumb-ml[benchmark]'
+pip install ".[benchmark]"
 sorethumb benchmark
 ```
 

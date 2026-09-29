@@ -97,7 +97,43 @@ fi
 _ok "$TAG does not already exist, locally or on origin"
 
 # ---------------------------------------------------------------------------
-# 2. Confirm the exact commit being tagged already went green on GitHub's
+# 2. Release-state documentation (P2-4). README.md's "Not yet on PyPI" line
+#    is accurate right up until the first real tag -- flipping it any
+#    earlier would tell readers `pip install sorethumb-ml` works when it
+#    doesn't (PyPI has no such project yet, confirmed by a 404 against
+#    https://pypi.org/pypi/sorethumb-ml/json as of 2026-09-29). This gate
+#    forces that flip to happen as its own commit before a real tag can be
+#    pushed, rather than relying on remembering to do it. When it fires,
+#    that one commit should, together:
+#      - README.md: replace the "Not yet on PyPI. Install from a clone:"
+#        paragraph with the real `pip install sorethumb-ml` command as the
+#        primary path; keep "install from a clone" as a labelled
+#        contributor/source-development alternative (do not delete it).
+#        Add a PyPI badge (shields.io `pypi/v/sorethumb-ml`) alongside the
+#        existing CI/codecov/Python/Ruff/uv/License badges.
+#      - README.md: switch every `.../blob/main/...` GitHub link (docs,
+#        detector protocol, etc.) to `.../blob/$TAG/...` -- tag-stable, so
+#        an old PyPI release's bundled long_description never silently
+#        displays documentation that has since changed on main.
+#      - CONTRIBUTING.md: its two existing `pip install sorethumb-ml`
+#        mentions are already correctly named (P0-1) and need no further
+#        text change -- they become simply true the moment this tag exists.
+#      - The `pip install 'sorethumb-ml[...]'` hints already embedded in
+#        cli.py/gradient.py/shap_tree.py/benchmark.py's own strings likewise
+#        need no change -- same reasoning.
+#    See prompts/release-launch-plan.md Item 1's step 5 for the original
+#    scoping note this codifies.
+# ---------------------------------------------------------------------------
+
+_step "Checking release-state documentation has been updated"
+
+if grep -q "Not yet on PyPI" README.md; then
+  _fail "README.md still says 'Not yet on PyPI' -- this must become a real \`pip install sorethumb-ml\` instruction (keeping a labelled source-development alternative) in its own commit before tagging. See the comment just above this check for the full list of what that commit should cover."
+fi
+_ok "README.md's installation section looks release-ready"
+
+# ---------------------------------------------------------------------------
+# 3. Confirm the exact commit being tagged already went green on GitHub's
 #    own CI, not just "looked fine locally a moment ago".
 # ---------------------------------------------------------------------------
 
@@ -111,7 +147,7 @@ fi
 _ok "CI run for this commit succeeded on GitHub"
 
 # ---------------------------------------------------------------------------
-# 3. Version and changelog consistency -- the P0-10 concerns, checked
+# 4. Version and changelog consistency -- the P0-10 concerns, checked
 #    locally before anything is tagged rather than only in publish.yml.
 # ---------------------------------------------------------------------------
 
@@ -135,7 +171,7 @@ fi
 _ok "CHANGELOG.md has a [$VERSION] section with content"
 
 # ---------------------------------------------------------------------------
-# 4. The same checks release-validation.yml runs, run locally for fast
+# 5. The same checks release-validation.yml runs, run locally for fast
 #    feedback (publish.yml will run them again, for real, against the
 #    tagged commit -- this is a pre-flight, not a replacement for that).
 # ---------------------------------------------------------------------------
@@ -227,7 +263,7 @@ trap - EXIT
 rm -rf "$TMP_VENVS"
 
 # ---------------------------------------------------------------------------
-# 5. Everything passed. Stop here for --dry-run; otherwise require an
+# 6. Everything passed. Stop here for --dry-run; otherwise require an
 #    explicit, typed confirmation before doing anything that pushes.
 # ---------------------------------------------------------------------------
 
@@ -258,7 +294,7 @@ if [[ "$CONFIRM" != "$VERSION" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Tag + release, via gh.
+# 7. Tag + release, via gh.
 # ---------------------------------------------------------------------------
 
 _step "Creating and pushing $TAG via gh release create"
