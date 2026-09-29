@@ -230,6 +230,27 @@ diff against.
 
 ### Fixed
 
+- macOS was advertised in `pyproject.toml`'s classifiers, but only unit and
+  contract tests actually ran there in CI (`fast-tests`'s matrix) -- the
+  integration suite (real workspace, SQLite, CLI subprocess, report
+  rendering) was Linux-only, so a macOS-specific regression in any of that
+  could ship undetected despite the platform being claimed as supported.
+  `release-validation.yml`'s `integration` job now matrices over
+  `[ubuntu-latest, macos-latest]`, verified locally first (a full
+  `pytest -m integration` run on macOS passes cleanly, modulo the
+  pre-existing, unrelated ANSI-escape-code CLI test failures already present
+  on every platform). Also investigated whether Windows support was
+  realistic to add now (a user request, not part of the original audit
+  item): a one-off `windows-latest` run of the same integration suite failed
+  broadly -- most `sorethumb run`/`backfill`/`report` CLI paths raised
+  `OSError: [Errno 9] Bad file descriptor`, plus a separate console-encoding
+  mismatch mangled non-ASCII output -- confirming this needs its own
+  dedicated engineering phase, not a CI-matrix flip, matching a standing
+  decision from earlier in the project to defer Windows support explicitly.
+  Added a new "Supported platforms" section to README.md and SECURITY.md
+  (`## Supported Platforms`) stating the tested matrix (Linux + macOS) and
+  documenting the Windows finding plainly, rather than leaving platform
+  support an implicit inference from `pyproject.toml` classifiers alone.
 - The source distribution (sdist) was over-inclusive: with no
   `[tool.hatch.build.targets.sdist]` configuration, hatchling's default
   fallback ("everything in the project root not excluded by the top-level

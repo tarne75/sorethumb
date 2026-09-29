@@ -84,6 +84,23 @@ pip install ".[benchmark]"
 
 ---
 
+## Supported platforms
+
+Tested and supported: **Linux and macOS**, Python 3.11–3.13. CI runs the full
+suite — including workspace/SQLite, CLI subprocess, and report-rendering
+integration tests, not just unit tests — on both `ubuntu-latest` and
+`macos-latest` for every change (`.github/workflows/release-validation.yml`).
+
+**Windows is not currently tested or supported.** A one-off run of the
+integration suite on `windows-latest` failed broadly (most `sorethumb run`/
+`backfill`/`report` CLI paths hit `OSError: [Errno 9] Bad file descriptor`,
+plus a console-encoding mismatch mangling non-ASCII output) — real,
+unresolved compatibility work, not a formality away from working. Tracked as
+a deliberate gap, not an oversight — see
+[SECURITY.md](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md#supported-platforms).
+
+---
+
 ## Supported file formats
 
 | Format | Extensions | Notes |

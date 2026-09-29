@@ -63,6 +63,18 @@ line/headers as normal, and any *unrecognised* query parameter is not
 redacted — prefer `source.auth`/`source.auth_env_var` over embedding
 credentials in the URI itself.
 
+## Supported Platforms
+
+Tested via CI on **Linux and macOS** — unit, contract, and full integration
+(real workspace, SQLite, CLI subprocess, report rendering) suites on both.
+**Windows is untested and unsupported** — confirmed broken, not merely
+unverified: a one-off integration-suite run on `windows-latest` failed
+broadly (most CLI paths hit `OSError: [Errno 9] Bad file descriptor`, plus a
+console-encoding mismatch). Do not run this on Windows for anything beyond
+casual experimentation you're prepared to see fail outright. See the README's
+[Supported platforms](https://github.com/tarne75/sorethumb#supported-platforms)
+section.
+
 ## Supported Versions
 
 `sorethumb` is pre-1.0 (currently `0.x`, alpha) and has not yet had its first

@@ -58,12 +58,18 @@ jobs:
       - run: uv run pytest -m "unit or contract"
 
   # Local integration tests (real workspace, SQLite, CLI process, full
-  # pipeline, report rendering). Linux only for now — a Windows integration
-  # job needs its own phase (SQLite file-locking, path-separator behaviour)
-  # and was explicitly deferred, not overlooked.
+  # pipeline, report rendering) on both advertised platforms (P2-3: macOS is
+  # in pyproject.toml's classifiers and must actually be exercised here, not
+  # just assumed from the fast-tests matrix's unit/contract-only coverage).
+  # Windows stays unadvertised and untested here -- deliberately deferred,
+  # not overlooked; see README's "Supported platforms" section for why.
   integration:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     env:
       HYPOTHESIS_PROFILE: ci
     steps:
