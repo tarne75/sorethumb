@@ -230,6 +230,32 @@ diff against.
 
 ### Fixed
 
+- The source distribution (sdist) was over-inclusive: with no
+  `[tool.hatch.build.targets.sdist]` configuration, hatchling's default
+  fallback ("everything in the project root not excluded by the top-level
+  `.gitignore`") silently shipped `.claude/` (including
+  `settings.local.json`, local dev-tool state) and `.hypothesis/`
+  (property-test cache/example state) -- both git-ignored some other way
+  (a nested `.hypothesis/.gitignore`, a global gitignore) that hatchling's
+  sdist builder doesn't consult, so neither was actually excluded from what
+  got packaged. `.github/`, `scripts/`, and `.pre-commit-config.yaml` were
+  also being swept in as repository-only material with no reason to ship.
+  Added an explicit sdist `include` allowlist (`src`, `tests`, `docs`,
+  README/LICENSE/CHANGELOG/CONTRIBUTING/CODE_OF_CONDUCT/SECURITY,
+  `pyproject.toml`, `uv.lock`) -- safer against a *future* stray directory
+  too, since anything new is excluded by default rather than included by
+  default. Also added `.hypothesis/`/`.claude/` to `.gitignore` (defense in
+  depth; they were relying entirely on nested/global ignore rules before).
+  New `tests/repo_check/test_dist_artifacts.py` (run after `uv build`, skips
+  gracefully otherwise) asserts both wheel and sdist contain their required
+  paths (`py.typed`, the SQL migration, LICENSE, README), asserts the sdist
+  contains none of the previously-leaked material, and asserts wheel/sdist
+  report identical `Name`/`Version`/`Summary`/`License-Expression`/
+  `Requires-Python`/`Author-email` metadata. `release-validation.yml`'s
+  `build` job now installs the sdist (not just the wheel) into a clean venv
+  and runs the exact same import/CLI-version/optional-extra smoke checks
+  used for the wheel, for every advertised extra, and runs the new
+  dist-artifact test suite before either install pass.
 - The pipeline benchmark harness's `swamping` scenario didn't demonstrate the
   mechanism its name implied: it scored a contaminated-training fit against a
   random holdout slice that mostly never landed near the injected

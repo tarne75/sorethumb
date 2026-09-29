@@ -104,6 +104,32 @@ Issues = "https://github.com/tarne75/sorethumb/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["src/sorethumb"]
 
+# Explicit allowlist (P2-2), not a denylist: without this, hatchling's default
+# sdist falls back to "everything in the project root not excluded by the
+# top-level .gitignore" -- and a file/directory that's git-ignored some other
+# way (a nested .gitignore, like Hypothesis's own .hypothesis/.gitignore, or
+# a global gitignore, like some .claude/ entries on a given machine) is NOT
+# picked up by that fallback, so it silently ships. Confirmed by actually
+# building the sdist and inspecting its contents: .claude/ (including
+# settings.local.json) and .hypothesis/ (property-test example/cache state)
+# both leaked in this way before this allowlist existed. An allowlist is
+# safer against a *future* stray directory too: something new added to the
+# repo tree is excluded by default, not included by default.
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/docs",
+    "/README.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
+    "/CONTRIBUTING.md",
+    "/CODE_OF_CONDUCT.md",
+    "/SECURITY.md",
+    "/pyproject.toml",
+    "/uv.lock",
+]
+
 # ── Ruff ─────────────────────────────────────────────────────────────────────
 [tool.ruff]
 line-length = 110

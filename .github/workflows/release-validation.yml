@@ -103,14 +103,20 @@ jobs:
       - run: uv sync --all-extras --frozen
       - run: uv run pytest -m repo_check
 
-  # Build, twine check, package-data assertion, clean-wheel install smoke for
-  # core and every advertised extra (P3-3: "clean installs for core and each
-  # advertised extra"). Uploads the built dist/ as an artifact so a caller
-  # (publish.yml) can publish the exact artifact that was just validated here,
-  # rather than rebuilding a second time.
+  # Build, twine check, package-data assertion, and clean install smoke for
+  # core and every advertised extra -- for BOTH the wheel and the sdist
+  # (P3-3: "clean installs for core and each advertised extra"; P2-2 extended
+  # this to the sdist, which was previously built and twine-checked but never
+  # actually installed or inspected). Uploads the built dist/ as an artifact
+  # so a caller (publish.yml) can publish the exact artifact that was just
+  # validated here, rather than rebuilding a second time.
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # P2-2 doubled the install-smoke-test matrix (wheel + sdist, each with
+    # core + every extra) -- bumped from 15; pip's download cache is shared
+    # across the venvs in this job, so the second (sdist) pass is markedly
+    # faster than the first, not a full doubling.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -119,29 +125,41 @@ jobs:
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       - name: Verify uv.lock is up to date with pyproject.toml
         run: uv lock --check
+      - name: Sync dev dependencies (for the dist-artifact pytest checks below)
+        run: uv sync --all-extras --frozen
       - name: Build sdist and wheel
         run: uv build
       - name: Check distribution metadata
         run: uvx twine check dist/*
-      - name: Assert package data is shipped in the wheel
-        # `grep -q` exits the instant it finds a match, which can SIGPIPE
-        # unzip if it's still writing -- GitHub Actions runs bash with
-        # pipefail on by default, so that signal becomes the step's
-        # reported exit status even though grep DID find the match,
-        # spuriously failing the build for content that's actually
-        # present. Not using -q (grep drains all of unzip's output before
-        # exiting) avoids the race. Found via scripts/release.sh hitting
-        # this for real -- see release-launch-plan.md.
+      - name: Assert required paths, no unintended files, and matching metadata (wheel + sdist)
+        # A wheel-only pipeline can't catch a broken OR over-inclusive sdist
+        # (P2-2): required-path presence (py.typed, SQL migrations, LICENSE,
+        # README), rejection of repository-only material/dev-tool caches
+        # (a past sdist here silently shipped .claude/ and .hypothesis/ --
+        # see tests/repo_check/test_dist_artifacts.py's module docstring),
+        # and wheel/sdist metadata agreement are all real, versioned test
+        # assertions, not throwaway CI-only bash -- run them the same way
+        # here as anyone can locally after `uv build`.
+        run: uv run pytest tests/repo_check/test_dist_artifacts.py -v
+      - name: Install each artifact (wheel, sdist) into clean venvs; smoke-test core + every advertised extra
+        # Both artifacts get the exact same checks (P2-2) -- a wheel-only
+        # install smoke test can't catch an sdist that's missing something
+        # the wheel doesn't need directly (a build-time dependency, a
+        # packaging config file) but a real end-user source install would.
         run: |
-          unzip -l dist/*.whl | grep 'sorethumb/py.typed' >/dev/null
-          unzip -l dist/*.whl | grep 'sorethumb/store/migrations/001_initial.sql' >/dev/null
-      - name: Install the wheel into a clean venv (core only) and smoke-test
-        run: |
-          python -m venv /tmp/smoke-core
-          /tmp/smoke-core/bin/pip install --upgrade pip
-          /tmp/smoke-core/bin/pip install dist/*.whl
-          /tmp/smoke-core/bin/sorethumb --version
-          /tmp/smoke-core/bin/python -c "
+          set -e
+          whl="$(ls dist/*.whl)"
+          sdist="$(ls dist/*.tar.gz)"
+          for artifact_name in wheel sdist; do
+            if [ "$artifact_name" = "wheel" ]; then artifact="$whl"; else artifact="$sdist"; fi
+
+            echo "::group::artifact=$artifact_name core"
+            venv="/tmp/smoke-${artifact_name}-core"
+            python -m venv "$venv"
+            "$venv/bin/pip" install --upgrade pip
+            "$venv/bin/pip" install "$artifact"
+            "$venv/bin/sorethumb" --version
+            "$venv/bin/python" -c "
           import sorethumb
           from sorethumb import Config, SourceConfig, run_detection
           # explain/report/benchmark modules must import fine with no optional
@@ -150,30 +168,29 @@ jobs:
           import sorethumb.explain.shap_tree
           import sorethumb.explain.gradient
           import sorethumb.report.charts
-          print('import OK', sorethumb.__version__)
-          "
-      - name: Install each advertised extra into its own clean venv and smoke-test
-        run: |
-          set -e
-          whl="$(ls dist/*.whl)"
-          for extra in explain report benchmark dev; do
-            case "$extra" in
-              explain)   smoke_import="import shap, numba" ;;
-              report)    smoke_import="import matplotlib" ;;
-              benchmark) smoke_import="import datasets, pandas" ;;
-              dev)       smoke_import="import pytest, hypothesis, ruff, mypy" ;;
-            esac
-            echo "::group::extra=$extra"
-            venv="/tmp/smoke-$extra"
-            python -m venv "$venv"
-            "$venv/bin/pip" install --upgrade pip
-            "$venv/bin/pip" install "${whl}[${extra}]"
-            "$venv/bin/python" -c "
-          import sorethumb
-          ${smoke_import}  # noqa: F401
-          print('import OK ($extra)', sorethumb.__version__)
+          print('import OK ($artifact_name)', sorethumb.__version__)
           "
             echo "::endgroup::"
+
+            for extra in explain report benchmark dev; do
+              case "$extra" in
+                explain)   smoke_import="import shap, numba" ;;
+                report)    smoke_import="import matplotlib" ;;
+                benchmark) smoke_import="import datasets, pandas" ;;
+                dev)       smoke_import="import pytest, hypothesis, ruff, mypy" ;;
+              esac
+              echo "::group::artifact=$artifact_name extra=$extra"
+              venv="/tmp/smoke-${artifact_name}-${extra}"
+              python -m venv "$venv"
+              "$venv/bin/pip" install --upgrade pip
+              "$venv/bin/pip" install "${artifact}[${extra}]"
+              "$venv/bin/python" -c "
+          import sorethumb
+          ${smoke_import}  # noqa: F401
+          print('import OK ($artifact_name, $extra)', sorethumb.__version__)
+          "
+              echo "::endgroup::"
+            done
           done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
