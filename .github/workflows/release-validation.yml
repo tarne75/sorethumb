@@ -140,7 +140,7 @@ jobs:
         # and wheel/sdist metadata agreement are all real, versioned test
         # assertions, not throwaway CI-only bash -- run them the same way
         # here as anyone can locally after `uv build`.
-        run: uv run pytest tests/repo_check/test_dist_artifacts.py -v
+        run: uv run pytest tests/repo_check/test_dist_artifacts.py -v -m repo_check
       - name: Install each artifact (wheel, sdist) into clean venvs; smoke-test core + every advertised extra
         # Both artifacts get the exact same checks (P2-2) -- a wheel-only
         # install smoke test can't catch an sdist that's missing something
