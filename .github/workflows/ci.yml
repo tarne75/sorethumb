@@ -120,3 +120,20 @@ jobs:
       - run: uv lock --check
       - run: uv sync --all-extras --frozen
       - run: uv run pytest -m "benchmark or slow or network or property" --tb=short
+
+  # TEMPORARY (P2-3 feasibility spike, remove after evaluating): does the
+  # integration suite pass on Windows as-is? continue-on-error so a failure
+  # here never blocks anything -- this is a probe, not a gate.
+  windows-integration-spike:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    env:
+      HYPOTHESIS_PROFILE: ci
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.12"
+      - run: uv sync --all-extras --frozen
+      - run: uv run pytest -m integration -v
