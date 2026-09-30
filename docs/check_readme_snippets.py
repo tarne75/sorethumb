@@ -5,8 +5,9 @@ CI runs this so a snippet that stops being copy-paste runnable fails the build:
     python docs/check_readme_snippets.py
 
 - ```python``` blocks are run in a subprocess from a fresh temp dir (nonzero
-  exit fails). The 60-second quickstart downloads the KDDCup99 10% subset via
-  scikit-learn, so this needs network.
+  exit fails). The 60-second quickstart generates its own small synthetic
+  dataset in-process (P0-2) -- no network access, no dependency beyond this
+  package's own core requirements.
 - ```toml``` blocks must parse; a block whose top-level tables are config
   sections is merged onto a minimal base and fed to ``Config`` to catch schema
   drift.
@@ -14,6 +15,14 @@ CI runs this so a snippet that stops being copy-paste runnable fails the build:
   (checked via ``--help``) and every ``--long-flag`` on that line must appear in
   its help text. ``pip install ".[extra]"`` must name a real optional-dependency
   group.
+
+A second entry point extracts the lone ```python``` block verbatim, for
+release-validation.yml's build job to run against a clean, extras-free wheel
+install (P0-2's "execute the exact published snippet as a required release
+test") -- this dev-environment check alone can't stand in for that, since it
+runs against the editable source checkout, not an installed distribution:
+
+    python docs/check_readme_snippets.py --extract-python OUTPUT_PATH
 """
 
 from __future__ import annotations
@@ -164,8 +173,27 @@ def _extra_exists(name: str) -> bool:
     return name in pp.get("project", {}).get("optional-dependencies", {})
 
 
+def _extract_python(out_path: Path) -> None:
+    """Write the lone ```python``` README block verbatim to *out_path*.
+
+    Errors (rather than silently picking one) if README.md doesn't have
+    exactly one -- a second block would mean whichever one a caller runs
+    against a clean install is no longer obviously "the" published snippet.
+    """
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    blocks = [body for _, lang, body in _blocks(readme) if lang == "python"]
+    if len(blocks) != 1:
+        print(f"ERROR: expected exactly one python block in README.md, found {len(blocks)}.")
+        sys.exit(1)
+    out_path.write_text(blocks[0], encoding="utf-8")
+
+
 def main() -> None:
     """Check every README fenced block; exit non-zero on the first batch of problems."""
+    if len(sys.argv) == 3 and sys.argv[1] == "--extract-python":
+        _extract_python(Path(sys.argv[2]))
+        return
+
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     problems: list[str] = []
     counts = {"python": 0, "toml": 0, "bash": 0}

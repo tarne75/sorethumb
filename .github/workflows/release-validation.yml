@@ -198,6 +198,16 @@ jobs:
               echo "::endgroup::"
             done
           done
+      - name: Run the published quickstart snippet against the clean, extras-free wheel install (P0-2)
+        # The README's flagship snippet must actually work end-to-end against
+        # exactly what `pip install sorethumb-ml` gives a user -- no extras,
+        # no editable/source checkout. Extracted from README.md at run time
+        # (never copy-pasted here) so this can never silently drift from
+        # what's actually published; reuses the wheel/core venv the loop
+        # above already created rather than standing up a new one.
+        run: |
+          python3 docs/check_readme_snippets.py --extract-python /tmp/quickstart_snippet.py
+          /tmp/smoke-wheel-core/bin/python /tmp/quickstart_snippet.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dist

@@ -124,23 +124,43 @@ format = "csv"
 
 ## 60-second quickstart
 
+No network access and nothing beyond sorethumb's own core dependencies — the
+dataset is a small synthetic table generated in-process, with 30 of its 2,000
+rows nudged far outside the normal range so there's something for the
+detectors to actually find:
+
 ```python
+import tempfile
+from pathlib import Path
+
+import numpy as np
 import polars as pl
-from sklearn.datasets import fetch_kddcup99
 
 from sorethumb_ml import Config, SourceConfig, run_detection
 
-# Fetch the KDDCup99 10% subset and write a small CSV for the demo.
-# as_frame=True keeps real column names and dtypes (protocol_type / service /
-# flag are categorical); decode those bytes columns to text and take 20k rows
-# so the run finishes in about a minute.
-bunch = fetch_kddcup99(percent10=True, shuffle=True, random_state=0, as_frame=True)
-df = pl.from_pandas(bunch.data).with_columns(pl.col(pl.Binary).cast(pl.String))
-df.head(20_000).write_csv("/tmp/kdd.csv")
+# A fresh directory every run -- sorethumb's runs are idempotent/resumable
+# (it skips a group it's already completed for a given config+data), so a
+# fixed path would make a second copy-paste of this snippet report 0 newly
+# succeeded groups instead of re-running the demo.
+tmp_dir = Path(tempfile.mkdtemp(prefix="sorethumb_quickstart_"))
+
+rng = np.random.default_rng(0)
+n_rows, n_anomalies = 2_000, 30
+amount = rng.normal(loc=50.0, scale=10.0, size=n_rows)
+latency_ms = rng.normal(loc=200.0, scale=30.0, size=n_rows)
+region = rng.choice(["us", "eu", "apac"], size=n_rows)
+
+# Push a random slice of rows far outside the normal range.
+anomaly_idx = rng.choice(n_rows, size=n_anomalies, replace=False)
+amount[anomaly_idx] = rng.uniform(500.0, 1000.0, size=n_anomalies)
+latency_ms[anomaly_idx] = rng.uniform(2000.0, 5000.0, size=n_anomalies)
+
+df = pl.DataFrame({"amount": amount, "latency_ms": latency_ms, "region": region})
+df.write_csv(tmp_dir / "quickstart.csv")
 
 config = Config(
-    source=SourceConfig(uri="/tmp/kdd.csv"),
-    run={"workdir": "/tmp/sorethumb_demo"},
+    source=SourceConfig(uri=str(tmp_dir / "quickstart.csv")),
+    run={"workdir": str(tmp_dir / "workspace")},
 )
 result = run_detection(config, no_report=True)
 print(f"Flagged {result.n_anomalies} rows for review across {result.n_succeeded} group(s)")
