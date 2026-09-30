@@ -19,7 +19,7 @@ pytestmark = pytest.mark.unit
 
 def test_default_detectors_factory() -> None:
     """The shipped default ensemble is exactly these three detectors."""
-    from sorethumb.config import _default_detectors
+    from sorethumb_ml.config import _default_detectors
 
     dets = _default_detectors()
     assert len(dets) == 3
@@ -30,7 +30,7 @@ def test_default_detectors_factory() -> None:
 def test_scoring_config_contamination_invalid_string() -> None:
     from pydantic import ValidationError
 
-    from sorethumb.config import ScoringConfig
+    from sorethumb_ml.config import ScoringConfig
 
     with pytest.raises(ValidationError):
         ScoringConfig(contamination="bad")
@@ -39,14 +39,14 @@ def test_scoring_config_contamination_invalid_string() -> None:
 def test_scoring_config_contamination_out_of_range() -> None:
     from pydantic import ValidationError
 
-    from sorethumb.config import ScoringConfig
+    from sorethumb_ml.config import ScoringConfig
 
     with pytest.raises(ValidationError):
         ScoringConfig(contamination=0.6)
 
 
 def test_config_hash_is_stable() -> None:
-    from sorethumb.config import Config, RunConfig, SourceConfig
+    from sorethumb_ml.config import Config, RunConfig, SourceConfig
 
     cfg = Config(
         source=SourceConfig(uri="/tmp/data.csv"),
@@ -61,7 +61,7 @@ def test_config_hash_is_stable() -> None:
 def test_config_hash_excludes_cosmetic_fields() -> None:
     """workdir, log_level and slow_stage_seconds are execution-only knobs --
     changing them must not bust artefact caches keyed on config_hash()."""
-    from sorethumb.config import Config, RunConfig, SourceConfig
+    from sorethumb_ml.config import Config, RunConfig, SourceConfig
 
     cfg1 = Config(source=SourceConfig(uri="/tmp/data.csv"), run=RunConfig(workdir="/tmp/ws"))
     cfg2 = Config(
@@ -72,7 +72,7 @@ def test_config_hash_excludes_cosmetic_fields() -> None:
 
 
 def test_config_hash_changes_with_result_affecting_fields() -> None:
-    from sorethumb.config import Config, RunConfig, SourceConfig
+    from sorethumb_ml.config import Config, RunConfig, SourceConfig
 
     cfg1 = Config(source=SourceConfig(uri="/tmp/data.csv"), run=RunConfig(workdir="/tmp/ws"))
     cfg2 = Config(source=SourceConfig(uri="/tmp/data.csv"), run=RunConfig(workdir="/tmp/ws", seed=999))

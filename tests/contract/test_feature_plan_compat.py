@@ -13,9 +13,9 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from sorethumb.config import Config, FeaturesConfig, RunConfig, SourceConfig
-from sorethumb.features.build import fit_features
-from sorethumb.profiling.plan import FeaturePlan, build_feature_plan
+from sorethumb_ml.config import Config, FeaturesConfig, RunConfig, SourceConfig
+from sorethumb_ml.features.build import fit_features
+from sorethumb_ml.profiling.plan import FeaturePlan, build_feature_plan
 from tests.synth import make_frame
 
 pytestmark = pytest.mark.contract

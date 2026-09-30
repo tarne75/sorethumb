@@ -13,15 +13,15 @@ import numpy as np
 import polars as pl
 import pytest
 
-from sorethumb import Config
-from sorethumb._pipeline import run_detection
-from sorethumb.config import DetectorConfig, FeaturesConfig, RunConfig, SourceConfig
-from sorethumb.detectors.isolation_forest import IsolationForestDetector
-from sorethumb.detectors.kmeans_distance import KMeansDetector
-from sorethumb.detectors.one_class_svm import OneClassSVMDetector
-from sorethumb.errors import FeatureWidthWarning
-from sorethumb.features.build import apply_feature_plan, fit_features
-from sorethumb.profiling.plan import build_feature_plan
+from sorethumb_ml import Config
+from sorethumb_ml._pipeline import run_detection
+from sorethumb_ml.config import DetectorConfig, FeaturesConfig, RunConfig, SourceConfig
+from sorethumb_ml.detectors.isolation_forest import IsolationForestDetector
+from sorethumb_ml.detectors.kmeans_distance import KMeansDetector
+from sorethumb_ml.detectors.one_class_svm import OneClassSVMDetector
+from sorethumb_ml.errors import FeatureWidthWarning
+from sorethumb_ml.features.build import apply_feature_plan, fit_features
+from sorethumb_ml.profiling.plan import build_feature_plan
 from tests.factories.configs import make_config
 from tests.factories.detectors import detector_auc
 from tests.factories.frames import write_planted_csv

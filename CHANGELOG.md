@@ -173,9 +173,15 @@ before anything shipped:
 ### Compatibility
 
 - **PyPI distribution renamed to `sorethumb-ml`** (`pip install
-  sorethumb-ml`) — `sorethumb` on PyPI is an unrelated package. The import
-  name (`import sorethumb`), CLI command, GitHub repo, and every on-disk
-  convention are unaffected.
+  sorethumb-ml`) — `sorethumb` on PyPI is an unrelated package. The CLI
+  command, GitHub repo, and every on-disk convention (`sorethumb.toml`,
+  `sorethumb.db`, `sorethumb.log`, the `sorethumb-workspace/` directory)
+  are unaffected.
+- **Import package renamed to `sorethumb_ml`** (`import sorethumb_ml`,
+  previously `import sorethumb`) to match the PyPI distribution name and
+  avoid the two diverging. The `sorethumb.detectors` third-party
+  entry-point group is likewise now `sorethumb_ml.detectors`. The CLI
+  command stays `sorethumb`.
 - **`score --from-run` compatibility**: a config that claims different
   fit-time settings than what the source run actually persisted
   (`columns`/`profiling`/`features`, or a fit detector's `params`/

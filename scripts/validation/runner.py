@@ -34,8 +34,8 @@ from scripts.validation.schema import (
 )
 
 if TYPE_CHECKING:
-    from sorethumb import Config
-    from sorethumb._pipeline import RunResult
+    from sorethumb_ml import Config
+    from sorethumb_ml._pipeline import RunResult
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ HOLDOUT_FRACTION = 0.3
 # Fixed operating point for precision@k/recall@k/F1@k, and the contamination
 # every detector in the combo is fit to target (see build_config) -- never
 # derived from the case's own labels (that would leak the answer into the
-# operating point; see sorethumb.evaluate.metrics.evaluate_scores).
+# operating point; see sorethumb_ml.evaluate.metrics.evaluate_scores).
 REVIEW_BUDGET = 0.05
 
 
@@ -60,7 +60,7 @@ def build_config(
     explain: bool = False,
 ) -> Config:
     """Build the resolved Config for one case, pointed at *source_path*."""
-    from sorethumb import Config  # noqa: PLC0415
+    from sorethumb_ml import Config  # noqa: PLC0415
 
     detectors = [{"name": name, "enabled": True} for name in combo.detectors]
     return Config.model_validate(
@@ -101,7 +101,7 @@ def build_identity(
     ``identity.dependency_versions``) rather than recomputed per case, which
     would otherwise spawn a git subprocess for every case in the matrix.
     """
-    from sorethumb.io.fingerprint import content_fingerprint  # noqa: PLC0415
+    from sorethumb_ml.io.fingerprint import content_fingerprint  # noqa: PLC0415
 
     return RunIdentity(
         schema_version=CASE_SCHEMA_VERSION,
@@ -142,7 +142,7 @@ def _fit_and_score(
     stage -- the caller (``run_case``) turns that into a ``status="error"``
     CaseResult.
     """
-    from sorethumb import run_detection, score_forward  # noqa: PLC0415
+    from sorethumb_ml import run_detection, score_forward  # noqa: PLC0415
 
     with tempfile.TemporaryDirectory(prefix="sorethumb-validation-") as tmp_dir:
         train_path = Path(tmp_dir) / "train.parquet"
@@ -172,7 +172,7 @@ def _full_population_scores(
 ) -> np.ndarray | None:
     """Compute the ensemble-combined score for *every* holdout row.
 
-    ``sorethumb.store.results.write_results`` only ever persists *flagged*
+    ``sorethumb_ml.store.results.write_results`` only ever persists *flagged*
     rows (see its module docstring) -- score_forward's own results.parquet
     is unusable for ROC-AUC/AP, which need a ranking over the whole
     population, not just the top-k. This bypasses that persisted, filtered
@@ -190,10 +190,10 @@ def _full_population_scores(
     this is not expected to fire, but a silent misalignment would be worse
     than skipping.
     """
-    from sorethumb.features.build import apply_feature_plan  # noqa: PLC0415
-    from sorethumb.scoring.combine import ScoreEnsemble  # noqa: PLC0415
-    from sorethumb.store.models import load_plan, plan_digest, score_with_existing  # noqa: PLC0415
-    from sorethumb.store.workspace import Workspace  # noqa: PLC0415
+    from sorethumb_ml.features.build import apply_feature_plan  # noqa: PLC0415
+    from sorethumb_ml.scoring.combine import ScoreEnsemble  # noqa: PLC0415
+    from sorethumb_ml.store.models import load_plan, plan_digest, score_with_existing  # noqa: PLC0415
+    from sorethumb_ml.store.workspace import Workspace  # noqa: PLC0415
 
     if len(train_result.groups) != 1:
         logger.warning(
@@ -250,7 +250,7 @@ def _evaluate_holdout(
     Returns an all-None tuple when *dataset* has no label column, or *scores*
     is None (see ``_full_population_scores``).
     """
-    from sorethumb.evaluate.metrics import evaluate_scores  # noqa: PLC0415
+    from sorethumb_ml.evaluate.metrics import evaluate_scores  # noqa: PLC0415
 
     if dataset.label_column is None or dataset.label_is_anomaly is None or scores is None:
         return None, None, None, None, None, None
@@ -420,7 +420,7 @@ def run_explain_check(
     matrix: explain is orthogonal to detector-combo/PCA accuracy and adds
     real per-row SHAP/gradient cost to every cell if run everywhere.
     """
-    from sorethumb import run_detection  # noqa: PLC0415
+    from sorethumb_ml import run_detection  # noqa: PLC0415
 
     t0 = time.time()
     source_path = data_dir / dataset.file

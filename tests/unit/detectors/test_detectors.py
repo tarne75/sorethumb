@@ -5,19 +5,19 @@ import warnings
 import numpy as np
 import pytest
 
-from sorethumb.detectors import registry
-from sorethumb.detectors._protocol import check_protocol
-from sorethumb.detectors.ecod import ECODDetector
-from sorethumb.detectors.hbos import HBOSDetector, _auto_bins
-from sorethumb.detectors.isolation_forest import IsolationForestDetector
-from sorethumb.detectors.kmeans_distance import (
+from sorethumb_ml.detectors import registry
+from sorethumb_ml.detectors._protocol import check_protocol
+from sorethumb_ml.detectors.ecod import ECODDetector
+from sorethumb_ml.detectors.hbos import HBOSDetector, _auto_bins
+from sorethumb_ml.detectors.isolation_forest import IsolationForestDetector
+from sorethumb_ml.detectors.kmeans_distance import (
     KMeansDetector,
     _elbow_index,
     _nearest_large_centroid,
 )
-from sorethumb.detectors.lof import LOFDetector
-from sorethumb.detectors.one_class_svm import OneClassSVMDetector
-from sorethumb.errors import ConfigError, DetectorError, SlowStageWarning
+from sorethumb_ml.detectors.lof import LOFDetector
+from sorethumb_ml.detectors.one_class_svm import OneClassSVMDetector
+from sorethumb_ml.errors import ConfigError, DetectorError, SlowStageWarning
 
 pytestmark = pytest.mark.unit
 
@@ -282,7 +282,7 @@ def test_ocsvm_auto_nu_defaults_to_01():
 def test_ocsvm_slow_stage_warning(monkeypatch):
     import time
 
-    import sorethumb.detectors.one_class_svm as _mod
+    import sorethumb_ml.detectors.one_class_svm as _mod
 
     call_count = 0
     original_monotonic = time.monotonic

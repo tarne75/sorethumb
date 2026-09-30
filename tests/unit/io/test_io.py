@@ -9,16 +9,16 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from sorethumb.errors import ColumnDroppedWarning, SchemaError, SourceError
-from sorethumb.io.fingerprint import (
+from sorethumb_ml.errors import ColumnDroppedWarning, SchemaError, SourceError
+from sorethumb_ml.io.fingerprint import (
     content_fingerprint,
     logical_dataset_id,
     schema_fingerprint,
     snapshot_fingerprint,
 )
-from sorethumb.io.nested import derive_array_features, unnest_all
-from sorethumb.io.readers import read_frame
-from sorethumb.io.source import resolve_source
+from sorethumb_ml.io.nested import derive_array_features, unnest_all
+from sorethumb_ml.io.readers import read_frame
+from sorethumb_ml.io.source import resolve_source
 from tests.synth import make_frame
 
 pytestmark = pytest.mark.unit
@@ -114,7 +114,7 @@ def test_read_csv(tmp_path: Path) -> None:
     csv_path = tmp_path / "data.csv"
     df.write_csv(csv_path)
 
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     cfg = SourceConfig(uri=str(csv_path))
     lf = read_frame(csv_path, cfg)
@@ -128,7 +128,7 @@ def test_read_parquet(tmp_path: Path) -> None:
     pq_path = tmp_path / "data.parquet"
     df.write_parquet(pq_path)
 
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     cfg = SourceConfig(uri=str(pq_path))
     lf = read_frame(pq_path, cfg)
@@ -141,7 +141,7 @@ def test_read_jsonl(tmp_path: Path) -> None:
     jsonl_path = tmp_path / "data.jsonl"
     df.write_ndjson(jsonl_path)
 
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     cfg = SourceConfig(uri=str(jsonl_path))
     lf = read_frame(jsonl_path, cfg)
@@ -153,7 +153,7 @@ def test_read_single_column_csv_raises(tmp_path: Path) -> None:
     p = tmp_path / "bad.csv"
     p.write_text("only_col\n1\n2\n3\n")
 
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     cfg = SourceConfig(uri=str(p))
     with pytest.raises(SchemaError, match="only one column"):
@@ -164,7 +164,7 @@ def test_read_auto_format_unknown_ext_raises(tmp_path: Path) -> None:
     p = tmp_path / "data.xyz"
     p.write_bytes(b"whatever")
 
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     cfg = SourceConfig(uri=str(p))
     with pytest.raises(SourceError, match="auto-detect"):
@@ -176,7 +176,7 @@ def test_read_explicit_format_overrides_extension(tmp_path: Path) -> None:
     p = tmp_path / "data.noext"
     df.write_csv(p)
 
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     cfg = SourceConfig(uri=str(p), format="csv")
     result = read_frame(p, cfg).collect()
@@ -185,7 +185,7 @@ def test_read_explicit_format_overrides_extension(tmp_path: Path) -> None:
 
 def test_read_tsv_injects_tab_separator(tmp_path: Path) -> None:
     """TSV format injects separator='\\t' when the caller didn't set one."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     p = tmp_path / "data.tsv"
     p.write_text("col_a\tcol_b\tcol_c\n1\t2\t3\n4\t5\t6\n")
@@ -198,7 +198,7 @@ def test_read_tsv_injects_tab_separator(tmp_path: Path) -> None:
 
 def test_read_tsv_explicit_separator_not_overridden(tmp_path: Path) -> None:
     """TSV does NOT inject a separator if the caller already provided one."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     p = tmp_path / "data.tsv"
     p.write_text("col_a\tcol_b\tcol_c\n1\t2\t3\n4\t5\t6\n")
@@ -230,7 +230,7 @@ def test_read_csv_honors_explicit_infer_schema_length_override(tmp_path: Path) -
     """Regression: supplying the documented `read_options["infer_schema_length"]`
     override used to raise TypeError (passed to `pl.scan_csv` twice -- once
     hard-coded, once via the expanded `**opts`)."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     p = tmp_path / "data.csv"
     p.write_text("a,b\n1,2\n3,4\n")
@@ -242,7 +242,7 @@ def test_read_csv_honors_explicit_infer_schema_length_override(tmp_path: Path) -
 
 def test_read_ndjson_honors_explicit_infer_schema_length_override(tmp_path: Path) -> None:
     """Same regression as the CSV case, for the NDJSON/JSONL reader."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     p = tmp_path / "data.jsonl"
     p.write_text('{"a": 1, "b": 2}\n{"a": 3, "b": 4}\n')
@@ -260,7 +260,7 @@ def test_read_csv_small_infer_schema_length_then_successful_retry_with_larger(
     String" `SchemaError` -- whose own message recommends a larger
     `infer_schema_length` -- and passing one via `read_options` on retry
     succeeds and recovers the real (float) dtypes."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     p = tmp_path / "data.csv"
     _write_null_heavy_csv(p, n_null_rows=3, n_data_rows=17)
@@ -280,7 +280,7 @@ def test_read_csv_gz_honors_explicit_infer_schema_length_override(tmp_path: Path
     """The override must also apply cleanly to a compressed CSV input."""
     import gzip
 
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     p = tmp_path / "data.csv.gz"
     content = "a,b\n" + "\n".join(f"{i},{i * 2}" for i in range(5))
@@ -296,7 +296,7 @@ def test_read_csv_delimiter_and_infer_schema_length_overrides_combine(tmp_path: 
     """A delimiter override and an `infer_schema_length` override must both
     take effect together -- the fix must not special-case one at the expense
     of the other."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     p = tmp_path / "data.csv"
     p.write_text("a|b\n1|2\n3|4\n")
@@ -310,7 +310,7 @@ def test_read_csv_delimiter_and_infer_schema_length_overrides_combine(tmp_path: 
 def test_read_csv_invalid_infer_schema_length_type_still_raises(tmp_path: Path) -> None:
     """An invalid option value must still surface as an error -- the fix
     changes how the option is passed, not polars' own validation of it."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     p = tmp_path / "data.csv"
     p.write_text("a,b\n1,2\n3,4\n")
@@ -321,7 +321,7 @@ def test_read_csv_invalid_infer_schema_length_type_still_raises(tmp_path: Path) 
 
 
 def test_read_json(tmp_path: Path) -> None:
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     p = tmp_path / "data.json"
     rows = [{"x": float(i), "y": float(i * 2), "z": float(i + 1)} for i in range(5)]
@@ -335,7 +335,7 @@ def test_read_json(tmp_path: Path) -> None:
 
 def test_read_all_string_schema_raises(tmp_path: Path) -> None:
     """A schema where every column is String (no numeric signal at all) raises."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     p = tmp_path / "strings.csv"
     p.write_text("col_a,col_b,col_c\nfoo,bar,baz\nhello,world,test\n")
@@ -352,7 +352,7 @@ def test_read_all_string_schema_raises(tmp_path: Path) -> None:
 
 def test_read_tsf_basic(tmp_path: Path) -> None:
     """Basic TSF file: one series, no attributes, single data row."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     content = "@data\n1.0,2.0,3.0\n"
     p = tmp_path / "basic.tsf"
@@ -367,7 +367,7 @@ def test_read_tsf_basic(tmp_path: Path) -> None:
 
 def test_read_tsf_with_numeric_attribute(tmp_path: Path) -> None:
     """A numeric @attribute column is parsed as int/float."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     content = "@attribute series_id numeric\n@data\n42:10.0,20.0,30.0\n7:1.5,2.5,3.5\n"
     p = tmp_path / "attrs.tsf"
@@ -382,7 +382,7 @@ def test_read_tsf_with_numeric_attribute(tmp_path: Path) -> None:
 
 def test_read_tsf_with_float_numeric_attribute(tmp_path: Path) -> None:
     """A numeric attribute containing a decimal point parses as float."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     content = "@attribute score numeric\n@data\n1.5:10.0,20.0,30.0\n"
     p = tmp_path / "float_attr.tsf"
@@ -395,7 +395,7 @@ def test_read_tsf_with_float_numeric_attribute(tmp_path: Path) -> None:
 
 def test_read_tsf_with_string_attribute(tmp_path: Path) -> None:
     """A string @attribute keeps its value as-is."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     content = "@attribute category string\n@data\ntrain:1.0,2.0,3.0\ntest:4.0,5.0,6.0\n"
     p = tmp_path / "str_attr.tsf"
@@ -409,7 +409,7 @@ def test_read_tsf_with_string_attribute(tmp_path: Path) -> None:
 
 def test_read_tsf_with_date_attribute(tmp_path: Path) -> None:
     """A date @attribute is treated as a plain string (kept as-is)."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     content = "@attribute start_timestamp date\n@data\n2020-01-01:1.0,2.0\n2020-01-02:3.0,4.0\n"
     p = tmp_path / "date_attr.tsf"
@@ -422,7 +422,7 @@ def test_read_tsf_with_date_attribute(tmp_path: Path) -> None:
 
 def test_read_tsf_missing_values(tmp_path: Path) -> None:
     """'?' tokens and empty tokens both become None."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     content = "@data\n1.0,?,3.0\n"
     p = tmp_path / "missing.tsf"
@@ -437,7 +437,7 @@ def test_read_tsf_missing_values(tmp_path: Path) -> None:
 
 def test_read_tsf_variable_length_series_padded(tmp_path: Path) -> None:
     """Shorter series are padded to the max length with None."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     content = "@data\n1.0,2.0,3.0\n4.0,5.0\n"
     p = tmp_path / "varlen.tsf"
@@ -452,7 +452,7 @@ def test_read_tsf_variable_length_series_padded(tmp_path: Path) -> None:
 
 def test_read_tsf_comment_lines_skipped(tmp_path: Path) -> None:
     """Lines starting with # are silently skipped."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     content = "# this is a comment\n@data\n# another comment\n1.0,2.0,3.0\n"
     p = tmp_path / "comments.tsf"
@@ -465,7 +465,7 @@ def test_read_tsf_comment_lines_skipped(tmp_path: Path) -> None:
 
 def test_read_tsf_unknown_at_directives_skipped(tmp_path: Path) -> None:
     """Unknown @ directives (not @attribute / @data) are skipped."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     content = "@frequency yearly\n@horizon 10\n@data\n1.0,2.0,3.0\n"
     p = tmp_path / "directives.tsf"
@@ -478,7 +478,7 @@ def test_read_tsf_unknown_at_directives_skipped(tmp_path: Path) -> None:
 
 def test_read_tsf_lines_before_data_skipped(tmp_path: Path) -> None:
     """Non-@ lines before @data are ignored (data hasn't started yet)."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     content = "stray line\n@data\n1.0,2.0,3.0\n"
     p = tmp_path / "stray.tsf"
@@ -491,7 +491,7 @@ def test_read_tsf_lines_before_data_skipped(tmp_path: Path) -> None:
 
 def test_read_tsf_malformed_row_too_few_fields_skipped(tmp_path: Path) -> None:
     """Malformed rows (too few colon-separated fields) are silently skipped."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     content = (
         "@attribute id numeric\n"
@@ -510,7 +510,7 @@ def test_read_tsf_malformed_row_too_few_fields_skipped(tmp_path: Path) -> None:
 
 def test_read_tsf_numeric_attribute_bad_value_gives_none(tmp_path: Path) -> None:
     """A non-numeric value in a numeric @attribute field becomes None."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     content = "@attribute id numeric\n@data\nnotanumber:1.0,2.0,3.0\n"
     p = tmp_path / "badnum.tsf"
@@ -524,7 +524,7 @@ def test_read_tsf_numeric_attribute_bad_value_gives_none(tmp_path: Path) -> None
 def test_read_tsf_empty_no_data_rows(tmp_path: Path) -> None:
     """A file with @attribute but no data rows returns an empty LazyFrame
     with the declared schema."""
-    from sorethumb.io.readers import _read_tsf
+    from sorethumb_ml.io.readers import _read_tsf
 
     content = "@attribute id numeric\n@attribute label string\n@data\n"
     p = tmp_path / "empty.tsf"
@@ -537,7 +537,7 @@ def test_read_tsf_empty_no_data_rows(tmp_path: Path) -> None:
 
 def test_read_tsf_multiple_rows_multiple_attrs(tmp_path: Path) -> None:
     """Multi-row, multi-attribute TSF file integrates end-to-end correctly."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     content = (
         "@attribute series_id numeric\n"
@@ -565,7 +565,7 @@ def test_resolve_source_local(tmp_path: Path) -> None:
     p = tmp_path / "src.csv"
     p.write_text("a,b\n1,2\n")
 
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     cfg = SourceConfig(uri=str(p))
     resolved = resolve_source(cfg, tmp_path / "cache")
@@ -573,7 +573,7 @@ def test_resolve_source_local(tmp_path: Path) -> None:
 
 
 def test_resolve_source_missing_file_raises(tmp_path: Path) -> None:
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     cfg = SourceConfig(uri=str(tmp_path / "no_such_file.csv"))
     with pytest.raises(SourceError, match="not found"):
@@ -581,7 +581,7 @@ def test_resolve_source_missing_file_raises(tmp_path: Path) -> None:
 
 
 def test_resolve_source_unsupported_scheme_raises(tmp_path: Path) -> None:
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     cfg = SourceConfig(uri="s3://bucket/key.parquet")
     with pytest.raises(SourceError, match="Unsupported URI scheme"):
@@ -593,7 +593,7 @@ def test_resolve_source_windows_drive_path_is_not_an_unsupported_scheme(tmp_path
     misread by urlparse as scheme='c' and rejected. This environment isn't
     Windows, so the path genuinely doesn't exist -- the point is that it
     fails with "not found", never "Unsupported URI scheme 'c'"."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     cfg = SourceConfig(uri=r"C:\Users\someone\data.csv")
     with pytest.raises(SourceError, match="not found") as exc_info:
@@ -602,7 +602,7 @@ def test_resolve_source_windows_drive_path_is_not_an_unsupported_scheme(tmp_path
 
 
 def test_resolve_source_file_uri_resolves_to_the_real_path(tmp_path: Path) -> None:
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     p = tmp_path / "src.csv"
     p.write_text("a,b\n1,2\n")
@@ -614,7 +614,7 @@ def test_resolve_source_file_uri_resolves_to_the_real_path(tmp_path: Path) -> No
 def test_resolve_source_file_uri_decodes_percent_escapes(tmp_path: Path) -> None:
     """A file:// URI percent-encodes reserved characters (a space becomes
     %20); resolving it must decode them back, not treat "%20" literally."""
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     p = tmp_path / "has space.csv"
     p.write_text("a,b\n1,2\n")
@@ -633,16 +633,16 @@ def test_extension_from_url_matches_compound_gzip_extension() -> None:
     """data.csv.gz must resolve to .csv.gz, not the unrelated, shorter .gz --
     readers.py's auto-format detection only recognises the compound form, so
     losing the .csv part here broke every gzipped auto-format download."""
-    from sorethumb.config import SourceConfig
-    from sorethumb.io.source import _extension_from_url
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.io.source import _extension_from_url
 
     cfg = SourceConfig(uri="https://example.com/data.csv.gz")
     assert _extension_from_url("https://example.com/data.csv.gz", cfg) == ".csv.gz"
 
 
 def test_extension_from_url_plain_gzip_variants() -> None:
-    from sorethumb.config import SourceConfig
-    from sorethumb.io.source import _extension_from_url
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.io.source import _extension_from_url
 
     cfg = SourceConfig(uri="https://example.com/x")
     assert _extension_from_url("https://example.com/data.jsonl.gz", cfg) == ".jsonl.gz"
@@ -650,8 +650,8 @@ def test_extension_from_url_plain_gzip_variants() -> None:
 
 
 def test_extension_from_url_explicit_format_overrides_url() -> None:
-    from sorethumb.config import SourceConfig
-    from sorethumb.io.source import _extension_from_url
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.io.source import _extension_from_url
 
     cfg = SourceConfig(uri="https://example.com/x", format="csv")
     assert _extension_from_url("https://example.com/data.whatever", cfg) == ".csv"
@@ -668,8 +668,8 @@ def test_build_auth_headers_basic_base64_encodes_user_password(monkeypatch: pyte
     pre-encode it."""
     import base64
 
-    from sorethumb.config import SourceConfig
-    from sorethumb.io.source import _build_auth_headers
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.io.source import _build_auth_headers
 
     monkeypatch.setenv("BASIC_CREDS", "alice:s3cret")
     cfg = SourceConfig(uri="https://x/data.csv", auth="basic", auth_env_var="BASIC_CREDS")
@@ -679,8 +679,8 @@ def test_build_auth_headers_basic_base64_encodes_user_password(monkeypatch: pyte
 
 
 def test_build_auth_headers_bearer_passes_token_through(monkeypatch: pytest.MonkeyPatch) -> None:
-    from sorethumb.config import SourceConfig
-    from sorethumb.io.source import _build_auth_headers
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.io.source import _build_auth_headers
 
     monkeypatch.setenv("BEARER_TOKEN", "abc123")
     cfg = SourceConfig(uri="https://x/data.csv", auth="bearer", auth_env_var="BEARER_TOKEN")
@@ -688,8 +688,8 @@ def test_build_auth_headers_bearer_passes_token_through(monkeypatch: pytest.Monk
 
 
 def test_build_auth_headers_missing_env_var_raises() -> None:
-    from sorethumb.config import SourceConfig
-    from sorethumb.io.source import _build_auth_headers
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.io.source import _build_auth_headers
 
     cfg = SourceConfig(uri="https://x/data.csv", auth="bearer", auth_env_var="SOREHUMB_DOES_NOT_EXIST_XYZ")
     with pytest.raises(SourceError, match="not set or empty"):
@@ -697,8 +697,8 @@ def test_build_auth_headers_missing_env_var_raises() -> None:
 
 
 def test_build_auth_headers_empty_env_var_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    from sorethumb.config import SourceConfig
-    from sorethumb.io.source import _build_auth_headers
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.io.source import _build_auth_headers
 
     monkeypatch.setenv("EMPTY_TOKEN", "")
     cfg = SourceConfig(uri="https://x/data.csv", auth="bearer", auth_env_var="EMPTY_TOKEN")
@@ -709,8 +709,8 @@ def test_build_auth_headers_empty_env_var_raises(monkeypatch: pytest.MonkeyPatch
 def test_build_auth_headers_whitespace_only_env_var_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """A whitespace-only credential (e.g. a stray env var set to a single
     newline) is not a usable token -- treat it the same as unset (P0-5)."""
-    from sorethumb.config import SourceConfig
-    from sorethumb.io.source import _build_auth_headers
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.io.source import _build_auth_headers
 
     monkeypatch.setenv("WHITESPACE_TOKEN", "   \n\t  ")
     cfg = SourceConfig(uri="https://x/data.csv", auth="bearer", auth_env_var="WHITESPACE_TOKEN")
@@ -722,8 +722,8 @@ def test_build_auth_headers_strips_surrounding_whitespace(monkeypatch: pytest.Mo
     """A token read from an env var populated via `export X=$(cat file)` or
     a CI secrets manager commonly carries a trailing newline; sent verbatim
     that produces a header with a stray newline in it (P0-5)."""
-    from sorethumb.config import SourceConfig
-    from sorethumb.io.source import _build_auth_headers
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.io.source import _build_auth_headers
 
     monkeypatch.setenv("PADDED_TOKEN", "  abc123\n")
     cfg = SourceConfig(uri="https://x/data.csv", auth="bearer", auth_env_var="PADDED_TOKEN")
@@ -739,8 +739,8 @@ def test_auth_header_flows_from_env_var_to_actual_request(
     all the pre-existing tests checked."""
     import httpx
 
-    from sorethumb.config import SourceConfig
-    from sorethumb.io.source import _build_auth_headers, _download_to
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.io.source import _build_auth_headers, _download_to
 
     monkeypatch.setenv("BEARER_TOKEN", "real-secret-token")
     cfg = SourceConfig(uri="http://198.51.100.1/data.csv", auth="bearer", auth_env_var="BEARER_TOKEN")
@@ -763,7 +763,7 @@ def test_auth_header_flows_from_env_var_to_actual_request(
 
 
 def test_redact_source_uri_strips_userinfo() -> None:
-    from sorethumb.io.source import redact_source_uri
+    from sorethumb_ml.io.source import redact_source_uri
 
     redacted = redact_source_uri("https://user:pass@example.com/data.csv")
     assert "user" not in redacted
@@ -772,7 +772,7 @@ def test_redact_source_uri_strips_userinfo() -> None:
 
 
 def test_redact_source_uri_strips_sensitive_query_params_keeps_others() -> None:
-    from sorethumb.io.source import redact_source_uri
+    from sorethumb_ml.io.source import redact_source_uri
 
     redacted = redact_source_uri("https://example.com/data.csv?sig=abc123&format=csv")
     assert "abc123" not in redacted
@@ -781,13 +781,13 @@ def test_redact_source_uri_strips_sensitive_query_params_keeps_others() -> None:
 
 
 def test_redact_source_uri_local_path_passthrough() -> None:
-    from sorethumb.io.source import redact_source_uri
+    from sorethumb_ml.io.source import redact_source_uri
 
     assert redact_source_uri("/data/local/file.csv") == "/data/local/file.csv"
 
 
 def test_redact_source_uri_case_insensitive_query_key() -> None:
-    from sorethumb.io.source import redact_source_uri
+    from sorethumb_ml.io.source import redact_source_uri
 
     redacted = redact_source_uri("https://example.com/data.csv?X-Amz-Signature=deadbeef")
     assert "deadbeef" not in redacted
@@ -801,7 +801,7 @@ def test_redact_source_uri_case_insensitive_query_key() -> None:
 def test_download_follows_a_redirect_to_a_safe_host(tmp_path: Path) -> None:
     import httpx
 
-    from sorethumb.io.source import _download_to
+    from sorethumb_ml.io.source import _download_to
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "198.51.100.1":
@@ -824,8 +824,8 @@ def test_download_refuses_redirect_to_cloud_metadata_host(tmp_path: Path) -> Non
     fetcher to the cloud metadata address. Must be refused, not followed."""
     import httpx
 
-    from sorethumb.errors import SourceError
-    from sorethumb.io.source import _download_to
+    from sorethumb_ml.errors import SourceError
+    from sorethumb_ml.io.source import _download_to
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "198.51.100.1":
@@ -846,8 +846,8 @@ def test_download_refuses_redirect_to_cloud_metadata_host(tmp_path: Path) -> Non
 def test_download_refuses_redirect_to_loopback_host(tmp_path: Path) -> None:
     import httpx
 
-    from sorethumb.errors import SourceError
-    from sorethumb.io.source import _download_to
+    from sorethumb_ml.errors import SourceError
+    from sorethumb_ml.io.source import _download_to
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "198.51.100.1":
@@ -868,8 +868,8 @@ def test_download_refuses_redirect_to_loopback_host(tmp_path: Path) -> None:
 def test_download_refuses_too_many_redirects(tmp_path: Path) -> None:
     import httpx
 
-    from sorethumb.errors import SourceError
-    from sorethumb.io.source import _download_to
+    from sorethumb_ml.errors import SourceError
+    from sorethumb_ml.io.source import _download_to
 
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(302, headers={"location": "http://8.8.8.8/loop"})
@@ -899,7 +899,7 @@ def test_download_preserves_authorization_on_same_origin_redirect(tmp_path: Path
     the P0-3 origin check must not break."""
     import httpx
 
-    from sorethumb.io.source import _download_to
+    from sorethumb_ml.io.source import _download_to
 
     seen_auth: list[str | None] = []
 
@@ -927,7 +927,7 @@ def test_download_strips_authorization_on_cross_host_redirect(tmp_path: Path) ->
     server later points us"."""
     import httpx
 
-    from sorethumb.io.source import _download_to
+    from sorethumb_ml.io.source import _download_to
 
     seen_auth: list[str | None] = []
 
@@ -954,7 +954,7 @@ def test_download_strips_authorization_on_port_change_redirect(tmp_path: Path) -
     identical."""
     import httpx
 
-    from sorethumb.io.source import _download_to
+    from sorethumb_ml.io.source import _download_to
 
     seen_auth: list[str | None] = []
 
@@ -981,7 +981,7 @@ def test_download_refuses_https_to_http_downgrade_redirect(tmp_path: Path) -> No
     the response body. The secret must not leak into the raised error."""
     import httpx
 
-    from sorethumb.io.source import _download_to
+    from sorethumb_ml.io.source import _download_to
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.scheme == "https":
@@ -1008,7 +1008,7 @@ def test_download_refuses_https_to_http_downgrade_even_without_auth_configured(
     be configured."""
     import httpx
 
-    from sorethumb.io.source import _download_to
+    from sorethumb_ml.io.source import _download_to
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.scheme == "https":
@@ -1038,7 +1038,7 @@ def test_download_cross_origin_redirect_does_not_leak_secret_via_logging(
 
     import httpx
 
-    from sorethumb.io.source import _download_to
+    from sorethumb_ml.io.source import _download_to
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "198.51.100.1":
@@ -1062,8 +1062,8 @@ def test_download_rejects_oversized_declared_content_length(tmp_path: Path) -> N
     is read."""
     import httpx
 
-    from sorethumb.errors import SourceError
-    from sorethumb.io.source import _download_to
+    from sorethumb_ml.errors import SourceError
+    from sorethumb_ml.io.source import _download_to
 
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, headers={"content-length": "1000000"}, content=b"x" * 10)
@@ -1084,8 +1084,8 @@ def test_download_rejects_oversized_streamed_body_without_content_length(tmp_pat
     byte count itself must still be capped."""
     import httpx
 
-    from sorethumb.errors import SourceError
-    from sorethumb.io.source import _download_to
+    from sorethumb_ml.errors import SourceError
+    from sorethumb_ml.io.source import _download_to
 
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"x" * 1000)  # no content-length header set
@@ -1112,7 +1112,7 @@ def test_download_to_sends_no_conditional_headers_without_meta_out(tmp_path: Pat
     unconditional request, dest written, nothing else to check."""
     import httpx
 
-    from sorethumb.io.source import _download_to
+    from sorethumb_ml.io.source import _download_to
 
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"a,b\n1,2\n")
@@ -1127,7 +1127,7 @@ def test_download_to_sends_no_conditional_headers_without_meta_out(tmp_path: Pat
 def test_download_to_captures_etag_and_last_modified_on_200(tmp_path: Path) -> None:
     import httpx
 
-    from sorethumb.io.source import _download_to
+    from sorethumb_ml.io.source import _download_to
 
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -1155,7 +1155,7 @@ def test_download_to_304_leaves_dest_untouched_and_reports_not_modified(tmp_path
     header) must write nothing -- the whole point is skipping the transfer."""
     import httpx
 
-    from sorethumb.io.source import _download_to
+    from sorethumb_ml.io.source import _download_to
 
     seen_headers: list[dict[str, str]] = []
 
@@ -1184,7 +1184,7 @@ def test_download_to_conditional_headers_survive_a_redirect(tmp_path: Path) -> N
     travel across a redirect hop the same as any other ordinary header."""
     import httpx
 
-    from sorethumb.io.source import _download_to
+    from sorethumb_ml.io.source import _download_to
 
     seen_at_final: list[str | None] = []
 
@@ -1215,8 +1215,8 @@ def test_resolve_http_caches_etag_then_reuses_via_304_without_writing_new_conten
     output should be written for that second call."""
     import httpx
 
-    from sorethumb.config import SourceConfig
-    from sorethumb.io.source import resolve_source
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.io.source import resolve_source
 
     request_count = {"n": 0}
 
@@ -1245,8 +1245,8 @@ def test_resolve_http_changed_etag_downloads_new_content_and_updates_cache(tmp_p
     under its own fingerprint -- must become what resolve_source returns."""
     import httpx
 
-    from sorethumb.config import SourceConfig
-    from sorethumb.io.source import resolve_source
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.io.source import resolve_source
 
     state = {"etag": '"v1"', "body": b"a,b\n1,2\n"}
 
@@ -1282,8 +1282,8 @@ def test_resolve_http_no_validators_always_downloads_but_still_dedupes_by_finger
     path for unchanged content, and no meta sidecar should be written."""
     import httpx
 
-    from sorethumb.config import SourceConfig
-    from sorethumb.io.source import resolve_source
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.io.source import resolve_source
 
     request_count = {"n": 0}
 
@@ -1307,8 +1307,8 @@ def test_resolve_http_cache_false_never_sends_conditional_headers(tmp_path: Path
     recorded or consulted, even when the origin would happily supply them."""
     import httpx
 
-    from sorethumb.config import SourceConfig
-    from sorethumb.io.source import resolve_source
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.io.source import resolve_source
 
     seen_headers: list[dict[str, str]] = []
 
@@ -1335,8 +1335,8 @@ def test_resolve_http_cache_key_is_the_configured_url_not_the_redirect_target(tm
     same."""
     import httpx
 
-    from sorethumb.config import SourceConfig
-    from sorethumb.io.source import resolve_source
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.io.source import resolve_source
 
     redirect_target = {"host": "1.1.1.1"}
     final_request_count = {"n": 0}
@@ -1374,8 +1374,8 @@ def test_resolve_http_stale_meta_pointing_at_deleted_cache_entry_falls_back_unco
 
     import httpx
 
-    from sorethumb.config import SourceConfig
-    from sorethumb.io.source import resolve_source
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.io.source import resolve_source
 
     seen_headers: list[dict[str, str]] = []
 
@@ -1399,9 +1399,9 @@ def test_resolve_http_interrupted_download_does_not_persist_cache_meta(tmp_path:
     metadata for content that was never actually completed and cached."""
     import httpx
 
-    from sorethumb.config import SourceConfig
-    from sorethumb.errors import SourceError
-    from sorethumb.io.source import resolve_source
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.errors import SourceError
+    from sorethumb_ml.io.source import resolve_source
 
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, headers={"etag": '"v1"'}, content=b"x" * 1000)  # exceeds max below
@@ -1425,8 +1425,8 @@ def test_concurrent_downloads_do_not_corrupt_or_cross_contaminate(
     (the old fixed "_download_tmp" name let exactly that happen)."""
     import threading
 
-    from sorethumb.config import SourceConfig
-    from sorethumb.io import source as src
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.io import source as src
 
     barrier = threading.Barrier(2)
 
@@ -1470,7 +1470,7 @@ def test_concurrent_downloads_do_not_corrupt_or_cross_contaminate(
 def test_auth_token_not_in_config_json(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MY_SECRET_TOKEN", "super-secret-value-xyz")
 
-    from sorethumb.config import SourceConfig
+    from sorethumb_ml.config import SourceConfig
 
     cfg = SourceConfig(
         uri="https://example.com/data.csv",

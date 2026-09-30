@@ -14,12 +14,12 @@ import pytest
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
-from sorethumb.detectors.ecod import ECODDetector
-from sorethumb.detectors.hbos import HBOSDetector
-from sorethumb.detectors.isolation_forest import IsolationForestDetector
-from sorethumb.detectors.kmeans_distance import KMeansDetector
-from sorethumb.detectors.lof import LOFDetector
-from sorethumb.detectors.one_class_svm import OneClassSVMDetector
+from sorethumb_ml.detectors.ecod import ECODDetector
+from sorethumb_ml.detectors.hbos import HBOSDetector
+from sorethumb_ml.detectors.isolation_forest import IsolationForestDetector
+from sorethumb_ml.detectors.kmeans_distance import KMeansDetector
+from sorethumb_ml.detectors.lof import LOFDetector
+from sorethumb_ml.detectors.one_class_svm import OneClassSVMDetector
 from tests.factories.hypothesis_profiles import scaled_examples
 
 pytestmark = pytest.mark.property

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sorethumb.evaluate.pipeline_benchmark import PipelineBenchmarkRow
+from sorethumb_ml.evaluate.pipeline_benchmark import PipelineBenchmarkRow
 
 
 def make_pipeline_row(**overrides: Any) -> PipelineBenchmarkRow:

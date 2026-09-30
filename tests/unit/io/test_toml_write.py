@@ -7,7 +7,7 @@ import tomllib
 
 import pytest
 
-from sorethumb.io.toml_write import render_toml_key, render_toml_string, render_toml_value
+from sorethumb_ml.io.toml_write import render_toml_key, render_toml_string, render_toml_value
 
 pytestmark = pytest.mark.unit
 

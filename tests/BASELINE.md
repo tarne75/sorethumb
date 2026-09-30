@@ -9,7 +9,7 @@ only `integration`/`benchmark` markers declared, neither applied to any test mod
 - Collected: **872 tests**.
 - `pytest -m "not benchmark"` (the closest existing lane at the time; `integration` was
   declared but unused, so it selected nothing): **861 passed, 11 deselected**, in **~109s**.
-- Branch coverage (`--cov=sorethumb --cov-report=term-missing`, same run): **85.64%**
+- Branch coverage (`--cov=sorethumb_ml --cov-report=term-missing`, same run): **85.64%**
   (4633 statements / 1246 branches; `TOTAL` miss 654 stmts, 112 partial branches).
 - Slowest tests (`--durations=15`), all in `tests/integration/` or `tests/unit/test_explain.py`
   / `test_config_wiring.py`, none over 4.8s — nothing pathologically slow yet, but nothing was

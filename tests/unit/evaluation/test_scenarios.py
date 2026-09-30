@@ -1,11 +1,11 @@
-"""Unit tests for sorethumb.evaluate.scenarios: pure, deterministic, no model fitting."""
+"""Unit tests for sorethumb_ml.evaluate.scenarios: pure, deterministic, no model fitting."""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from sorethumb.evaluate.scenarios import (
+from sorethumb_ml.evaluate.scenarios import (
     SCENARIOS,
     clustered_anomalies,
     contextual_anomalies,

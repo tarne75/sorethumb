@@ -86,8 +86,8 @@ jobs:
         # version claims agree before it's published. A mismatch anywhere in
         # this chain means the thing about to reach PyPI is not the thing the
         # tag, or a `pip install`, will claim it is -- e.g. a stale
-        # pyproject.toml version, or sorethumb.__version__ drifting from the
-        # installed distribution metadata (see src/sorethumb/__init__.py).
+        # pyproject.toml version, or sorethumb_ml.__version__ drifting from the
+        # installed distribution metadata (see src/sorethumb_ml/__init__.py).
         run: |
           set -e
           tag="${GITHUB_REF_NAME#v}"
@@ -97,7 +97,7 @@ jobs:
           python -m venv /tmp/verify-version-venv
           /tmp/verify-version-venv/bin/pip install --upgrade pip -q
           /tmp/verify-version-venv/bin/pip install "$whl" -q
-          runtime_ver="$(/tmp/verify-version-venv/bin/python -c "import sorethumb; print(sorethumb.__version__)")"
+          runtime_ver="$(/tmp/verify-version-venv/bin/python -c "import sorethumb_ml; print(sorethumb_ml.__version__)")"
           echo "tag=$tag  pyproject.version=$pkg  wheel_metadata_version=$wheel_ver  imported_runtime_version=$runtime_ver"
           if [ "$tag" != "$pkg" ] || [ "$tag" != "$wheel_ver" ] || [ "$tag" != "$runtime_ver" ]; then
             echo "::error::version mismatch -- tag=$tag pyproject=$pkg wheel=$wheel_ver runtime=$runtime_ver"

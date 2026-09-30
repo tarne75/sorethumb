@@ -14,21 +14,21 @@ import warnings
 import numpy as np
 import pytest
 
-from sorethumb.errors import (
+from sorethumb_ml.errors import (
     ModelIntegrityError,
     ModelVersionMismatchError,
     ModelVersionMismatchWarning,
     StoreError,
 )
-from sorethumb.store.models import load_model, plan_digest, save_model
-from sorethumb.store.workspace import make_group_key
+from sorethumb_ml.store.models import load_model, plan_digest, save_model
+from sorethumb_ml.store.workspace import make_group_key
 from tests.factories.workspaces import open_workspace as _open_ws
 
 pytestmark = pytest.mark.contract
 
 
 def _fit_detector(n: int = 100, d: int = 4, seed: int = 0):
-    from sorethumb.detectors.isolation_forest import IsolationForestDetector
+    from sorethumb_ml.detectors.isolation_forest import IsolationForestDetector
 
     rng = np.random.default_rng(seed)
     X = rng.standard_normal((n, d))
@@ -38,7 +38,7 @@ def _fit_detector(n: int = 100, d: int = 4, seed: int = 0):
 
 
 def _fitted_calibrator(det, X: np.ndarray):
-    from sorethumb.scoring.calibrate import Calibrator
+    from sorethumb_ml.scoring.calibrate import Calibrator
 
     c = Calibrator()
     scores = det.score_samples(X)
@@ -88,8 +88,8 @@ def test_three_detector_group_round_trips_per_detector(tmp_path):
     """The default 3-detector ensemble in one group: every detector's calibrator,
     manifest and estimator must round-trip independently — the per-detector files
     must not clobber each other, and the writes leave no ``.tmp`` debris."""
-    from sorethumb.detectors.kmeans_distance import KMeansDetector
-    from sorethumb.detectors.one_class_svm import OneClassSVMDetector
+    from sorethumb_ml.detectors.kmeans_distance import KMeansDetector
+    from sorethumb_ml.detectors.one_class_svm import OneClassSVMDetector
 
     rng = np.random.default_rng(0)
     X = rng.standard_normal((150, 4))
@@ -136,7 +136,7 @@ def test_three_detector_group_round_trips_per_detector(tmp_path):
 
 
 def test_atomic_write_text_leaves_original_on_failure(tmp_path, monkeypatch):
-    from sorethumb import _atomic
+    from sorethumb_ml import _atomic
 
     target = tmp_path / "f.json"
     target.write_text("original", encoding="utf-8")
@@ -154,7 +154,7 @@ def test_atomic_write_text_leaves_original_on_failure(tmp_path, monkeypatch):
 
 
 def test_save_load_plan_roundtrip(tmp_path):
-    from sorethumb.store.models import load_plan, save_plan
+    from sorethumb_ml.store.models import load_plan, save_plan
 
     with _open_ws(tmp_path) as ws:
         plan_json = '{"chosen_time_column": null, "scaler_params": {"a": {"center": 0.0, "scale": 1.0}}}'

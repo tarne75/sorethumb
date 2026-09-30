@@ -1,4 +1,4 @@
-"""Unit tests for sorethumb.history.periods: pure period-label/window math.
+"""Unit tests for sorethumb_ml.history.periods: pure period-label/window math.
 
 No Workspace, no SQLite -- see tests/integration/test_history.py for the
 ledger/totals/rolling-window tests that need a real store.
@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from sorethumb.history.periods import (
+from sorethumb_ml.history.periods import (
     filter_non_business,
     period_bounds,
     period_range,

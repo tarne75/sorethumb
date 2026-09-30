@@ -431,7 +431,7 @@
       "properties": {
         "log_level": {
           "default": "INFO",
-          "description": "Python logging level for the sorethumb logger. Logs are written to both the console and {workdir}/logs/sorethumb.log (rotating, 10 MB limit, 5 backups). Does not affect the config hash.",
+          "description": "Python logging level for the sorethumb_ml logger. Logs are written to both the console and {workdir}/logs/sorethumb.log (rotating, 10 MB limit, 5 backups). Does not affect the config hash.",
           "title": "Log Level",
           "type": "string"
         },

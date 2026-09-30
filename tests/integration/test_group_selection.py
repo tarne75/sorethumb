@@ -16,10 +16,10 @@ import numpy as np
 import polars as pl
 import pytest
 
-from sorethumb._pipeline import run_detection
-from sorethumb.config import DetectorConfig
-from sorethumb.errors import ConfigError
-from sorethumb.store.workspace import Workspace
+from sorethumb_ml._pipeline import run_detection
+from sorethumb_ml.config import DetectorConfig
+from sorethumb_ml.errors import ConfigError
+from sorethumb_ml.store.workspace import Workspace
 from tests.factories.configs import make_config
 from tests.factories.frames import write_grouped_csv, write_two_period_parquet
 
@@ -164,7 +164,7 @@ def test_period_with_truly_zero_rows_raises_a_different_error_than_a_selector_mi
         time_column="ts",
         history_kwargs={"period_granularity": "day", "roll_non_business": False},
     )
-    from sorethumb.errors import PlanError
+    from sorethumb_ml.errors import PlanError
 
     with pytest.raises(PlanError):
         run_detection(cfg, no_report=True, period_label_override="2024-01-17")

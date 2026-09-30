@@ -15,11 +15,11 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
-from sorethumb import _pipeline
-from sorethumb._pipeline import _group_summary, run_detection
-from sorethumb.cli import app
-from sorethumb.config import Config, DetectorConfig, SourceConfig
-from sorethumb.errors import NonFiniteWarning, SampleTruncatedWarning, SlowStageWarning
+from sorethumb_ml import _pipeline
+from sorethumb_ml._pipeline import _group_summary, run_detection
+from sorethumb_ml.cli import app
+from sorethumb_ml.config import Config, DetectorConfig, SourceConfig
+from sorethumb_ml.errors import NonFiniteWarning, SampleTruncatedWarning, SlowStageWarning
 from tests.factories.configs import make_config
 from tests.factories.frames import write_leading_anomaly_csv as _write_csv
 
@@ -70,7 +70,7 @@ def _fake_clock(step: float):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.filterwarnings("ignore::sorethumb.errors.SampleTruncatedWarning")
+@pytest.mark.filterwarnings("ignore::sorethumb_ml.errors.SampleTruncatedWarning")
 def test_run_max_rows_truncates_the_input(tmp_path: Path) -> None:
     csv = _write_csv(tmp_path / "d.csv", n_rows=120)
     result = run_detection(_cfg(csv, tmp_path / "ws", run_kwargs={"max_rows": 40}), no_report=True)
@@ -91,7 +91,7 @@ def test_run_max_rows_emits_sample_truncated_warning(tmp_path: Path) -> None:
 
 def _capture_fit_rowcount(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     """Record the row count each IsolationForest.fit sees."""
-    from sorethumb.detectors.isolation_forest import IsolationForestDetector
+    from sorethumb_ml.detectors.isolation_forest import IsolationForestDetector
 
     seen: list[int] = []
     real = IsolationForestDetector.fit
@@ -131,7 +131,7 @@ def test_detector_train_row_cap_unset_uses_all_rows_below_the_builtin_cap(
 
 
 def test_run_reuse_models_skips_refitting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from sorethumb.detectors.isolation_forest import IsolationForestDetector
+    from sorethumb_ml.detectors.isolation_forest import IsolationForestDetector
 
     csv = _write_csv(tmp_path / "d.csv")
     workdir = tmp_path / "ws"
@@ -194,7 +194,7 @@ def test_run_strict_promotes_in_group_warnings_to_failure(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.filterwarnings("default::sorethumb.errors.SlowStageWarning")
+@pytest.mark.filterwarnings("default::sorethumb_ml.errors.SlowStageWarning")
 def test_run_slow_stage_seconds_warns_on_slow_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_pipeline, "_clock", _fake_clock(step=999.0))
     csv = _write_csv(tmp_path / "d.csv")
@@ -217,7 +217,7 @@ def test_run_slow_stage_seconds_silent_when_fast(tmp_path: Path, monkeypatch: py
 
 def test_explain_enabled_false_skips_attribution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    import sorethumb.explain.shap_tree as shap_tree
+    import sorethumb_ml.explain.shap_tree as shap_tree
 
     real = shap_tree.tree_shap_attributions
 
@@ -244,7 +244,7 @@ def test_explain_enabled_false_skips_attribution(tmp_path: Path, monkeypatch: py
 def test_explain_kernel_shap_routes_non_tree_detectors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import sorethumb.explain.gradient as gradient
+    import sorethumb_ml.explain.gradient as gradient
 
     seen: list[str] = []
 
@@ -282,7 +282,7 @@ def test_explain_kernel_shap_routes_non_tree_detectors(
 def test_explain_permutation_importance_runs_the_crosscheck(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import sorethumb.explain.project as project
+    import sorethumb_ml.explain.project as project
 
     calls: list[int] = []
 
@@ -359,7 +359,7 @@ def test_report_open_after_launches_browser_only_when_set(
 
 
 def test_history_defaults_to_report_rolling_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import sorethumb.history.windows as hw
+    import sorethumb_ml.history.windows as hw
 
     seen: dict[str, list[int]] = {}
 
@@ -396,7 +396,7 @@ def test_history_defaults_to_report_rolling_windows(tmp_path: Path, monkeypatch:
 def test_source_cache_false_never_persists_a_fingerprint_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from sorethumb.io import source as src
+    from sorethumb_ml.io import source as src
 
     n = {"i": 0}
 
@@ -448,7 +448,7 @@ def test_source_uri_credentials_and_signed_query_never_reach_persisted_state(
     result = run_detection(cfg, no_report=True)
     assert result.n_succeeded == 1
 
-    from sorethumb import Workspace
+    from sorethumb_ml import Workspace
 
     with Workspace.open(workdir) as ws:
         run_row = ws.store.get_run(result.run_id)

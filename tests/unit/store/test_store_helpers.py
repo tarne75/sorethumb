@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import pytest
 
-from sorethumb.errors import StoreError
-from sorethumb.store.identifiers import validate_identifier
-from sorethumb.store.workspace import make_group_key
+from sorethumb_ml.errors import StoreError
+from sorethumb_ml.store.identifiers import validate_identifier
+from sorethumb_ml.store.workspace import make_group_key
 
 pytestmark = pytest.mark.unit
 

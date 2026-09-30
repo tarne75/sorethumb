@@ -1,0 +1,2002 @@
+"""CLI entry point.
+
+This module is the sole point of contact between the user's terminal and the
+sorethumb library. It owns:
+  - Reading and resolving configuration (TOML + env + flags).
+  - Deciding what to run and driving the library's public API.
+  - Reporting progress and results to the terminal.
+  - Workspace management commands.
+
+It imports **nothing** from sorethumb except the public API listed in
+sorethumb/__init__.py. This boundary is asserted in the test suite.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import logging.handlers
+import re
+from collections.abc import Callable
+from datetime import UTC
+from pathlib import Path
+from typing import Annotated, Any
+
+import typer
+from rich.console import Console
+from rich.table import Table
+from rich.text import Text
+
+import sorethumb_ml
+from sorethumb_ml import (
+    Config,
+    RunResult,
+    SorethumbError,
+    Workspace,
+    build_feature_plan,
+    list_detectors,
+    load_dataset,
+    render_report_for_run,
+    run_detection,
+    score_forward,
+)
+
+console = Console()
+err_console = Console(stderr=True)
+
+# ---------------------------------------------------------------------------
+# App / sub-apps
+# ---------------------------------------------------------------------------
+
+app = typer.Typer(
+    name="sorethumb",
+    no_args_is_help=True,
+    rich_markup_mode="markdown",
+    help="**sorethumb** — unsupervised anomaly detection for tabular data.",
+)
+
+config_app = typer.Typer(
+    name="config",
+    no_args_is_help=True,
+    help="Validate or inspect configuration.",
+)
+app.add_typer(config_app, name="config")
+
+workspace_app = typer.Typer(
+    name="workspace",
+    no_args_is_help=True,
+    help="Manage the sorethumb workspace (runs, artefacts, migrations).",
+)
+app.add_typer(workspace_app, name="workspace")
+
+# ---------------------------------------------------------------------------
+# Common options
+# ---------------------------------------------------------------------------
+
+_CONFIG_OPT = Annotated[
+    Path | None,
+    typer.Option("--config", "-c", help="Path to sorethumb.toml.", envvar="SORETHUMB_CONFIG"),
+]
+_WORKDIR_OPT = Annotated[
+    Path | None,
+    typer.Option("--workdir", "-w", help="Workspace root (overrides config)."),
+]
+_LOG_LEVEL_OPT = Annotated[
+    str | None,
+    typer.Option("--log-level", help="Logging level (DEBUG/INFO/WARNING).", show_default="INFO"),
+]
+_STRICT_OPT = Annotated[
+    bool | None,
+    typer.Option("--strict/--no-strict", help="Treat all library warnings as errors.", show_default="False"),
+]
+_SEED_OPT = Annotated[int | None, typer.Option("--seed", help="Random seed (overrides config).")]
+_DRY_RUN_OPT = Annotated[
+    bool,
+    typer.Option("--dry-run", help="Plan work without writing anything."),
+]
+_JSON_OPT = Annotated[
+    bool,
+    typer.Option("--json", help="Machine-readable JSON output on stdout."),
+]
+
+# Zero-config default workspace root (P3-5): used only when neither --workdir
+# nor a config file's run.workdir is given. A dedicated directory, not ".",
+# so a first run never scatters sorethumb.db/models/results/reports/logs
+# beside the source data or other files already in the current directory.
+_DEFAULT_WORKDIR = "sorethumb-workspace"
+# The marker file Workspace.init creates (store/workspace.py's _MARKER_DB) --
+# duplicated here, not imported, since it is that module's private constant.
+_WORKSPACE_MARKER_FILENAME = "sorethumb.db"
+
+
+# ---------------------------------------------------------------------------
+# Version callback
+# ---------------------------------------------------------------------------
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"sorethumb {sorethumb_ml.__version__}")
+        raise typer.Exit
+
+
+@app.callback()
+def main(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
+) -> None:
+    """Unsupervised anomaly detection for tabular data."""
+
+
+# ---------------------------------------------------------------------------
+# Detector alias resolution
+# ---------------------------------------------------------------------------
+
+_DETECTOR_ALIASES: dict[str, str] = {
+    # Short aliases
+    "if": "isolation_forest",
+    "km": "kmeans_distance",
+    "oc": "one_class_svm",
+    "ocsvm": "one_class_svm",
+    # Full names also accepted
+    "isolation_forest": "isolation_forest",
+    "kmeans_distance": "kmeans_distance",
+    "one_class_svm": "one_class_svm",
+    "ecod": "ecod",
+    "lof": "lof",
+    "hbos": "hbos",
+}
+
+
+def _parse_detectors_flag(value: str) -> list[dict[str, Any]]:
+    """Parse a comma-separated detector alias string into a raw detectors list.
+
+    Looks up each alias in _DETECTOR_ALIASES, resolves the canonical name, then
+    reads default_train_row_cap from the live registry so the cap is always
+    consistent with the detector implementation.
+    """
+    from sorethumb_ml.detectors import registry  # noqa: PLC0415
+
+    parts = [p.strip() for p in value.split(",") if p.strip()]
+    if not parts:
+        err_console.print("[red]--detectors: empty list — provide at least one detector alias.[/red]")
+        raise typer.Exit(2)
+
+    result: list[dict[str, Any]] = []
+    for alias in parts:
+        name = _DETECTOR_ALIASES.get(alias.lower())
+        if name is None:
+            valid = ", ".join(sorted(_DETECTOR_ALIASES))
+            err_console.print(f"[red]Unknown detector alias:[/red] {alias!r}\nValid aliases: {valid}")
+            raise typer.Exit(2)
+        det_cls = registry.get(name)
+        cap: int | None = det_cls.default_train_row_cap if det_cls else None
+        result.append({"name": name, "train_row_cap": cap})
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Configuration helpers
+# ---------------------------------------------------------------------------
+
+
+def _guard_legacy_dot_workspace() -> None:
+    """Refuse to silently switch a pre-existing "." workspace to the new default.
+
+    Before P3-5, the zero-config default workdir was ".". A directory that
+    already has a `sorethumb.db` marker at "." is a workspace created under
+    that old default; falling through to the new `_DEFAULT_WORKDIR` here
+    would not touch or delete anything (non-destructive by construction --
+    this function only ever reads), but it would silently make `sorethumb
+    history`/`runs`/etc. stop seeing that workspace's existing runs, which is
+    exactly the kind of surprise an explicit choice is supposed to prevent.
+    Only fires when neither --workdir nor config's run.workdir was given --
+    an explicit choice, in either direction, always wins outright.
+    """
+    if Path(_WORKSPACE_MARKER_FILENAME).exists():
+        err_console.print(
+            f"[red]Found an existing workspace at '.' ({_WORKSPACE_MARKER_FILENAME}), but "
+            f"no workdir is configured.[/red]\n"
+            f"sorethumb's zero-config default workspace changed from '.' to "
+            f"'./{_DEFAULT_WORKDIR}/' — continuing would look for runs in the new "
+            f"location and never see this one. Choose explicitly:\n"
+            f"  - Keep using this workspace: pass [bold]--workdir .[/bold] "
+            f'(or set [bold]run.workdir = "."[/bold] in sorethumb.toml).\n'
+            f"  - Migrate to the new default: move its contents into "
+            f"[bold]./{_DEFAULT_WORKDIR}/[/bold] yourself, then re-run without --workdir."
+        )
+        raise typer.Exit(2)
+
+
+def _load_config(
+    config_path: Path | None,
+    workdir: Path | None = None,
+    seed: int | None = None,
+    strict: bool | None = None,
+    log_level: str | None = None,
+    uri_override: str | None = None,
+    detectors_override: list[dict[str, Any]] | None = None,
+) -> Config:
+    """Read TOML, apply flag overrides, validate, and return Config.
+
+    Validation errors are printed all at once — a config with eight problems
+    shows eight problems, not just the first one.
+
+    When *uri_override* is provided and no config file exists, an empty raw dict
+    is used so the caller can proceed with defaults (workdir defaults to
+    ``_DEFAULT_WORKDIR``, "./sorethumb-workspace/"). If a legacy workspace
+    marker is found at "." in that case, refuses instead of silently
+    resolving against the new default — see ``_guard_legacy_dot_workspace``.
+    When *detectors_override* is provided it replaces the detectors list entirely.
+
+    *strict* and *log_level* are ``None`` when the caller's CLI flag was not
+    explicitly given (see ``_STRICT_OPT``/``_LOG_LEVEL_OPT``) — that is the
+    only way to tell "not specified" apart from "explicitly set to the same
+    value as the default", which a plain ``bool``/``str`` parameter can't.
+    An explicit value always overrides TOML; when not given, TOML's own
+    value (or the hardcoded default) applies untouched.
+    """
+    import tomllib  # noqa: PLC0415 — stdlib, Python 3.11+
+
+    from pydantic import ValidationError  # noqa: PLC0415
+
+    if config_path is None:
+        config_path = Path("sorethumb.toml")
+
+    raw: dict[str, Any]
+    if not config_path.exists():
+        if uri_override is None:
+            err_console.print(
+                f"[red]Config file not found:[/red] {config_path}\nRun `sorethumb init` to create one."
+            )
+            raise typer.Exit(2)
+        raw = {}
+    else:
+        with config_path.open("rb") as fh:
+            raw = tomllib.load(fh)
+
+    # URI override always wins (positional argument or explicit flag)
+    if uri_override is not None:
+        raw.setdefault("source", {})["uri"] = uri_override
+
+    # Detectors override replaces the entire detectors list
+    if detectors_override is not None:
+        raw["detectors"] = detectors_override
+
+    # Apply flag overrides (flags beat TOML, which beats env)
+    run_section: dict[str, Any] = raw.setdefault("run", {})
+    if workdir is not None:
+        run_section["workdir"] = str(workdir)
+    elif "workdir" not in run_section:
+        _guard_legacy_dot_workspace()
+        run_section["workdir"] = _DEFAULT_WORKDIR
+    if seed is not None:
+        run_section["seed"] = seed
+    # An explicitly-passed flag overrides TOML outright; not passing one
+    # (None) leaves whatever TOML already has, falling back to the
+    # documented default only when TOML is silent too.
+    if strict is not None:
+        run_section["strict"] = strict
+    else:
+        run_section.setdefault("strict", False)
+    if log_level is not None:
+        run_section["log_level"] = log_level
+    else:
+        run_section.setdefault("log_level", "INFO")
+
+    try:
+        cfg = Config.model_validate(raw)
+    except ValidationError as exc:
+        err_console.print("[red]Configuration errors:[/red]")
+        for err in exc.errors():
+            loc = " → ".join(str(p) for p in err["loc"])
+            err_console.print(f"  [yellow]{loc}[/yellow]: {err['msg']}")
+        raise typer.Exit(2) from exc
+
+    _add_file_handler(Path(cfg.run.workdir), cfg.run.log_level)
+    return cfg
+
+
+def _write_minimal_toml(path: Path, cfg: Config) -> None:
+    """Write a full starter sorethumb.toml with required fields and detectors filled in."""
+    from sorethumb_ml.io.toml_write import render_toml_key, render_toml_value  # noqa: PLC0415
+
+    content = _generate_starter_toml()
+
+    # Stamp the file as coming from `sorethumb run`, not `sorethumb init`
+    content = content.replace(
+        "# sorethumb.toml — generated by `sorethumb init`",
+        "# sorethumb.toml — created by `sorethumb run`",
+    )
+    # Fill in the two required fields that have no default
+    content = content.replace(
+        "# uri =  # required — no default",
+        f"uri = {render_toml_value(cfg.source.uri)}",
+    )
+    content = content.replace(
+        "# workdir =  # required — no default",
+        f"workdir = {render_toml_value(str(cfg.run.workdir))}",
+    )
+    # Replace the entire [[detectors]] section with the actual configured detectors
+    marker = "# Detectors run as an ensemble; add or remove [[detectors]] blocks freely."
+    preamble, _, _ = content.partition(marker)
+    det_lines = [marker]
+    for det in cfg.detectors:
+        det_lines.append("")
+        det_lines.append("[[detectors]]")
+        det_lines.append(f"name = {render_toml_value(det.name)}")
+        if not det.enabled:
+            det_lines.append("enabled = false")
+        if det.params:
+            det_lines.append("[detectors.params]")
+            for k, v in det.params.items():
+                det_lines.append(f"{render_toml_key(k)} = {render_toml_value(v)}")
+        if det.train_row_cap is not None:
+            det_lines.append(f"train_row_cap = {det.train_row_cap}")
+    det_lines.append("")
+    content = preamble + "\n".join(det_lines)
+
+    path.write_text(content, encoding="utf-8")
+
+
+def _setup_logging(level: str) -> None:
+    logging.basicConfig(
+        level=getattr(logging, level.upper(), logging.INFO),
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+
+def _add_file_handler(workdir: Path, level: str) -> None:
+    """Add a rotating file handler to the sorethumb_ml logger.
+
+    Writes to {workdir}/logs/sorethumb.log, rotating at 10 MB, keeping 5 backups.
+    Safe to call multiple times — skips if a file handler already exists.
+    """
+    sorethumb_logger = logging.getLogger("sorethumb_ml")
+    if any(isinstance(h, logging.handlers.RotatingFileHandler) for h in sorethumb_logger.handlers):
+        return
+
+    log_dir = workdir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    handler = logging.handlers.RotatingFileHandler(
+        log_dir / "sorethumb.log",
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    handler.setLevel(getattr(logging, level.upper(), logging.INFO))
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(name)s %(levelname)s %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    )
+    sorethumb_logger.addHandler(handler)
+
+
+def _redact_config(config: Config) -> dict[str, Any]:
+    """Return a config dict safe to print or echo back to the user.
+
+    Config never holds a credential *value* -- ``SourceConfig.auth_env_var``
+    is only the *name* of an environment variable read fresh at request
+    time (see ``io/source.py``'s ``_build_auth_headers``), so there is
+    nothing to strip there (see ``test_auth_token_not_in_config_json``).
+    ``source.uri`` can itself carry embedded userinfo (``user:pass@host``)
+    or a signed-download token in its query string, though -- redact that
+    the same way run persistence already does
+    (``_pipeline._redacted_config_json``), rather than invent a second,
+    possibly-inconsistent redaction rule here.
+    """
+    from sorethumb_ml._pipeline import _redacted_config_json  # noqa: PLC0415
+
+    raw: dict[str, Any] = json.loads(_redacted_config_json(config))
+    return raw
+
+
+# ---------------------------------------------------------------------------
+# sorethumb init
+# ---------------------------------------------------------------------------
+
+
+def _render_toml_scalar(value: object) -> str | None:
+    """Render a Python scalar as a TOML literal, or None if it has no literal form."""
+    from sorethumb_ml.io.toml_write import render_toml_value  # noqa: PLC0415
+
+    try:
+        return render_toml_value(value)
+    except TypeError:
+        return None
+
+
+def _detector_params_block(det_name: str, description: str) -> list[str]:
+    """Render the detector's `params` line plus a commented `extra_params` catalogue."""
+    import textwrap  # noqa: PLC0415
+
+    from sorethumb_ml.detectors import registry  # noqa: PLC0415
+
+    lines: list[str] = []
+    desc = description.strip()
+    if desc:
+        lines.append(textwrap.fill(desc, 76, initial_indent="# ", subsequent_indent="# "))
+    lines.append("params = {}")
+
+    getter = getattr(registry.get(det_name), "available_extra_params", None)
+    extras: dict[str, Any] = getter() if callable(getter) else {}
+    if not extras:
+        return lines
+
+    first_key = next(iter(extras))
+    lines += [
+        "#",
+        "# extra_params: forwarded verbatim to this detector's underlying scikit-learn",
+        f"# estimator. Nest inside params, e.g. params = {{ extra_params = {{ {first_key} = ... }} }}",
+        "# Every accepted key is listed below (commented) with its scikit-learn default:",
+    ]
+    for key, default in extras.items():
+        rendered = _render_toml_scalar(default)
+        lines.append(
+            f"#   {key} = {rendered}" if rendered is not None else f"#   {key} =   # default: {default!r}"
+        )
+    return lines
+
+
+def _starter_detectors_section(field_block: Callable[..., list[str]]) -> list[str]:
+    """Render the `[[detectors]]` blocks for the three default detectors.
+
+    ``train_row_cap`` is shown at each detector's built-in default (from the
+    registry) so the starter file reflects the effective cap without a second
+    hard-coded copy of the numbers.
+    """
+    from sorethumb_ml.config import DetectorConfig  # noqa: PLC0415
+    from sorethumb_ml.detectors import registry  # noqa: PLC0415
+
+    out = ["# Detectors run as an ensemble; add or remove [[detectors]] blocks freely."]
+    for det in (
+        DetectorConfig(name=name, train_row_cap=registry[name].default_train_row_cap)
+        for name in ("isolation_forest", "kmeans_distance", "one_class_svm")
+    ):
+        out += ["", "[[detectors]]"]
+        for i, (fname, fi) in enumerate(DetectorConfig.model_fields.items()):
+            if i:
+                out.append("")
+            if fname == "params":
+                out.extend(_detector_params_block(det.name, fi.description or ""))
+            else:
+                out.extend(field_block(fname, fi, override=getattr(det, fname)))
+    out.append("")
+    return out
+
+
+def _generate_starter_toml() -> str:
+    """Build a complete sorethumb.toml from the live Pydantic models.
+
+    Every field is shown with its default value (or a commented placeholder
+    for required/complex fields), plus its description as a TOML comment.
+    """
+    import textwrap  # noqa: PLC0415
+
+    from pydantic.fields import FieldInfo  # noqa: PLC0415
+    from pydantic_core import PydanticUndefined  # noqa: PLC0415
+
+    from sorethumb_ml.config import (  # noqa: PLC0415
+        ColumnsConfig,
+        ExplainConfig,
+        FeaturesConfig,
+        HistoryConfig,
+        ProfilingConfig,
+        ReportConfig,
+        RunConfig,
+        ScoringConfig,
+        SourceConfig,
+    )
+    from sorethumb_ml.io.toml_write import render_toml_value  # noqa: PLC0415
+
+    _MISSING = object()
+
+    def _scalar(v: object) -> str | None:
+        try:
+            return render_toml_value(v)
+        except TypeError:
+            return None
+
+    def _field_block(name: str, fi: FieldInfo, override: object = _MISSING) -> list[str]:
+        lines: list[str] = []
+        desc = (fi.description or "").strip()
+        if desc:
+            wrapped = textwrap.fill(desc, 76, initial_indent="# ", subsequent_indent="# ")
+            lines.append(wrapped)
+        if override is not _MISSING:
+            default = override
+        elif fi.default is not PydanticUndefined:
+            default = fi.default
+        elif fi.default_factory is not None:
+            try:
+                default = fi.default_factory({})  # type: ignore[call-arg]
+            except Exception:  # noqa: BLE001
+                default = _MISSING
+        else:
+            default = _MISSING
+        if default is _MISSING:
+            lines.append(f"# {name} =  # required — no default")
+        elif default is None:
+            lines.append(f"# {name} =  # optional, unset by default")
+        else:
+            toml_v = _scalar(default)
+            if toml_v is not None:
+                lines.append(f"{name} = {toml_v}")
+            else:
+                lines.append(f"# {name} =  # complex type, see docs")
+        return lines
+
+    def _section(header: str, model_cls: type[Any]) -> list[str]:
+        lines = [f"[{header}]"]
+        first = True
+        for fname, fi in model_cls.model_fields.items():
+            if not first:
+                lines.append("")
+            first = False
+            lines.extend(_field_block(fname, fi))
+        return lines
+
+    out: list[str] = [
+        "# sorethumb.toml — generated by `sorethumb init`",
+        "# Every field is shown with its default value.",
+        "# Fields marked '# optional' are unset by default; uncomment to override.",
+        "# Fields marked '# required' must be set before `sorethumb run` will work.",
+        "# Run `sorethumb config schema` for the full JSON schema.",
+        "",
+    ]
+    for header, cls in [
+        ("source", SourceConfig),
+        ("columns", ColumnsConfig),
+        ("profiling", ProfilingConfig),
+        ("features", FeaturesConfig),
+        ("scoring", ScoringConfig),
+        ("explain", ExplainConfig),
+        ("run", RunConfig),
+        ("history", HistoryConfig),
+        ("report", ReportConfig),
+    ]:
+        out.extend(_section(header, cls))
+        out.append("")
+    out.extend(_starter_detectors_section(_field_block))
+    return "\n".join(out)
+
+
+@app.command()
+def init(
+    path: Annotated[Path, typer.Argument(help="Workspace root to create.")] = Path(),
+) -> None:
+    """Create a workspace and write a starter sorethumb.toml.
+
+    This is the primary onboarding path. After running init, edit
+    sorethumb.toml to point at your dataset, then run `sorethumb inspect`
+    to see how your data will be profiled before any models are trained.
+    """
+    toml_path = path / "sorethumb.toml"
+    if toml_path.exists():
+        err_console.print(f"[yellow]sorethumb.toml already exists:[/yellow] {toml_path}")
+        raise typer.Exit(0)
+
+    from sorethumb_ml.io.toml_write import render_toml_value  # noqa: PLC0415
+
+    path.mkdir(parents=True, exist_ok=True)
+    ws_dir = path / _DEFAULT_WORKDIR
+    # Fill in the one field _generate_starter_toml() leaves as "required — no
+    # default" that init already has a real answer for, so the written file
+    # matches the workspace just created below rather than needing a manual
+    # edit before it can be used.
+    content = _generate_starter_toml().replace(
+        "# workdir =  # required — no default",
+        f"workdir = {render_toml_value(str(ws_dir))}",
+    )
+    toml_path.write_text(content, encoding="utf-8")
+
+    try:
+        Workspace.init(ws_dir)
+        console.print(f"[green]Workspace created:[/green] {ws_dir}")
+    except Exception as exc:  # noqa: BLE001
+        err_console.print(f"[yellow]Workspace init warning:[/yellow] {exc}")
+
+    console.print(f"[green]Config written:[/green] {toml_path}")
+    console.print("\nNext steps:")
+    console.print("  1. Edit [bold]sorethumb.toml[/bold] → set [cyan]source.uri[/cyan] to your dataset.")
+    console.print("  2. [bold]sorethumb inspect[/bold]   — profile your data without fitting any models.")
+    console.print("  3. [bold]sorethumb run[/bold]       — run detection.")
+
+
+# ---------------------------------------------------------------------------
+# sorethumb inspect
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def inspect(
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+    seed: _SEED_OPT = None,
+) -> None:
+    """Profile the dataset and print the feature plan without running any models.
+
+    Shows every column's classification and the reason it was classified that way,
+    plus the projected feature width and memory estimate. Use this before your
+    first `sorethumb run` to check that high-cardinality columns will be encoded
+    as expected and identifiers will be dropped.
+    """
+    _setup_logging(log_level or "INFO")
+    cfg = _load_config(config, workdir=workdir, seed=seed, log_level=log_level)
+
+    console.print("[bold]Loading dataset…[/bold]")
+    ws_path = Path(cfg.run.workdir)
+    cache_dir = ws_path / "cache" / "datasets"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    df = load_dataset(cfg.source, cache_dir=cache_dir)
+    console.print(f"  rows={len(df):,}  cols={len(df.columns)}")
+
+    plan = build_feature_plan(df, cfg)
+
+    table = Table(title="Feature plan", show_header=True, header_style="bold cyan")
+    table.add_column("Column", style="white", no_wrap=True)
+    table.add_column("Class", style="green")
+    table.add_column("Treatment", style="yellow")
+    table.add_column("Reason")
+
+    for dec in plan.decisions or []:
+        color = "red" if dec.treatment.value == "drop" else "green"
+        table.add_row(
+            dec.column,
+            dec.col_class.value,
+            Text(dec.treatment.value, style=color),
+            dec.reason or "",
+        )
+
+    console.print(table)
+
+    n_features = len(plan.output_features)
+    console.print(f"\nProjected feature width: [bold]{n_features}[/bold] columns")
+
+
+# ---------------------------------------------------------------------------
+# sorethumb run
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def run(
+    data_file: Annotated[
+        str | None,
+        typer.Argument(
+            help=(
+                "Path to a data file. When supplied, overrides source.uri in the config. "
+                "If no sorethumb.toml exists, all settings default and workdir defaults to "
+                "'./sorethumb-workspace/' — you will be prompted to save a config file."
+            )
+        ),
+    ] = None,
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+    seed: _SEED_OPT = None,
+    strict: _STRICT_OPT = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help=(
+                "Resolve the plan and register the run, but fit no models. "
+                "Still writes: the workspace + schema migrations, the dataset and "
+                "dataset_snapshot rows, and the run row (left in status 'running'). "
+                "Skips: the feature plan, detector models, per-group results, "
+                "history rows, and the report."
+            ),
+        ),
+    ] = False,
+    force: Annotated[bool, typer.Option("--force", help="Re-run already-complete groups.")] = False,
+    no_report: Annotated[bool, typer.Option("--no-report", help="Skip HTML report.")] = False,
+    only_group: Annotated[
+        list[str] | None, typer.Option("--only-group", help="Run only these group labels.")
+    ] = None,
+    group_filter: Annotated[
+        str | None, typer.Option("--group-filter", help="Regex filter on group labels.")
+    ] = None,
+    period: Annotated[
+        str | None, typer.Option("--period", help="Force a specific period label (YYYY-MM-DD).")
+    ] = None,
+    limit_groups: Annotated[
+        int | None,
+        typer.Option(
+            "--limit-groups",
+            help=(
+                "Cap the number of groups processed, applied after --only-group/"
+                "--group-filter. Groups are sorted by label first, so the same "
+                "limit always keeps the same groups. Must be >= 1 when given."
+            ),
+        ),
+    ] = None,
+    detectors: Annotated[
+        str | None,
+        typer.Option(
+            "--detectors",
+            "-d",
+            help=(
+                "Comma-separated detector aliases to use, replacing the config list "
+                "for this invocation only — the config file is never modified. "
+                "Aliases: if=isolation_forest  km=kmeans_distance  oc=one_class_svm  "
+                "ecod  lof  hbos. "
+                "Full names are also accepted."
+            ),
+        ),
+    ] = None,
+    json_output: _JSON_OPT = False,
+) -> None:
+    """Run anomaly detection on the configured dataset.
+
+    Groups that are already complete in the ledger are skipped unless --force
+    is set. This makes repeated invocations cheap: the dataset snapshot cache
+    avoids re-downloading, and the completion ledger avoids redundant inference.
+    """
+    _setup_logging(log_level or "INFO")
+
+    config_path = config or Path("sorethumb.toml")
+    config_existed = config_path.exists()
+
+    detectors_override = _parse_detectors_flag(detectors) if detectors else None
+
+    cfg = _load_config(
+        config,
+        workdir=workdir,
+        seed=seed,
+        strict=strict,
+        log_level=log_level,
+        uri_override=data_file,
+        detectors_override=detectors_override,
+    )
+
+    if not config_existed and data_file is not None:
+        console.print(
+            f"[dim]No sorethumb.toml found — running with defaults, workdir={cfg.run.workdir!r}.[/dim]"
+        )
+        if typer.confirm("Save settings to sorethumb.toml for future runs?", default=False):
+            _write_minimal_toml(config_path, cfg)
+            console.print(f"[green]Saved {config_path}[/green]")
+
+    # Validate group-filter regex up front so an invalid pattern fails before any work
+    if group_filter:
+        try:
+            re.compile(group_filter)
+        except re.error as exc:
+            err_console.print(f"[red]Invalid --group-filter regex:[/red] {exc}")
+            raise typer.Exit(2) from exc
+
+    if not json_output:
+        console.print(f"[bold]sorethumb run[/bold]  workspace={cfg.run.workdir}")
+        if dry_run:
+            console.print(
+                "[yellow]DRY RUN[/yellow] — resolving the plan and registering the run; "
+                "no models are fitted.\n"
+                "  writes: workspace + schema migrations, the [cyan]dataset[/cyan] / "
+                "[cyan]dataset_snapshot[/cyan] rows, and the [cyan]run[/cyan] row "
+                "(status stays 'running').\n"
+                "  skips:  feature plan, detector models, per-group results, history rows, report."
+            )
+
+    try:
+        result: RunResult = run_detection(
+            cfg,
+            only_groups=only_group,
+            group_filter_regex=group_filter,
+            limit_groups=limit_groups,
+            force=force,
+            no_report=no_report,
+            dry_run=dry_run,
+            period_label_override=period,
+        )
+    except SorethumbError as exc:
+        err_console.print(f"[red]run failed:[/red] {exc}")
+        raise typer.Exit(2) from exc
+
+    if json_output:
+        typer.echo(json.dumps(_run_result_to_dict(result), default=str))
+        raise typer.Exit(_exit_code_for(result))
+
+    _print_run_summary(result)
+
+    raise typer.Exit(_exit_code_for(result))
+
+
+# ---------------------------------------------------------------------------
+# sorethumb score
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def score(
+    from_run: Annotated[str, typer.Option("--from-run", help="Source run_id to reuse models from.")],
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+    seed: _SEED_OPT = None,
+    strict: _STRICT_OPT = None,
+    no_report: Annotated[bool, typer.Option("--no-report")] = False,
+    json_output: _JSON_OPT = False,
+) -> None:
+    """Score new data with a previous run's persisted plan and models.
+
+    The source run's fitted FeaturePlan and per-detector models + calibrators are
+    loaded and applied to the new data without re-fitting. The calibrators map
+    scores onto the source run's reference distribution, so the numbers are
+    comparable across runs. Schema and library-version drift are detected per
+    group (``--strict`` makes them errors). A new, distinct run is written that
+    records the source run.
+
+    Loading a run unpickles its persisted estimator and calibrator files
+    (joblib), which is code execution, not sandboxed data loading. File
+    digests only catch corruption or a swapped file, not a deliberately
+    malicious one. Only use --from-run against a workspace you created
+    yourself or fully trust — see SECURITY.md.
+    """
+    _setup_logging(log_level or "INFO")
+    cfg = _load_config(config, workdir=workdir, seed=seed, strict=strict, log_level=log_level)
+
+    if not json_output:
+        console.print(f"[bold]sorethumb score[/bold]  from_run={from_run}")
+
+    try:
+        result: RunResult = score_forward(cfg, from_run, strict=cfg.run.strict, no_report=no_report)
+    except SorethumbError as exc:
+        err_console.print(f"[red]score --from-run failed:[/red] {exc}")
+        raise typer.Exit(2) from exc
+
+    if json_output:
+        typer.echo(json.dumps(_run_result_to_dict(result), default=str))
+        raise typer.Exit(_exit_code_for(result))
+
+    _print_run_summary(result)
+    if any(g.drifted for g in result.groups):
+        console.print("[yellow]note:[/yellow] one or more groups showed schema/version drift.")
+    raise typer.Exit(_exit_code_for(result))
+
+
+# ---------------------------------------------------------------------------
+# sorethumb report
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def report(
+    run_id: Annotated[str | None, typer.Argument(help="Run ID to re-render (default: latest run).")] = None,
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+) -> None:
+    """Re-render a run's HTML report from persisted results — no recompute.
+
+    Reads the run's stored config, FeaturePlan and per-group results Parquet
+    -- never today's ``--config``/``sorethumb.toml`` -- and rewrites
+    ``{workdir}/reports/{run_id}/index.html``. The persisted results were
+    computed against that historical plan and group structure, so anything
+    that could change what they *mean* (columns, detectors, scoring, ...)
+    always comes from the run's own history, never from the current config;
+    otherwise a re-render could silently stop corresponding to the data it's
+    rendering. ``report.formats`` is the one deliberate exception -- purely
+    cosmetic (which output files get written), so it *is* taken from the
+    current config: change it and re-run this command to pick up the new
+    formats, or to rebuild a report that was deleted. ``--config``/
+    ``--workdir`` otherwise only locate the workspace the run lives in.
+    """
+    _setup_logging(log_level or "INFO")
+    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    ws_path = Path(cfg.run.workdir)
+
+    with Workspace.open(ws_path) as ws:
+        if run_id is None:
+            runs = ws.store.list_runs(limit=1)
+            if not runs:
+                err_console.print("[red]No runs found in workspace.[/red]")
+                raise typer.Exit(1)
+            run_id = str(runs[0]["run_id"])
+
+        if ws.store.get_run(run_id) is None:
+            err_console.print(f"[red]Run not found:[/red] {run_id}")
+            raise typer.Exit(1)
+
+        n_groups = len(ws.store.all_run_groups(run_id))
+        console.print(f"Re-rendering report for [cyan]{run_id}[/cyan] ({n_groups} groups)…")
+        path = render_report_for_run(ws, run_id, formats=cfg.report.formats)
+        if path is None:
+            err_console.print(f"[red]Could not render report for {run_id}.[/red] See the log for details.")
+            raise typer.Exit(1)
+        console.print(f"[green]Report written:[/green] {path}")
+
+
+# ---------------------------------------------------------------------------
+# sorethumb backfill
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def backfill(
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+    seed: _SEED_OPT = None,
+    strict: _STRICT_OPT = None,
+    dry_run: _DRY_RUN_OPT = False,
+    force_period: Annotated[
+        list[str] | None, typer.Option("--force-period", help="Force recompute of these period labels.")
+    ] = None,
+    max_periods: Annotated[
+        int | None, typer.Option("--max-periods", help="Cap the backfill depth (overrides config).")
+    ] = None,
+) -> None:
+    """Fill missing historical periods for the configured dataset.
+
+    Skipped when there is no time_column in the config — history is by run
+    rather than by calendar period in that case.
+
+    Each pending period is fitted and scored independently (a full ``sorethumb
+    run`` over that period's window) and self-calibrated. The ``sorethumb
+    history`` trend that results shows relative period-to-period movement, not an
+    absolute anomaly level on a shared scale — for that, score every period
+    against one fixed run with ``sorethumb score --from-run``.
+    """
+    _setup_logging(log_level or "INFO")
+    cfg = _load_config(config, workdir=workdir, seed=seed, strict=strict, log_level=log_level)
+
+    if not cfg.columns.time_column:
+        console.print(
+            "[yellow]No time_column configured — backfill is only meaningful with a time series "
+            "dataset. Exiting.[/yellow]"
+        )
+        raise typer.Exit(0)
+
+    from sorethumb_ml.history.ledger import iter_pending_periods, resolve_backfill_range  # noqa: PLC0415
+
+    ws_path = Path(cfg.run.workdir)
+    # Match `run`: open an existing workspace, otherwise create it so `backfill`
+    # works as a first command on a fresh workdir.
+    if ws_path.exists() and (ws_path / "sorethumb.db").exists():
+        ws_cm = Workspace.open(ws_path)
+    else:
+        ws_cm = Workspace.init(ws_path)
+    with ws_cm as ws:
+        from datetime import datetime  # noqa: PLC0415
+
+        from sorethumb_ml.history.periods import resolve_period  # noqa: PLC0415
+        from sorethumb_ml.io.fingerprint import logical_dataset_id  # noqa: PLC0415
+
+        # History is keyed on the stable logical dataset id -- the same value
+        # run_detection will register -- so backfill's pending-period math does
+        # not depend on the current snapshot's content.
+        dataset_fp = logical_dataset_id(cfg.source.dataset_id, cfg.source.uri)
+        config_hash = cfg.config_hash()
+
+        ref = datetime.now(UTC)
+        _, _, ref_label = resolve_period(ref, cfg.history.period_granularity, cfg.history.roll_non_business)
+
+        backfill_labels = resolve_backfill_range(
+            ws.store,
+            dataset_fp,
+            config_hash,
+            ref_label,
+            cfg.history.period_granularity,
+            cfg.history.bootstrap_periods,
+            cfg.history.lookback_periods,
+            max_periods or cfg.history.max_backfill_periods,
+            roll_non_business=cfg.history.roll_non_business,
+        )
+        pending = iter_pending_periods(ws.store, dataset_fp, config_hash, backfill_labels, force_period or [])
+
+        if not pending:
+            console.print(
+                f"[green]Nothing to backfill for config {config_hash[:8]} — all periods are up to date.[/green]"
+            )
+            raise typer.Exit(0)
+
+        console.print(f"Backfill: {len(pending)} pending periods (config {config_hash[:8]})")
+        if dry_run:
+            for lbl in pending:
+                console.print(f"  [dim]would process:[/dim] {lbl}")
+            raise typer.Exit(0)
+
+        # Every period's RunResult is collected (not just the last one) so a
+        # failure partway through a long backfill is never silently dropped
+        # -- each period runs independently, so one failing must not stop the
+        # rest, but the command must still exit non-zero and name every
+        # period that had a failed group.
+        failed: list[tuple[str, RunResult]] = []
+        for period_lbl in pending:
+            console.print(f"  Processing period [cyan]{period_lbl}[/cyan]…")
+            result = run_detection(cfg, period_label_override=period_lbl, no_report=True)
+            if result.n_failed:
+                failed.append((period_lbl, result))
+
+        if failed:
+            err_console.print(
+                f"\n[red bold]Backfill finished with {len(failed)} failed period(s):[/red bold]"
+            )
+            for period_lbl, result in failed:
+                failed_groups = [g.group_label for g in result.groups if g.status == "failed"]
+                err_console.print(f"  {period_lbl}: {', '.join(failed_groups)}")
+            raise typer.Exit(1)
+
+        console.print("[green]Backfill complete.[/green]")
+
+
+# ---------------------------------------------------------------------------
+# sorethumb history
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def history(
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+    windows: Annotated[
+        list[int] | None, typer.Option("--window", help="Rolling window sizes (e.g. --window 7 --window 28).")
+    ] = None,
+    group_key: Annotated[str | None, typer.Option("--group", help="Limit to a specific group key.")] = None,
+) -> None:
+    """Show rolling-window anomaly trends for the configured dataset."""
+    _setup_logging(log_level or "INFO")
+    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+
+    ws_path = Path(cfg.run.workdir)
+    _windows = windows or cfg.report.rolling_windows
+
+    with Workspace.open(ws_path) as ws:
+        from sorethumb_ml.io.fingerprint import logical_dataset_id  # noqa: PLC0415
+
+        # Trends are read straight from the ledger, keyed on the stable logical
+        # dataset id -- no need to touch the source file. Aggregation is scoped
+        # to this config's hash -- a different configuration's totals for the
+        # same periods are separate rows and are never silently folded in.
+        dataset_fp = logical_dataset_id(cfg.source.dataset_id, cfg.source.uri)
+        config_hash = cfg.config_hash()
+
+        from datetime import datetime  # noqa: PLC0415
+
+        from sorethumb_ml.history.periods import resolve_period  # noqa: PLC0415
+        from sorethumb_ml.history.windows import compute_rolling_windows  # noqa: PLC0415
+
+        ref = datetime.now(UTC)
+        _, _, ref_label = resolve_period(ref, cfg.history.period_granularity, cfg.history.roll_non_business)
+
+        group_keys = [group_key] if group_key else None
+        window_results = compute_rolling_windows(
+            ws.store,
+            dataset_fp,
+            config_hash,
+            ref_label,
+            _windows,
+            cfg.history.period_granularity,
+            group_keys=group_keys,
+        )
+
+        if not window_results:
+            console.print(
+                f"[yellow]No history available yet for this dataset under config {config_hash[:8]}.[/yellow]"
+            )
+            raise typer.Exit(0)
+
+        table = Table(title=f"Rolling windows (ref={ref_label}, config={config_hash[:8]})", show_header=True)
+        table.add_column("Window", style="cyan")
+        table.add_column("Cur count", justify="right")
+        table.add_column("Cur pop", justify="right")
+        table.add_column("Cur rate %", justify="right")
+        table.add_column("Prior rate %", justify="right")
+        table.add_column("Δ %", justify="right")
+        table.add_column("Cal break", style="red")
+
+        for wr in window_results:
+
+            def _pct(v: float | None) -> str:
+                return f"{v * 100:.2f}" if v is not None else "—"
+
+            table.add_row(
+                str(wr.window_size),
+                str(wr.current_anomaly_count),
+                str(wr.current_population),
+                _pct(wr.current_rate),
+                _pct(wr.prior_rate),
+                _pct(wr.pct_change),
+                "⚡ yes" if wr.calibration_break else "",
+            )
+        console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# sorethumb runs
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="runs")
+def list_runs_cmd(
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+    limit: Annotated[int, typer.Option("--limit", help="Maximum number of runs to show.")] = 20,
+    json_output: _JSON_OPT = False,
+) -> None:
+    """List recent runs with status, dataset, group counts, and duration."""
+    _setup_logging(log_level or "INFO")
+    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    ws_path = Path(cfg.run.workdir)
+
+    with Workspace.open(ws_path) as ws:
+        runs = ws.store.list_runs(limit=limit)
+
+    if json_output:
+        typer.echo(json.dumps(runs, default=str))
+        return
+
+    if not runs:
+        console.print("[yellow]No runs found.[/yellow]")
+        return
+
+    table = Table(title="Runs", show_header=True, header_style="bold cyan")
+    table.add_column("Run ID", style="white", no_wrap=True)
+    table.add_column("Status")
+    table.add_column("Dataset FP")
+    table.add_column("Started")
+    table.add_column("Config hash")
+
+    for r in runs:
+        status_color = {"complete": "green", "failed": "red", "running": "yellow"}.get(
+            str(r.get("status", "")), "white"
+        )
+        table.add_row(
+            str(r.get("run_id", "")),
+            Text(str(r.get("status", "")), style=status_color),
+            str(r.get("dataset_fp", ""))[:12],
+            str(r.get("started_at", ""))[:19],
+            str(r.get("config_hash", ""))[:8],
+        )
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# sorethumb show
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def show(
+    run_id: Annotated[str, typer.Argument(help="Run ID to inspect.")],
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+    group: Annotated[str | None, typer.Option("--group", help="Group key to show detail for.")] = None,
+    json_output: _JSON_OPT = False,
+) -> None:
+    """Show detail for one run or group, including feature plan summary."""
+    _setup_logging(log_level or "INFO")
+    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    ws_path = Path(cfg.run.workdir)
+
+    with Workspace.open(ws_path) as ws:
+        run_row = ws.store.get_run(run_id)
+        if run_row is None:
+            err_console.print(f"[red]Run not found:[/red] {run_id}")
+            raise typer.Exit(1)
+
+        groups = ws.store.all_run_groups(run_id)
+
+    if group:
+        groups = [g for g in groups if g.get("group_key") == group]
+
+    if json_output:
+        typer.echo(json.dumps({"run": run_row, "groups": groups}, default=str))
+        return
+
+    console.print(f"[bold]Run:[/bold] {run_id}")
+    console.print(f"  Status:  {run_row.get('status')}")
+    console.print(f"  Dataset: {run_row.get('dataset_fp', '')[:12]}")
+    console.print(f"  Started: {str(run_row.get('started_at', ''))[:19]}")
+    console.print(f"  Config:  {run_row.get('config_hash', '')[:8]}")
+
+    table = Table(title=f"Groups ({len(groups)})", show_header=True)
+    table.add_column("Group key")
+    table.add_column("Label")
+    table.add_column("Status")
+    table.add_column("Records", justify="right")
+    table.add_column("Anomalies", justify="right")
+    table.add_column("Rate %", justify="right")
+
+    for g in groups:
+        rate = g.get("rate")
+        rate_str = f"{rate * 100:.2f}" if rate is not None else "—"
+        table.add_row(
+            str(g.get("group_key", ""))[:12],
+            str(g.get("group_label", "")),
+            str(g.get("status", "")),
+            str(g.get("record_count", "") or ""),
+            str(g.get("anomaly_count", "") or ""),
+            rate_str,
+        )
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# sorethumb anomalies
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def anomalies(
+    run_id: Annotated[
+        str | None, typer.Argument(help="Run ID to inspect. Defaults to the most recent run.")
+    ] = None,
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+    top: Annotated[int, typer.Option("--top", help="Show only the top-N anomalies by rank.")] = 0,
+    reasons: Annotated[int, typer.Option("--reasons", help="Number of reason columns to display.")] = 3,
+    json_output: _JSON_OPT = False,
+) -> None:
+    """Print flagged rows with their SHAP-derived reasons for a completed run.
+
+    Reads results from the workspace Parquet files written by ``sorethumb run``.
+    Rows are ordered by rank (1 = most anomalous). Use --top to limit output and
+    --reasons to control how many contributing features are shown per row.
+    """
+    import polars as pl  # noqa: PLC0415
+
+    _setup_logging(log_level or "INFO")
+    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    ws_path = Path(cfg.run.workdir)
+
+    with Workspace.open(ws_path) as ws:
+        if run_id is None:
+            recent = ws.store.list_runs(limit=1)
+            if not recent:
+                err_console.print("[red]No runs found in this workspace.[/red]")
+                raise typer.Exit(1)
+            run_id = str(recent[0]["run_id"])
+
+        groups = ws.store.all_run_groups(run_id)
+        if not groups:
+            err_console.print(f"[red]Run not found or has no groups:[/red] {run_id}")
+            raise typer.Exit(1)
+
+        frames: list[pl.DataFrame] = []
+        for g in groups:
+            parquet = ws.results_dir(run_id, g["group_key"]) / "anomalies.parquet"
+            if parquet.exists():
+                df = pl.read_parquet(str(parquet))
+                if len(df) > 0:
+                    frames.append(df.with_columns(pl.lit(str(g.get("group_label", ""))).alias("_group")))
+
+    if not frames:
+        console.print(f"[yellow]No anomaly rows found for run {run_id}.[/yellow]")
+        raise typer.Exit(0)
+
+    all_rows = pl.concat(frames, how="diagonal").sort("rank")
+    if top:
+        all_rows = all_rows.head(top)
+
+    reason_cols = [f"reason_{i + 1}" for i in range(reasons) if f"reason_{i + 1}" in all_rows.columns]
+    multi_group = all_rows["_group"].n_unique() > 1
+
+    if json_output:
+        display = ["_group", "rank", "composite_score", "attribution_kind", *reason_cols]
+        present = [c for c in display if c in all_rows.columns]
+        typer.echo(all_rows.select(present).rename({"_group": "group"}).write_json())
+        return
+
+    table = Table(
+        title=f"Anomalies — run {run_id[:12]}",
+        show_header=True,
+        show_lines=True,
+        header_style="bold",
+    )
+    table.add_column("#", justify="right", style="bold cyan", no_wrap=True)
+    table.add_column("score", justify="right")
+    table.add_column("kind", style="dim", no_wrap=True)
+    if multi_group:
+        table.add_column("group")
+    for r in reason_cols:
+        table.add_column(r.replace("reason_", "reason "), overflow="fold")
+
+    for row in all_rows.iter_rows(named=True):
+        score_val = row.get("composite_score") or 0.0
+        cells: list[str] = [
+            str(row.get("rank", "")),
+            f"{score_val:.4f}",
+            str(row.get("attribution_kind", "") or ""),
+        ]
+        if multi_group:
+            cells.append(str(row.get("_group", "")))
+        for r in reason_cols:
+            cells.append(str(row.get(r) or "—"))
+        table.add_row(*cells)
+
+    console.print(table)
+    console.print(f"  [dim]{len(all_rows)} anomaly row(s)   run={run_id}   workspace={ws_path}[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# sorethumb explain-plan
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="explain-plan")
+def explain_plan(
+    run_id: Annotated[str | None, typer.Argument(help="Run ID whose plan to show.")] = None,  # noqa: ARG001
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+    json_output: _JSON_OPT = False,
+) -> None:
+    """Print the FeaturePlan for a run — what was dropped, encoded, derived, and why."""
+    _setup_logging(log_level or "INFO")
+    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    ws_path = Path(cfg.run.workdir)
+    cache_dir = ws_path / "cache" / "datasets"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    df = load_dataset(cfg.source, cache_dir=cache_dir)
+    plan = build_feature_plan(df, cfg)
+
+    if json_output:
+        typer.echo(plan.to_json())
+        return
+
+    table = Table(title="Feature plan", show_header=True, header_style="bold cyan")
+    table.add_column("Column")
+    table.add_column("Class", style="yellow")
+    table.add_column("Treatment", style="cyan")
+    table.add_column("Reason")
+
+    for dec in plan.decisions or []:
+        table.add_row(dec.column, dec.col_class.value, dec.treatment.value, dec.reason or "")
+    console.print(table)
+
+    console.print(f"\n[bold]Output features:[/bold] {len(plan.output_features)}")
+
+
+# ---------------------------------------------------------------------------
+# sorethumb detectors
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def detectors(
+    json_output: _JSON_OPT = False,
+) -> None:
+    """List all registered detectors (built-in and third-party extensions)."""
+    names = list_detectors()
+    from sorethumb_ml.detectors import registry as _reg  # noqa: PLC0415
+
+    if json_output:
+        out = []
+        for name in names:
+            cls = _reg[name]
+            out.append(
+                {
+                    "name": name,
+                    "tree_shap": getattr(cls, "supports_tree_shap", False),
+                    "train_row_cap": getattr(cls, "default_train_row_cap", None),
+                }
+            )
+        typer.echo(json.dumps(out))
+        return
+
+    table = Table(title="Registered detectors", show_header=True, header_style="bold cyan")
+    table.add_column("Name", style="white")
+    table.add_column("TreeSHAP", justify="center")
+    table.add_column("Default train cap", justify="right")
+
+    for name in names:
+        cls = _reg[name]
+        table.add_row(
+            name,
+            "✓" if getattr(cls, "supports_tree_shap", False) else "—",
+            str(getattr(cls, "default_train_row_cap", "none")),
+        )
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# sorethumb config check / schema
+# ---------------------------------------------------------------------------
+
+
+@config_app.command(name="check")
+def config_check(
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    json_output: _JSON_OPT = False,
+) -> None:
+    """Validate a config file and report every error at once.
+
+    Use --json to print the fully-resolved config (defaults, env vars, and
+    CLI overrides all applied) as JSON, with credentials redacted -- useful
+    to inspect what a run would actually use before there's a run to
+    `config show` from.
+    """
+    cfg = _load_config(config, workdir=workdir)
+    if json_output:
+        typer.echo(json.dumps(_redact_config(cfg), indent=2))
+        return
+    console.print("[green]Config is valid.[/green]")
+    console.print(f"  workdir: {cfg.run.workdir}")
+    console.print(f"  detectors: {[d.name for d in cfg.detectors if d.enabled]}")
+
+
+@config_app.command(name="schema")
+def config_schema(
+    output: Annotated[Path | None, typer.Option("--output", "-o", help="Write schema to this file.")] = None,
+) -> None:
+    """Emit the JSON schema for sorethumb.toml."""
+    schema = Config.model_json_schema()
+    schema_str = json.dumps(schema, indent=2)
+    if output:
+        output.write_text(schema_str, encoding="utf-8")
+        console.print(f"[green]Schema written:[/green] {output}")
+    else:
+        typer.echo(schema_str)
+
+
+@config_app.command(name="show")
+def config_show(
+    run_id: Annotated[str, typer.Argument(help="Run ID whose config to display.")],
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    json_output: _JSON_OPT = False,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Write config as a re-usable sorethumb.toml to this path."),
+    ] = None,
+) -> None:
+    """Display the exact config used for a past run.
+
+    By default prints a human-readable summary. Use --json for the raw JSON
+    or --output <path> to reconstruct a sorethumb.toml you can edit and re-run.
+    """
+    cfg = _load_config(config, workdir=workdir)
+    ws_path = Path(cfg.run.workdir)
+
+    with Workspace.open(ws_path) as ws:
+        run_row = ws.store.get_run(run_id)
+
+    if run_row is None:
+        err_console.print(f"[red]Run not found:[/red] {run_id}")
+        raise typer.Exit(1)
+
+    config_json: str = run_row.get("config_json") or "{}"
+
+    if json_output:
+        typer.echo(json.dumps(json.loads(config_json), indent=2))
+        return
+
+    run_cfg = Config.model_validate_json(config_json)
+
+    if output is not None:
+        _write_minimal_toml(output, run_cfg)
+        console.print(f"[green]Config written:[/green] {output}")
+        return
+
+    config_hash = run_row.get("config_hash", "")
+    console.print(f"[bold]Config for run:[/bold] {run_id}  [dim](hash: {config_hash[:8]})[/dim]")
+    console.print(f"  Source URI: {run_cfg.source.uri}")
+    console.print(f"  Workdir:    {run_cfg.run.workdir}")
+    console.print(f"  Seed:       {run_cfg.run.seed}")
+
+    det_table = Table(title="Detectors", show_header=True, header_style="bold cyan")
+    det_table.add_column("Name", style="white")
+    det_table.add_column("Enabled", justify="center")
+    det_table.add_column("Train row cap", justify="right")
+    det_table.add_column("Params")
+
+    for det in run_cfg.detectors:
+        cap = str(det.train_row_cap) if det.train_row_cap is not None else "default"
+        params_str = ", ".join(f"{k}={v}" for k, v in (det.params or {}).items()) or "—"
+        det_table.add_row(
+            det.name,
+            "yes" if det.enabled else "no",
+            cap,
+            params_str,
+        )
+    console.print(det_table)
+
+    scoring = run_cfg.scoring
+    console.print("[bold]Scoring:[/bold]")
+    console.print(f"  combination   = {scoring.combination}")
+    console.print(f"  contamination = {scoring.contamination}")
+
+    console.print("\n[dim]Use --json for the full config or --output <path> to save as sorethumb.toml[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# sorethumb workspace *
+# ---------------------------------------------------------------------------
+
+
+@workspace_app.command(name="ls")
+def workspace_ls(
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+    json_output: _JSON_OPT = False,
+) -> None:
+    """List runs, datasets, and artefact counts in the workspace."""
+    _setup_logging(log_level or "INFO")
+    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    ws_path = Path(cfg.run.workdir)
+
+    with Workspace.open(ws_path) as ws:
+        runs = ws.store.list_runs(limit=50)
+
+    if json_output:
+        typer.echo(json.dumps({"runs": runs}, default=str))
+        return
+
+    console.print(f"[bold]Workspace:[/bold] {ws_path}")
+    console.print(f"  Runs: {len(runs)}")
+
+    if runs:
+        table = Table(show_header=True)
+        table.add_column("Run ID")
+        table.add_column("Status")
+        table.add_column("Started")
+        for r in runs[:10]:
+            table.add_row(
+                str(r.get("run_id", ""))[:24],
+                str(r.get("status", "")),
+                str(r.get("started_at", ""))[:19],
+            )
+        console.print(table)
+
+
+@workspace_app.command(name="du")
+def workspace_du(
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+) -> None:
+    """Show disk usage broken down by regenerable vs non-regenerable artefacts."""
+    _setup_logging(log_level or "INFO")
+    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    ws_path = Path(cfg.run.workdir)
+
+    total_bytes = 0
+    for f in ws_path.rglob("*"):
+        if f.is_file():
+            total_bytes += f.stat().st_size
+
+    def _fmt(b: int) -> str:
+        for unit in ("B", "KB", "MB", "GB"):
+            if b < 1024:
+                return f"{b:.1f} {unit}"
+            b //= 1024
+        return f"{b:.1f} TB"
+
+    console.print(f"[bold]Workspace:[/bold] {ws_path}")
+    console.print(f"  Total: {_fmt(total_bytes)}")
+
+
+@workspace_app.command(name="prune")
+def workspace_prune(
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+    days: Annotated[int, typer.Option("--days", help="Retention window in days.")] = 90,
+    dry_run: _DRY_RUN_OPT = False,
+) -> None:
+    """Remove regenerable artefacts and failed runs older than --days.
+
+    --dry-run prints what would be removed. A real prune removes files and
+    database rows together — never one without the other.
+    """
+    _setup_logging(log_level or "INFO")
+    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    ws_path = Path(cfg.run.workdir)
+
+    try:
+        with Workspace.open(ws_path) as ws:
+            removed = ws.prune(days, dry_run=dry_run)
+    except SorethumbError as exc:
+        err_console.print(f"[red]workspace prune failed:[/red] {exc}")
+        raise typer.Exit(2) from exc
+
+    prefix = "Would remove" if dry_run else "Removed"
+    for item in removed:
+        console.print(f"  {prefix}: {item}")
+    console.print(f"[green]{prefix} {len(removed)} item(s).[/green]")
+
+
+@workspace_app.command(name="vacuum")
+def workspace_vacuum(
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+) -> None:
+    """Run SQLite VACUUM and reconcile orphan files with no database row."""
+    _setup_logging(log_level or "INFO")
+    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    ws_path = Path(cfg.run.workdir)
+
+    with Workspace.open(ws_path) as ws:
+        ws.store.vacuum()
+    console.print("[green]Vacuum complete.[/green]")
+
+
+@workspace_app.command(name="migrate")
+def workspace_migrate(
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+    dry_run: _DRY_RUN_OPT = False,
+) -> None:
+    """Apply pending schema migrations to the workspace database."""
+    _setup_logging(log_level or "INFO")
+    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+
+    if dry_run:
+        console.print("[yellow]DRY RUN — no migrations applied.[/yellow]")
+        return
+
+    ws_path = Path(cfg.run.workdir)
+    # Opening the workspace runs pending migrations automatically.
+    # If the workspace doesn't exist yet, init it first.
+    if ws_path.exists() and (ws_path / "sorethumb.db").exists():
+        with Workspace.open(ws_path):
+            pass
+    else:
+        ws_path.mkdir(parents=True, exist_ok=True)
+        with Workspace.init(ws_path):
+            pass
+    console.print("[green]Migrations up to date.[/green]")
+
+
+# Minimum path segments after the filesystem/drive anchor a reset target
+# must have. Below this, a path is too shallow to plausibly be a dedicated,
+# disposable workspace directory rather than an important top-level location
+# reached by a typo or a misconfigured workdir (e.g. "/Users", "/home").
+_MIN_RESET_DEPTH = 3
+
+
+def _guard_reset_target(ws_path: Path) -> None:
+    """Refuse `workspace reset` against a path that is almost certainly not a disposable workspace, regardless of --yes.
+
+    Applied *in addition to* -- never instead of -- verifying the target
+    actually opens as a Workspace: a marker file existing inside one of
+    these locations, however unlikely, would still not make deleting it
+    safe.
+    """
+    reasons: list[str] = []
+    if ws_path == Path(ws_path.anchor):
+        reasons.append("it is a filesystem/drive root")
+    if ws_path == Path.home().resolve():
+        reasons.append("it is your home directory")
+    if ws_path == Path.cwd().resolve():
+        reasons.append("it is the current working directory")
+    if (ws_path / ".git").exists():
+        reasons.append("it looks like a git repository root (contains .git)")
+    depth = len(ws_path.parts) - 1  # segments after the anchor
+    if depth < _MIN_RESET_DEPTH:
+        reasons.append(
+            f"it is only {depth} path segment(s) below the root (minimum "
+            f"{_MIN_RESET_DEPTH}) -- too shallow to plausibly be a dedicated "
+            "workspace directory"
+        )
+    if reasons:
+        err_console.print(f"[red]Refusing to reset {ws_path}:[/red]")
+        for reason in reasons:
+            err_console.print(f"  - {reason}")
+        raise typer.Exit(2)
+
+
+@workspace_app.command(name="reset")
+def workspace_reset(
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", help="Skip interactive confirmation (for unattended use)."),
+    ] = False,
+) -> None:
+    """Destructively delete all workspace data.
+
+    Requires interactive confirmation of the workspace path (or --yes for
+    unattended use). Named explicitly so you know exactly what will be destroyed
+    before it happens.
+
+    Refuses outright -- regardless of --yes -- unless the target actually
+    opens as a sorethumb workspace, and rejects a filesystem/drive root, your
+    home directory, the current working directory, a git repository root, or
+    a suspiciously shallow path (see _guard_reset_target).
+    """
+    _setup_logging(log_level or "INFO")
+    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    ws_path = Path(cfg.run.workdir).resolve()
+
+    _guard_reset_target(ws_path)
+
+    try:
+        with Workspace.open(ws_path):
+            pass
+    except SorethumbError as exc:
+        err_console.print(f"[red]Refusing to reset {ws_path}: not a sorethumb workspace ({exc})[/red]")
+        raise typer.Exit(2) from exc
+
+    console.print(f"[red bold]This will destroy:[/red bold] {ws_path}")
+    if not yes:
+        console.print("Type the full workspace path to confirm (Ctrl-C to abort):")
+        typed = input("> ").strip()
+        if typed != str(ws_path):
+            err_console.print("[red]Path did not match. Aborting.[/red]")
+            raise typer.Exit(1)
+
+    import shutil  # noqa: PLC0415
+
+    try:
+        shutil.rmtree(ws_path)
+    except OSError as exc:
+        err_console.print(f"[red]Failed to fully delete {ws_path}:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    console.print(f"[green]Workspace destroyed:[/green] {ws_path}")
+
+
+# ---------------------------------------------------------------------------
+# sorethumb benchmark
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def benchmark(
+    log_level: _LOG_LEVEL_OPT = None,
+    seeds: Annotated[
+        int,
+        typer.Option(
+            "--seeds",
+            help=(
+                "Legacy real-dataset/synthetic suite: repeat each (dataset, detector) pair over "
+                "this many seeds and report mean ± std, instead of a single lucky/unlucky draw."
+            ),
+        ),
+    ] = 5,
+    pipeline_seeds: Annotated[
+        int,
+        typer.Option(
+            "--pipeline-seeds",
+            help=(
+                "Full-pipeline scenario suite: repeat each (scenario, ablation) cell over this "
+                "many seeds and report mean ± 95% CI."
+            ),
+        ),
+    ] = 3,
+    legacy: Annotated[
+        bool,
+        typer.Option(
+            "--legacy/--no-legacy",
+            help=(
+                "Run the real-dataset (KDDCup99/Covtype) + bare-detector synthetic suite "
+                "(requires the [benchmark] extra)."
+            ),
+        ),
+    ] = True,
+    pipeline: Annotated[
+        bool,
+        typer.Option(
+            "--pipeline/--no-pipeline",
+            help=(
+                "Run the full-pipeline mixed numeric+categorical scenario suite "
+                "(point/local/contextual/clustered/masking/swamping/varying-density)."
+            ),
+        ),
+    ] = True,
+) -> None:
+    """Run the evaluation harness and refresh the README's benchmark tables.
+
+    Two independent suites, both on by default: --pipeline (mixed-type
+    synthetic scenarios through the real feature pipeline, no extra
+    dependencies) and --legacy (real-dataset + bare-detector synthetic,
+    requires the [benchmark] extra). Disable either with --no-pipeline /
+    --no-legacy for a faster, narrower run.
+    """
+    _setup_logging(log_level or "INFO")
+    readme_path = Path(__file__).parent.parent.parent / "README.md"
+    total_rows = 0
+
+    if legacy:
+        try:
+            import datasets  # noqa: PLC0415, F401
+        except ImportError:
+            err_console.print(
+                "[red]The benchmark extra is not installed; skipping the legacy suite.[/red]\n"
+                "Install with: uv pip install 'sorethumb-ml[benchmark]', or pass --no-legacy."
+            )
+        else:
+            from sorethumb_ml.evaluate.benchmark import (  # noqa: PLC0415
+                BenchmarkConfig,
+                generate_metadata,
+                inject_into_readme,
+                run_benchmark,
+                write_outputs,
+            )
+
+            cfg = BenchmarkConfig(n_seeds=seeds)
+            metadata = generate_metadata()
+            console.print(f"[bold]Running legacy benchmark harness ({seeds} seed(s) per pair)…[/bold]")
+            rows = run_benchmark(cfg)
+            if inject_into_readme(rows, readme_path, metadata):
+                console.print(f"[green]Legacy benchmark table injected into {readme_path}[/green]")
+            md_path, csv_path = write_outputs(rows, Path("benchmark_results"), metadata)
+            console.print(f"Legacy results written to {md_path} and {csv_path}")
+            total_rows += len(rows)
+
+    if pipeline:
+        from sorethumb_ml.evaluate.pipeline_benchmark import (  # noqa: PLC0415
+            PipelineBenchmarkConfig,
+            assert_complete_and_error_free,
+            expected_cells,
+            run_pipeline_benchmark,
+        )
+        from sorethumb_ml.evaluate.pipeline_benchmark import (  # noqa: PLC0415
+            inject_into_readme as inject_pipeline_readme,
+        )
+        from sorethumb_ml.evaluate.pipeline_benchmark import (  # noqa: PLC0415
+            write_outputs as write_pipeline_outputs,
+        )
+
+        console.print(
+            f"[bold]Running full-pipeline scenario benchmark ({pipeline_seeds} seed(s) per cell)…[/bold]"
+        )
+        pcfg = PipelineBenchmarkConfig(n_seeds=pipeline_seeds)
+        prows = run_pipeline_benchmark(pcfg)
+        try:
+            assert_complete_and_error_free(prows, expected_cells(pcfg))
+        except RuntimeError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+        if inject_pipeline_readme(prows, readme_path):
+            console.print(f"[green]Pipeline benchmark table injected into {readme_path}[/green]")
+        pmd_path, pcsv_path = write_pipeline_outputs(prows, Path("benchmark_results"))
+        console.print(f"Pipeline results written to {pmd_path} and {pcsv_path}")
+        total_rows += len(prows)
+
+    console.print(f"\n[bold]Done.[/bold] {total_rows} result(s).")
+
+
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
+
+
+def _exit_code_for(result: RunResult) -> int:
+    """1 if any group failed, a requested report failed to render, or a group selector matched nothing.
+
+    0 otherwise. A report failure never means the detection/scoring results are wrong --
+    but the user explicitly asked for a report and didn't get one, and a
+    silent success-shaped exit code would hide that. A group_selection_error
+    (P1-4) means the run processed *zero* groups because --only-group/
+    --group-filter matched none of them -- n_failed alone can't catch this,
+    since an empty groups list makes it (and n_succeeded/n_skipped) 0 too,
+    which would otherwise print and exit exactly like "nothing to do, all
+    fine" rather than "your selector likely has a typo".
+    """
+    return 1 if (result.n_failed or result.report_status == "failed" or result.group_selection_error) else 0
+
+
+def _print_run_summary(result: RunResult) -> None:
+    status_color = "red" if (result.n_failed or result.group_selection_error) else "green"
+    console.print(
+        f"\n[{status_color}]Run {result.run_id}[/{status_color}]  "
+        f"succeeded={result.n_succeeded}  skipped={result.n_skipped}  failed={result.n_failed}"
+    )
+    if result.group_selection_error:
+        err_console.print(f"  [red]{result.group_selection_error}[/red]")
+    if result.source_run_id:
+        console.print(f"  [dim]Scored forward from run {result.source_run_id} (no re-fitting).[/dim]")
+
+    total_rows = sum(g.n_records for g in result.groups if g.status in ("success", "skipped"))
+    if result.n_anomalies or total_rows:
+        pct = (
+            f" ({100.0 * result.n_anomalies / total_rows:.2f}% of {total_rows:,} rows)" if total_rows else ""
+        )
+        console.print(
+            f"  Flagged for review: {result.n_anomalies:,}{pct} — "
+            "the review shortlist at the chosen budget, [dim]not an estimate of true prevalence[/dim]"
+        )
+
+    # Realised per-detector rates: what each detector's own heuristic boundary
+    # flagged. contamination='auto' is the median of these — surfaced so it is
+    # not read as "how many anomalies you have".
+    rate_groups = [g for g in result.groups if g.detector_flag_rates]
+    if rate_groups:
+        console.print("\n  [bold]Realised detector flag rates[/bold] (own natural boundary):")
+        for g in rate_groups[:8]:
+            parts = ", ".join(f"{d}={r * 100:.2f}%" for d, r in g.detector_flag_rates.items())
+            dropped = (
+                f"  [yellow]dropped: {', '.join(g.dropped_detectors)}[/yellow]" if g.dropped_detectors else ""
+            )
+            label = "" if g.group_label == "__all__" else f"[{g.group_label}] "
+            console.print(f"    {label}{parts}{dropped}")
+        if len(rate_groups) > 8:
+            console.print(f"    [dim]… and {len(rate_groups) - 8} more groups[/dim]")
+
+    # Print per-group timings, slowest first
+    timed = sorted(
+        [g for g in result.groups if g.status != "skipped"],
+        key=lambda g: g.elapsed_seconds,
+        reverse=True,
+    )
+    if timed:
+        console.print("\n  [bold]Group timings (slowest first):[/bold]")
+        for g in timed[:10]:
+            flag = " [red]SLOW[/red]" if g.elapsed_seconds > 60 else ""
+            console.print(
+                f"    {g.group_label:30s}  {g.elapsed_seconds:6.1f}s  anomalies={g.n_anomalies}{flag}"
+            )
+
+    if result.warnings_issued:
+        console.print("\n  [yellow bold]Warnings:[/yellow bold]")
+        for msg in result.warnings_issued:
+            console.print(f"    [yellow]{msg}[/yellow]")
+
+    if result.n_failed:
+        console.print("\n  [red bold]Failed groups:[/red bold]")
+        for g in result.groups:
+            if g.status == "failed":
+                console.print(f"    {g.group_label}: {g.error}")
+
+    if result.report_status == "success":
+        console.print(f"\n[green]Report:[/green] {result.report_path}")
+    elif result.report_status == "failed":
+        err_console.print(
+            "\n[red bold]Report generation failed[/red bold] -- detection and scoring "
+            "completed successfully; see the log for the underlying exception."
+        )
+
+
+def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
+    return {
+        "run_id": result.run_id,
+        "dataset_uri": result.dataset_uri,
+        "dataset_fp": result.dataset_fp,
+        "snapshot_fp": result.snapshot_fp,
+        "source_run_id": result.source_run_id,
+        "id_identity_scope": result.id_identity_scope,
+        "group_selection_error": result.group_selection_error,
+        "period_label": result.period_label,
+        "n_succeeded": result.n_succeeded,
+        "n_skipped": result.n_skipped,
+        "n_failed": result.n_failed,
+        "n_anomalies": result.n_anomalies,
+        "report_path": str(result.report_path) if result.report_path else None,
+        "report_status": result.report_status,
+        "started_at": result.started_at,
+        "finished_at": result.finished_at,
+        "warnings_issued": result.warnings_issued,
+        "groups": [
+            {
+                "group_key": g.group_key,
+                "group_label": g.group_label,
+                "n_records": g.n_records,
+                "n_flagged": g.n_anomalies,  # review shortlist size, not a prevalence estimate
+                "n_anomalies": g.n_anomalies,  # kept for compatibility; same value as n_flagged
+                "detector_flag_rates": g.detector_flag_rates,
+                "dropped_detectors": g.dropped_detectors,
+                "status": g.status,
+                "error": g.error,
+                "elapsed_seconds": g.elapsed_seconds,
+                "warnings_issued": g.warnings_issued,
+            }
+            for g in result.groups
+        ],
+    }

@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 if TYPE_CHECKING:
-    from sorethumb.evaluate.benchmark import BenchmarkRow
+    from sorethumb_ml.evaluate.benchmark import BenchmarkRow
 
 pytestmark = pytest.mark.benchmark
 
@@ -53,7 +53,7 @@ def benchmark_rows(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[tuple[str, str], BenchmarkRow]:
     """Run the synthetic benchmark once for every guarded detector."""
-    from sorethumb.evaluate.benchmark import BenchmarkConfig, run_benchmark
+    from sorethumb_ml.evaluate.benchmark import BenchmarkConfig, run_benchmark
 
     cfg = BenchmarkConfig(
         dataset_names=list(_SYNTHETIC_DATASETS),

@@ -11,7 +11,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from sorethumb.store.workspace import make_group_key
+from sorethumb_ml.store.workspace import make_group_key
 from tests.factories.hypothesis_profiles import scaled_examples
 
 pytestmark = pytest.mark.property

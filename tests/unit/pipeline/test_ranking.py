@@ -2,7 +2,7 @@
 
 ``_flagged_idx_by_score_desc`` is the single source of truth _finalize_group
 uses for both attribution ordering and the persisted ``rank`` column. See
-src/sorethumb/_pipeline.py for the full rationale: composite_score is not
+src/sorethumb_ml/_pipeline.py for the full rationale: composite_score is not
 necessarily the statistic that determined anomaly_flag (true for
 combination="intersection"/"union", where the flag is a per-detector vote),
 so a rank derived from a fresh global sort of composite_score can assign a
@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from sorethumb._pipeline import _flagged_idx_by_score_desc
+from sorethumb_ml._pipeline import _flagged_idx_by_score_desc
 
 pytestmark = pytest.mark.unit
 

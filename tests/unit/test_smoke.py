@@ -9,8 +9,8 @@ import warnings
 import polars as pl
 import pytest
 
-import sorethumb
-from sorethumb.errors import ColumnDroppedWarning
+import sorethumb_ml
+from sorethumb_ml.errors import ColumnDroppedWarning
 from tests.synth import make_frame
 
 pytestmark = pytest.mark.unit
@@ -21,11 +21,11 @@ def test_version_attribute() -> None:
     not a second hard-coded copy of pyproject.toml's version that can drift
     from it -- so this asserts equality with that metadata, never a literal
     version string. Looked up by the PyPI distribution name "sorethumb-ml",
-    which differs from this import package's own name "sorethumb" (see
+    which differs from this import package's own name "sorethumb_ml" (see
     prompts/release-launch-plan.md Item 1)."""
     import importlib.metadata
 
-    assert sorethumb.__version__ == importlib.metadata.version("sorethumb-ml")
+    assert sorethumb_ml.__version__ == importlib.metadata.version("sorethumb-ml")
 
 
 def test_strict_mode_warning_becomes_error() -> None:
@@ -87,5 +87,5 @@ def test_synth_deterministic() -> None:
 
 
 def test_package_importable() -> None:
-    mod = importlib.import_module("sorethumb")
+    mod = importlib.import_module("sorethumb_ml")
     assert hasattr(mod, "__version__")

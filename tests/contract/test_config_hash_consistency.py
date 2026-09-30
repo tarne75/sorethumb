@@ -24,8 +24,8 @@ import numpy as np
 import polars as pl
 import pytest
 
-from sorethumb._pipeline import run_detection
-from sorethumb.store.workspace import Workspace
+from sorethumb_ml._pipeline import run_detection
+from sorethumb_ml.store.workspace import Workspace
 from tests.factories.configs import make_config
 from tests.factories.frames import write_planted_csv
 

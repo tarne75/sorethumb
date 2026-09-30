@@ -39,7 +39,7 @@ name: Publish (TestPyPI rehearsal)
 #   - The project appears at https://test.pypi.org/project/sorethumb-ml/
 #     with the expected version.
 #   - `pip install -i https://test.pypi.org/simple/ sorethumb-ml` succeeds
-#     in a clean venv, and `sorethumb --version` / `import sorethumb` work.
+#     in a clean venv, and `sorethumb --version` / `import sorethumb_ml` work.
 #
 # TestPyPI file uploads are just as immutable as real PyPI's -- the same
 # exact version can never be re-uploaded, even after being yanked. Re-
@@ -93,7 +93,7 @@ jobs:
           python -m venv /tmp/verify-version-venv
           /tmp/verify-version-venv/bin/pip install --upgrade pip -q
           /tmp/verify-version-venv/bin/pip install "$whl" -q
-          runtime_ver="$(/tmp/verify-version-venv/bin/python -c "import sorethumb; print(sorethumb.__version__)")"
+          runtime_ver="$(/tmp/verify-version-venv/bin/python -c "import sorethumb_ml; print(sorethumb_ml.__version__)")"
           echo "pyproject.version=$pkg  wheel_metadata_version=$wheel_ver  imported_runtime_version=$runtime_ver"
           if [ "$pkg" != "$wheel_ver" ] || [ "$pkg" != "$runtime_ver" ]; then
             echo "::error::version mismatch -- pyproject=$pkg wheel=$wheel_ver runtime=$runtime_ver"

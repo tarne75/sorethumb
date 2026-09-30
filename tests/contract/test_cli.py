@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from sorethumb.cli import app
+from sorethumb_ml.cli import app
 from tests.factories.frames import write_grouped_csv as _write_csv
 from tests.factories.golden import assert_matches_golden
 
@@ -87,7 +87,7 @@ def workspace(tmp_path: Path):
 
 def _run_and_get_run_id(toml_path: Path, workdir: Path) -> str:
     runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
-    from sorethumb import Workspace
+    from sorethumb_ml import Workspace
 
     with Workspace.open(workdir) as ws:
         runs = ws.store.list_runs(limit=1)
@@ -150,7 +150,7 @@ def test_init_does_not_overwrite_existing(tmp_path: Path):
 
 def test_init_toml_lists_extra_params_commented(tmp_path: Path):
     """The starter file lists every sklearn extra_params key, commented out."""
-    from sorethumb.detectors.isolation_forest import IsolationForestDetector
+    from sorethumb_ml.detectors.isolation_forest import IsolationForestDetector
 
     runner.invoke(app, ["init", str(tmp_path)])
     text = (tmp_path / "sorethumb.toml").read_text(encoding="utf-8")
@@ -171,8 +171,8 @@ def test_init_toml_lists_extra_params_commented(tmp_path: Path):
 
 
 def test_write_minimal_toml_escapes_windows_backslash_path(tmp_path: Path):
-    from sorethumb.cli import _write_minimal_toml
-    from sorethumb.config import Config, DetectorConfig, RunConfig, SourceConfig
+    from sorethumb_ml.cli import _write_minimal_toml
+    from sorethumb_ml.config import Config, DetectorConfig, RunConfig, SourceConfig
 
     cfg = Config(
         source=SourceConfig(uri=r"C:\Users\alice\data\events.csv"),
@@ -194,8 +194,8 @@ def test_write_minimal_toml_escapes_windows_backslash_path(tmp_path: Path):
 
 
 def test_write_minimal_toml_escapes_quotes_and_control_characters(tmp_path: Path):
-    from sorethumb.cli import _write_minimal_toml
-    from sorethumb.config import Config, DetectorConfig, RunConfig, SourceConfig
+    from sorethumb_ml.cli import _write_minimal_toml
+    from sorethumb_ml.config import Config, DetectorConfig, RunConfig, SourceConfig
 
     tricky = 'a "quoted" path\twith\ta tab\nand a newline'
     cfg = Config(
@@ -218,9 +218,9 @@ def test_write_minimal_toml_renders_every_builtin_detector(tmp_path: Path):
     must round-trip through the writer, since a live Config (which this
     function serves, unlike the static starter template) can contain any
     of them."""
-    from sorethumb.cli import _write_minimal_toml
-    from sorethumb.config import Config, DetectorConfig, RunConfig, SourceConfig
-    from sorethumb.detectors import registry
+    from sorethumb_ml.cli import _write_minimal_toml
+    from sorethumb_ml.config import Config, DetectorConfig, RunConfig, SourceConfig
+    from sorethumb_ml.detectors import registry
 
     cfg = Config(
         source=SourceConfig(uri="/data/events.csv"),
@@ -241,8 +241,8 @@ def test_write_minimal_toml_renders_nested_extra_params(tmp_path: Path):
     """A non-empty nested params.extra_params dict (the exact shape P0-4
     called out -- json.dumps previously emitted invalid TOML inline-table
     syntax for it) must round-trip correctly."""
-    from sorethumb.cli import _write_minimal_toml
-    from sorethumb.config import Config, DetectorConfig, RunConfig, SourceConfig
+    from sorethumb_ml.cli import _write_minimal_toml
+    from sorethumb_ml.config import Config, DetectorConfig, RunConfig, SourceConfig
 
     cfg = Config(
         source=SourceConfig(uri="/data/events.csv"),
@@ -322,8 +322,8 @@ def test_redact_config_does_not_mutate_environment(monkeypatch: pytest.MonkeyPat
     SORETHUMB_TOKEN/SORETHUMB_PASSWORD to the literal string "REDACTED"),
     which would corrupt a real credential for the rest of the process. It
     must now be a pure function."""
-    from sorethumb.cli import _redact_config
-    from sorethumb.config import Config, RunConfig, SourceConfig
+    from sorethumb_ml.cli import _redact_config
+    from sorethumb_ml.config import Config, RunConfig, SourceConfig
 
     monkeypatch.setenv("SORETHUMB_TOKEN", "do-not-touch-me")
     cfg = Config(
@@ -338,8 +338,8 @@ def test_redact_config_keeps_auth_env_var_name(monkeypatch: pytest.MonkeyPatch):
     """The env var *name* is not a secret (see
     test_auth_token_not_in_config_json) -- only its value is -- so it's
     kept, consistent with what's already persisted for a real run."""
-    from sorethumb.cli import _redact_config
-    from sorethumb.config import Config, RunConfig, SourceConfig
+    from sorethumb_ml.cli import _redact_config
+    from sorethumb_ml.config import Config, RunConfig, SourceConfig
 
     monkeypatch.setenv("MY_TOKEN", "secret-value")
     cfg = Config(
@@ -478,8 +478,8 @@ def test_run_summary_and_json_surface_warnings_issued():
     formatting/serialisation contract these two functions own, the same way
     a to_dict() test would.
     """
-    from sorethumb._pipeline import GroupSummary, RunResult
-    from sorethumb.cli import _print_run_summary, _run_result_to_dict
+    from sorethumb_ml._pipeline import GroupSummary, RunResult
+    from sorethumb_ml.cli import _print_run_summary, _run_result_to_dict
 
     warning_msg = "Three-way intersection flagged zero rows: no row passed all 3 configured detectors."
     group = GroupSummary(
@@ -514,7 +514,7 @@ def test_run_summary_and_json_surface_warnings_issued():
 
     from rich.console import Console
 
-    import sorethumb.cli as cli_mod
+    import sorethumb_ml.cli as cli_mod
 
     buf = Console(file=io.StringIO(), width=200)
     original = cli_mod.console
@@ -556,7 +556,7 @@ def test_show_prints_run_detail(workspace):
     _, toml_path, workdir = workspace
     runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
 
-    from sorethumb import Workspace
+    from sorethumb_ml import Workspace
 
     with Workspace.open(workdir) as ws:
         runs = ws.store.list_runs(limit=1)
@@ -675,14 +675,14 @@ def test_exit_2_on_config_error():
 
 def test_cli_only_imports_public_api():
     """Parse cli.py AST and assert no private sorethumb imports."""
-    cli_path = Path(__file__).parent.parent.parent / "src" / "sorethumb" / "cli.py"
+    cli_path = Path(__file__).parent.parent.parent / "src" / "sorethumb_ml" / "cli.py"
     source = cli_path.read_text(encoding="utf-8")
     tree = ast.parse(source)
 
-    # Collect all "from sorethumb.X" and "import sorethumb.X" statements
+    # Collect all "from sorethumb_ml.X" and "import sorethumb_ml.X" statements
     private_imports: list[str] = []
     public_modules = {
-        "sorethumb",  # top-level package (allowed for __version__)
+        "sorethumb_ml",  # top-level package (allowed for __version__)
     }
     # Sub-imports inside the CLI body that are inside TYPE_CHECKING blocks
     # are allowed (they never execute at runtime).
@@ -690,24 +690,25 @@ def test_cli_only_imports_public_api():
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             module = node.module or ""
-            if module.startswith("sorethumb.") and module not in public_modules:
+            if module.startswith("sorethumb_ml.") and module not in public_modules:
                 # Allow only the explicit re-export through the public API
                 private_imports.append(module)
 
-    # The only allowed sorethumb sub-import at the top level is sorethumb itself
-    # (via `import sorethumb` for __version__). All library sub-modules must
-    # be accessed through the public re-exports, OR inside functions (PLC0415).
+    # The only allowed sorethumb_ml sub-import at the top level is sorethumb_ml
+    # itself (via `import sorethumb_ml` for __version__). All library
+    # sub-modules must be accessed through the public re-exports, OR inside
+    # functions (PLC0415).
     # Filter out any that are inside function bodies (they're runtime-guarded).
     top_level_imports: list[str] = []
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.ImportFrom):
             module = node.module or ""
-            if module.startswith("sorethumb.") and not module.startswith("sorethumb.cli"):
+            if module.startswith("sorethumb_ml.") and not module.startswith("sorethumb_ml.cli"):
                 top_level_imports.append(module)
 
     # These sub-module imports are the public API surface (re-exported from __init__)
     allowed_sub_modules = {
-        "sorethumb",
+        "sorethumb_ml",
     }
     forbidden = [m for m in top_level_imports if m not in allowed_sub_modules]
     assert forbidden == [], (

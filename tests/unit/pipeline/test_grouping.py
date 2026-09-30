@@ -15,9 +15,9 @@ import datetime
 import polars as pl
 import pytest
 
-from sorethumb._pipeline import _slice_group_frame
-from sorethumb.profiling.plan import FeaturePlan
-from sorethumb.store.workspace import make_group_key
+from sorethumb_ml._pipeline import _slice_group_frame
+from sorethumb_ml.profiling.plan import FeaturePlan
+from sorethumb_ml.store.workspace import make_group_key
 
 pytestmark = pytest.mark.unit
 

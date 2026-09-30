@@ -120,7 +120,7 @@ def write_results_atomic(path: Path, results: list[CaseResult]) -> None:
     rather than a truncated/corrupt one -- this file is read back on every
     resume, so a partial write would otherwise cost the whole run's progress.
     """
-    from sorethumb._atomic import atomic_write_text  # noqa: PLC0415
+    from sorethumb_ml._atomic import atomic_write_text  # noqa: PLC0415
 
     payload = {
         "schema_version": CASE_SCHEMA_VERSION,

@@ -49,7 +49,7 @@ only the project owner can create.
 After a rehearsal run, verify by hand: the project appears at
 `https://test.pypi.org/project/sorethumb-ml/` with the expected version,
 and `pip install -i https://test.pypi.org/simple/ sorethumb-ml` succeeds in
-a clean venv (`sorethumb --version` and `import sorethumb` both work).
+a clean venv (`sorethumb --version` and `import sorethumb_ml` both work).
 
 ## Rolling back a bad release
 

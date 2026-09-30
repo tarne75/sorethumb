@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from sorethumb import Config
-from sorethumb._pipeline import run_detection
-from sorethumb.config import DetectorConfig
-from sorethumb.detectors.isolation_forest import IsolationForestDetector
+from sorethumb_ml import Config
+from sorethumb_ml._pipeline import run_detection
+from sorethumb_ml.config import DetectorConfig
+from sorethumb_ml.detectors.isolation_forest import IsolationForestDetector
 from tests.factories.configs import make_config
 from tests.factories.frames import write_planted_csv
 
@@ -78,7 +78,7 @@ def test_group_with_no_scoring_detectors_is_failed_not_complete(tmp_path: Path) 
     silently skipped as already complete) on the next call with the same
     inputs.
     """
-    from sorethumb import Workspace
+    from sorethumb_ml import Workspace
 
     csv = tmp_path / "data.csv"
     write_planted_csv(csv, n_normal=200, n_anomaly=3, seed=0)
@@ -115,7 +115,7 @@ def test_group_ledger_status_survives_detector_fit_failure_and_retry(tmp_path: P
     re-execute the group (not report false success from a stale 'complete'
     ledger row, and not report false failure once it truly works).
     """
-    from sorethumb import Workspace
+    from sorethumb_ml import Workspace
 
     csv = tmp_path / "data.csv"
     write_planted_csv(csv, n_normal=200, n_anomaly=3, seed=0)
@@ -155,7 +155,7 @@ def test_group_ledger_status_survives_score_samples_failure_and_retry(tmp_path: 
     """Same as the fit-failure case, but the exception comes from
     score_samples (after a successful fit) instead of fit itself.
     """
-    from sorethumb import Workspace
+    from sorethumb_ml import Workspace
 
     csv = tmp_path / "data.csv"
     write_planted_csv(csv, n_normal=200, n_anomaly=3, seed=0)

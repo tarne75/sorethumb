@@ -10,9 +10,9 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from sorethumb.config import Config, RunConfig, SourceConfig
-from sorethumb.features.build import apply_feature_plan, fit_features
-from sorethumb.profiling.plan import build_feature_plan
+from sorethumb_ml.config import Config, RunConfig, SourceConfig
+from sorethumb_ml.features.build import apply_feature_plan, fit_features
+from sorethumb_ml.profiling.plan import build_feature_plan
 from tests.factories.hypothesis_profiles import scaled_examples
 from tests.synth import make_frame
 

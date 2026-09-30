@@ -128,7 +128,7 @@ format = "csv"
 import polars as pl
 from sklearn.datasets import fetch_kddcup99
 
-from sorethumb import Config, SourceConfig, run_detection
+from sorethumb_ml import Config, SourceConfig, run_detection
 
 # Fetch the KDDCup99 10% subset and write a small CSV for the demo.
 # as_frame=True keeps real column names and dtypes (protocol_type / service /
@@ -303,9 +303,9 @@ in both — it accounts for class imbalance in a way ROC-AUC does not.
 
 ### Full-pipeline scenario benchmark
 
-`src/sorethumb/evaluate/pipeline_benchmark.py` fits a named taxonomy of
+`src/sorethumb_ml/evaluate/pipeline_benchmark.py` fits a named taxonomy of
 synthetic anomaly types — point, local, contextual, clustered, masking,
-swamping, varying-density (see `src/sorethumb/evaluate/scenarios.py`) — with
+swamping, varying-density (see `src/sorethumb_ml/evaluate/scenarios.py`) — with
 mixed numeric **and categorical** columns through the real feature pipeline
 (encoding, scaling, optional PCA, detectors, calibration, ensemble), never
 training and evaluating on the same rows. Every (scenario, ablation) cell
@@ -321,7 +321,7 @@ pipeline at all, for comparison (PyOD is deliberately not used here — see
 ablations exist in total (`AblationSpec`s: PCA on, standard scaler, each
 detector alone, all six detectors, composite/union combination), but only
 `default` is committed here to keep regeneration time bounded; run
-`sorethumb.evaluate.pipeline_benchmark.run_pipeline_benchmark` directly with
+`sorethumb_ml.evaluate.pipeline_benchmark.run_pipeline_benchmark` directly with
 other `ablation_names` for the rest. `flag_precision`/`flag_recall`/
 `flag_f1`/`flag_false_positive_rate`/`flag_count` describe the ensemble's
 *actual* `anomaly_flag` decision — distinct from `roc_auc`/`average_precision`/
@@ -380,7 +380,7 @@ matrix with a missing or errored cell (`assert_complete_and_error_free`).
 
 ### Real-dataset / legacy synthetic benchmark
 
-`src/sorethumb/evaluate/benchmark.py` fits bare detectors directly (no
+`src/sorethumb_ml/evaluate/benchmark.py` fits bare detectors directly (no
 feature pipeline) against KDDCup99, Covtype, and two synthetic Gaussian-plus-
 point-anomaly datasets. `k` comes from a fixed, label-independent 5% review
 budget shared across every dataset (not derived from the labels being
@@ -481,11 +481,11 @@ train_row_cap = 50_000
 ```
 
 **Register a third-party detector** without modifying sorethumb — implement the
-[Detector protocol](https://github.com/tarne75/sorethumb/blob/main/src/sorethumb/detectors/_protocol.py) and add an entry point
+[Detector protocol](https://github.com/tarne75/sorethumb/blob/main/src/sorethumb_ml/detectors/_protocol.py) and add an entry point
 to your package's `pyproject.toml`:
 
 ```toml
-[project.entry-points."sorethumb.detectors"]
+[project.entry-points."sorethumb_ml.detectors"]
 my_detector = "my_package.detectors:MyDetector"
 ```
 

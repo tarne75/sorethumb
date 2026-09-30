@@ -5,9 +5,9 @@ import warnings
 import numpy as np
 import pytest
 
-from sorethumb.errors import AntiCorrelatedMemberWarning
-from sorethumb.scoring.calibrate import Calibrator
-from sorethumb.scoring.combine import ScoreEnsemble
+from sorethumb_ml.errors import AntiCorrelatedMemberWarning
+from sorethumb_ml.scoring.calibrate import Calibrator
+from sorethumb_ml.scoring.combine import ScoreEnsemble
 
 pytestmark = pytest.mark.unit
 
@@ -233,7 +233,7 @@ def test_calibrator_compresses_large_distinct_reference_and_bounds_error():
     compressed (never silently truncated or resampled through
     interpolation), and the reported max_calibration_error must actually
     bound the observed deviation from the true (uncompressed) mid-rank CDF."""
-    from sorethumb.scoring.calibrate import _EXACT_MAX_UNIQUE
+    from sorethumb_ml.scoring.calibrate import _EXACT_MAX_UNIQUE
 
     rng = np.random.default_rng(3)
     ref = rng.standard_normal(_EXACT_MAX_UNIQUE + 20_000)  # all but certainly distinct
@@ -392,7 +392,7 @@ def test_intersection_ranking_is_median_not_min():
     anti-correlated member's score dominate the whole ensemble's ranking
     (the flag decision, an AND of natural_flag votes, is unaffected either
     way -- this only concerns combined_score/ranking)."""
-    from sorethumb.errors import ZeroAnomalyWarning
+    from sorethumb_ml.errors import ZeroAnomalyWarning
 
     n = 100
     a = np.linspace(0.1, 0.9, n)
@@ -423,7 +423,7 @@ def test_intersection_ranking_median_is_robust_to_one_anti_correlated_member():
     good_b = np.where(anomaly, 0.85, 0.15) + rng.normal(0, 0.01, n)
     bad_c = np.where(anomaly, 0.1, 0.9) + rng.normal(0, 0.01, n)  # anti-correlated
 
-    from sorethumb.errors import AntiCorrelatedMemberWarning, ZeroAnomalyWarning
+    from sorethumb_ml.errors import AntiCorrelatedMemberWarning, ZeroAnomalyWarning
 
     ens = ScoreEnsemble(combination="intersection", contamination="auto")
     # Neither warning is what this test is about -- both are expected,
@@ -462,7 +462,7 @@ def test_union_is_max():
 
 
 def test_exact_k_flags_breaks_ties_by_earliest_row_order():
-    from sorethumb.scoring.combine import _exact_k_flags
+    from sorethumb_ml.scoring.combine import _exact_k_flags
 
     scores = np.array([5.0, 5.0, 5.0, 4.0, 3.0, 3.0, 2.0])
     # k=2 falls inside the 3-way tie for the top score; the two EARLIEST
@@ -472,7 +472,7 @@ def test_exact_k_flags_breaks_ties_by_earliest_row_order():
 
 
 def test_exact_k_flags_flags_whole_tie_group_when_k_matches_its_size():
-    from sorethumb.scoring.combine import _exact_k_flags
+    from sorethumb_ml.scoring.combine import _exact_k_flags
 
     scores = np.array([5.0, 5.0, 5.0, 4.0, 3.0, 3.0, 2.0])
     flags = _exact_k_flags(scores, 3 / 7)
@@ -480,7 +480,7 @@ def test_exact_k_flags_flags_whole_tie_group_when_k_matches_its_size():
 
 
 def test_exact_k_flags_zero_and_full_contamination():
-    from sorethumb.scoring.combine import _exact_k_flags
+    from sorethumb_ml.scoring.combine import _exact_k_flags
 
     scores = np.array([1.0, 2.0, 3.0])
     np.testing.assert_array_equal(_exact_k_flags(scores, 0.0), [False, False, False])
@@ -583,7 +583,7 @@ def test_zero_anomaly_warning_on_deterministic_empty_three_way_intersection():
     construction (no 'all three' region, unlike the Venn-diagram test above)
     -- the three-way intersection is deterministically empty, a legitimate
     outcome that must be surfaced, not silently reported as zero anomalies."""
-    from sorethumb.errors import ZeroAnomalyWarning
+    from sorethumb_ml.errors import ZeroAnomalyWarning
 
     idx = np.arange(90)
     flag_a = (idx >= 0) & (idx < 10)
@@ -742,7 +742,7 @@ def test_agreement_falls_back_to_equal_when_nothing_correlates():
 def test_weighting_ignored_with_non_composite_combination_warns(caplog):
     import logging
 
-    with caplog.at_level(logging.WARNING, logger="sorethumb.scoring.combine"):
+    with caplog.at_level(logging.WARNING, logger="sorethumb_ml.scoring.combine"):
         ScoreEnsemble(weighting="agreement", combination="intersection")
     assert any("no effect" in r.message for r in caplog.records)
 
@@ -768,7 +768,7 @@ def test_guard_drops_member_anticorrelated_with_the_median_in_composite(caplog):
     flags = {k: v > 0.9 for k, v in scores.items()}
     ens = ScoreEnsemble(weighting="agreement", combination="composite", contamination=0.1)
 
-    with caplog.at_level(logging.WARNING, logger="sorethumb.scoring.combine"):
+    with caplog.at_level(logging.WARNING, logger="sorethumb_ml.scoring.combine"):
         result = ens.combine(scores, flags)
 
     assert result["dropped_members"] == ["c"]

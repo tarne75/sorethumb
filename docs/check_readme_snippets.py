@@ -79,7 +79,7 @@ def _check_toml(body: str) -> str | None:
     if not (top & _CONFIG_SECTIONS) or "project" in top or top - _CONFIG_SECTIONS - {"project"}:
         return None  # not a sorethumb config fragment (e.g. a pyproject entry-point block)
 
-    from sorethumb.config import Config  # noqa: PLC0415
+    from sorethumb_ml.config import Config  # noqa: PLC0415
 
     merged: dict = {"source": {"uri": "data.csv"}, "run": {"workdir": "."}}
     for k, v in data.items():
@@ -102,7 +102,7 @@ def _command_options() -> dict[tuple[str, ...], set[str]]:
     """
     import typer  # noqa: PLC0415
 
-    from sorethumb.cli import app  # noqa: PLC0415
+    from sorethumb_ml.cli import app  # noqa: PLC0415
 
     def _opts(cmd: object) -> set[str]:
         out: set[str] = set()

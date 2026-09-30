@@ -1,7 +1,7 @@
 """Detector-fitting test helpers.
 
 Detectors follow the protocol convention "higher score_samples() = more
-normal" (see src/sorethumb/detectors/_protocol.py); anomaly labels use the
+normal" (see src/sorethumb_ml/detectors/_protocol.py); anomaly labels use the
 opposite convention (1 = anomaly). ``detector_auc`` writes the sign flip
 once so callers never have to remember it.
 """
@@ -47,10 +47,10 @@ def ban_all_fitting(monkeypatch: pytest.MonkeyPatch) -> None:
     underlying sklearn estimator's ``fit`` raises ``_FitAttempted`` instead
     of running.
     """
-    import sorethumb._pipeline as pipe
-    from sorethumb.detectors.isolation_forest import IsolationForestDetector
-    from sorethumb.detectors.kmeans_distance import KMeansDetector
-    from sorethumb.detectors.one_class_svm import OneClassSVMDetector
+    import sorethumb_ml._pipeline as pipe
+    from sorethumb_ml.detectors.isolation_forest import IsolationForestDetector
+    from sorethumb_ml.detectors.kmeans_distance import KMeansDetector
+    from sorethumb_ml.detectors.one_class_svm import OneClassSVMDetector
 
     def _boom(*_a: object, **_k: object) -> None:
         raise _FitAttempted

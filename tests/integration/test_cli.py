@@ -17,7 +17,7 @@ import polars as pl
 import pytest
 from typer.testing import CliRunner
 
-from sorethumb.cli import app
+from sorethumb_ml.cli import app
 from tests.factories.frames import write_grouped_csv as _write_csv
 
 pytestmark = pytest.mark.integration
@@ -97,7 +97,7 @@ def workspace_grouped(tmp_path: Path):
 
 def _run_and_get_run_id(toml_path: Path, workdir: Path) -> str:
     runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
-    from sorethumb import Workspace
+    from sorethumb_ml import Workspace
 
     with Workspace.open(workdir) as ws:
         runs = ws.store.list_runs(limit=1)
@@ -194,8 +194,8 @@ def test_run_dry_run_registers_dataset_and_run_but_fits_nothing(workspace):
     assert result.exit_code == 0
     assert "DRY RUN" in result.stdout
 
-    from sorethumb import Workspace
-    from sorethumb.io.fingerprint import logical_dataset_id
+    from sorethumb_ml import Workspace
+    from sorethumb_ml.io.fingerprint import logical_dataset_id
 
     dataset_fp = logical_dataset_id(None, str(csv_path))
 
@@ -223,7 +223,7 @@ def test_run_exits_nonzero_and_reports_status_when_report_generation_fails(
     -- exit code 0, nothing printed about it, report_status not even a
     field. Detection/scoring succeeding must still surface a failed report
     explicitly, in both the text summary and --json, and as a non-zero exit."""
-    import sorethumb._pipeline as pipeline_mod
+    import sorethumb_ml._pipeline as pipeline_mod
 
     def _boom(*_a: object, **_kw: object) -> None:
         raise RuntimeError("renderer exploded")
@@ -258,7 +258,7 @@ def test_run_limit_groups_caps_deterministically(workspace_grouped):
     result = runner.invoke(app, ["run", "--config", str(toml_path), "--no-report", "--limit-groups", "1"])
     assert result.exit_code == 0, result.stdout + (result.stderr or "")
 
-    from sorethumb import Workspace
+    from sorethumb_ml import Workspace
 
     with Workspace.open(workdir) as ws:
         run_id = ws.store.list_runs(limit=1)[0]["run_id"]
@@ -281,7 +281,7 @@ def test_run_only_group_matching_nothing_exits_nonzero_and_names_the_reason(work
     assert result.exit_code != 0, result.stdout + (result.stderr or "")
     assert "does-not-exist" in (result.stdout + (result.stderr or ""))
 
-    from sorethumb import Workspace
+    from sorethumb_ml import Workspace
 
     with Workspace.open(workdir) as ws:
         run_id = ws.store.list_runs(limit=1)[0]["run_id"]
@@ -339,7 +339,7 @@ def test_run_strict_flag_overrides_explicit_toml_false(workspace):
     result = runner.invoke(app, ["run", "--config", str(toml_path), "--no-report", "--strict"])
     assert result.exit_code == 0, result.stdout + (result.stderr or "")
 
-    from sorethumb import Workspace
+    from sorethumb_ml import Workspace
 
     with Workspace.open(workdir) as ws:
         run_id = ws.store.list_runs(limit=1)[0]["run_id"]
@@ -354,7 +354,7 @@ def test_run_no_strict_flag_overrides_explicit_toml_true(workspace):
     result = runner.invoke(app, ["run", "--config", str(toml_path), "--no-report", "--no-strict"])
     assert result.exit_code == 0, result.stdout + (result.stderr or "")
 
-    from sorethumb import Workspace
+    from sorethumb_ml import Workspace
 
     with Workspace.open(workdir) as ws:
         run_id = ws.store.list_runs(limit=1)[0]["run_id"]
@@ -371,7 +371,7 @@ def test_run_no_strict_or_no_strict_flag_respects_toml_true(workspace):
     result = runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
     assert result.exit_code == 0, result.stdout + (result.stderr or "")
 
-    from sorethumb import Workspace
+    from sorethumb_ml import Workspace
 
     with Workspace.open(workdir) as ws:
         run_id = ws.store.list_runs(limit=1)[0]["run_id"]
@@ -490,7 +490,7 @@ def test_score_from_run(workspace):
     assert data["run_id"].startswith("score_")
     assert data["run_id"] != src_run_id
 
-    from sorethumb import Workspace
+    from sorethumb_ml import Workspace
 
     with Workspace.open(workdir) as ws:
         assert ws.store.get_run(data["run_id"])["source_run_id"] == src_run_id
@@ -513,7 +513,7 @@ def test_report_rerenders_from_persisted_run(workspace):
     _, toml_path, workdir = workspace
     # A run *with* a report, then delete the rendered file.
     assert runner.invoke(app, ["run", "--config", str(toml_path)]).exit_code == 0
-    from sorethumb import Workspace
+    from sorethumb_ml import Workspace
 
     with Workspace.open(workdir) as ws:
         run_id = str(ws.store.list_runs(limit=1)[0]["run_id"])
@@ -554,7 +554,7 @@ def test_report_rerender_uses_current_config_report_formats(workspace):
     _, toml_path, workdir = workspace
     assert runner.invoke(app, ["run", "--config", str(toml_path)]).exit_code == 0
 
-    from sorethumb import Workspace
+    from sorethumb_ml import Workspace
 
     with Workspace.open(workdir) as ws:
         run_id = str(ws.store.list_runs(limit=1)[0]["run_id"])
@@ -578,7 +578,7 @@ def test_report_rerender_group_structure_comes_from_historical_run(workspace_gro
     _, toml_path, workdir = workspace_grouped  # group_by = ["group"] -> 2 groups
     assert runner.invoke(app, ["run", "--config", str(toml_path)]).exit_code == 0
 
-    from sorethumb import Workspace
+    from sorethumb_ml import Workspace
 
     with Workspace.open(workdir) as ws:
         run_id = str(ws.store.list_runs(limit=1)[0]["run_id"])
@@ -686,7 +686,7 @@ def _recent_day_labels(n: int) -> tuple[list[str], int]:
     test is correct on every day of the week rather than only the days it
     happened to be run on.
     """
-    from sorethumb.history.periods import filter_non_business, period_range, resolve_period, step_back
+    from sorethumb_ml.history.periods import filter_non_business, period_range, resolve_period, step_back
 
     ref = datetime.now(UTC)
     _, _, ref_label = resolve_period(ref, "day", roll_non_business=True)
@@ -715,9 +715,9 @@ def timeseries_workspace(tmp_path: Path):
 def _totals_period_labels(toml_path: Path, workdir: Path, candidate_labels: list[str]) -> set[str]:
     """Which of ``candidate_labels`` have a totals row, via the Store's public API
     (not raw SQL -- CLI tests treat the store as a black box)."""
-    from sorethumb import Workspace
-    from sorethumb.config import Config
-    from sorethumb.io.fingerprint import logical_dataset_id
+    from sorethumb_ml import Workspace
+    from sorethumb_ml.config import Config
+    from sorethumb_ml.io.fingerprint import logical_dataset_id
 
     with toml_path.open("rb") as fh:
         cfg = Config.model_validate(tomllib.load(fh))
@@ -776,8 +776,8 @@ def test_backfill_collects_every_result_and_exits_nonzero_on_any_failure(
     failed. One period is made to fail (its RunResult carries a failed
     group); the other two must still be processed (not stopped early), and
     the command must exit non-zero and name the failed period."""
-    import sorethumb.cli as cli_mod
-    from sorethumb._pipeline import GroupSummary, RunResult
+    import sorethumb_ml.cli as cli_mod
+    from sorethumb_ml._pipeline import GroupSummary, RunResult
 
     toml_path, workdir, labels = timeseries_workspace
     failing_label = labels[1]

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from sorethumb.store.workspace import Workspace
+from sorethumb_ml.store.workspace import Workspace
 
 
 @pytest.fixture

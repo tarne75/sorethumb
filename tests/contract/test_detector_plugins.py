@@ -17,17 +17,17 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from sorethumb.detectors import registry
-from sorethumb.detectors._protocol import check_protocol
-from sorethumb.detectors.ecod import ECODDetector
-from sorethumb.detectors.hbos import HBOSDetector
-from sorethumb.detectors.isolation_forest import IsolationForestDetector
-from sorethumb.detectors.kmeans_distance import KMeansDetector
-from sorethumb.detectors.lof import LOFDetector
-from sorethumb.detectors.one_class_svm import OneClassSVMDetector
-from sorethumb.errors import DetectorError
-from sorethumb.store.models import load_model, plan_digest, save_model
-from sorethumb.store.workspace import make_group_key
+from sorethumb_ml.detectors import registry
+from sorethumb_ml.detectors._protocol import check_protocol
+from sorethumb_ml.detectors.ecod import ECODDetector
+from sorethumb_ml.detectors.hbos import HBOSDetector
+from sorethumb_ml.detectors.isolation_forest import IsolationForestDetector
+from sorethumb_ml.detectors.kmeans_distance import KMeansDetector
+from sorethumb_ml.detectors.lof import LOFDetector
+from sorethumb_ml.detectors.one_class_svm import OneClassSVMDetector
+from sorethumb_ml.errors import DetectorError
+from sorethumb_ml.store.models import load_model, plan_digest, save_model
+from sorethumb_ml.store.workspace import make_group_key
 from tests.factories.workspaces import open_workspace
 
 pytestmark = pytest.mark.contract
@@ -144,14 +144,14 @@ def test_registry_values_are_detector_classes():
 
 
 def test_registry_register_valid():
-    from sorethumb.detectors import register
+    from sorethumb_ml.detectors import register
 
     register(_GoodDetector)
     assert "good" in registry
 
 
 def test_registry_register_invalid_raises():
-    from sorethumb.detectors import register
+    from sorethumb_ml.detectors import register
 
     with pytest.raises(DetectorError):
         register(_MissingName)
@@ -159,7 +159,7 @@ def test_registry_register_invalid_raises():
 
 def test_detectors_all_list():
     """__all__ is the plugin surface: adding a detector means exporting it here."""
-    import sorethumb.detectors as det
+    import sorethumb_ml.detectors as det
 
     expected = {
         "Detector",
@@ -229,7 +229,7 @@ class DetectorSpec:
     ``natural_boundary`` names the mechanism ``natural_flag`` uses;
     ``training_cap`` must match the class's ``default_train_row_cap``;
     ``attribution_kind`` is the tag the explain pipeline routes this detector
-    to (see src/sorethumb/explain/{native,shap_tree,centroid,gradient}.py).
+    to (see src/sorethumb_ml/explain/{native,shap_tree,centroid,gradient}.py).
     """
 
     id: str
@@ -380,7 +380,7 @@ def test_detector_seed_sensitivity_matches_contract_table(spec: DetectorSpec) ->
 def test_detector_save_load_model_roundtrip(spec: DetectorSpec, tmp_path) -> None:
     """Every detector -- not just the shipped default three -- must round-trip
     through save_model/load_model with an identical calibrated score."""
-    from sorethumb.scoring.calibrate import Calibrator
+    from sorethumb_ml.scoring.calibrate import Calibrator
 
     rng = np.random.default_rng(3)
     X = rng.standard_normal((60, 4)).astype(np.float64)

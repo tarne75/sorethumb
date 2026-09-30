@@ -13,7 +13,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from sorethumb import _atomic
+from sorethumb_ml import _atomic
 from tests.factories.hypothesis_profiles import scaled_examples
 
 pytestmark = pytest.mark.property

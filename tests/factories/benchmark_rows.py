@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sorethumb.evaluate.benchmark import BenchmarkRow
+from sorethumb_ml.evaluate.benchmark import BenchmarkRow
 
 
 def make_benchmark_row(**overrides: Any) -> BenchmarkRow:

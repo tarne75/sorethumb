@@ -11,11 +11,11 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-import sorethumb.explain.native as native_mod
-import sorethumb.explain.shap_tree as shap_tree_mod
-from sorethumb import Config
-from sorethumb._pipeline import run_detection
-from sorethumb.config import (
+import sorethumb_ml.explain.native as native_mod
+import sorethumb_ml.explain.shap_tree as shap_tree_mod
+from sorethumb_ml import Config
+from sorethumb_ml._pipeline import run_detection
+from sorethumb_ml.config import (
     ColumnsConfig,
     DetectorConfig,
     ExplainConfig,
@@ -24,7 +24,7 @@ from sorethumb.config import (
     ScoringConfig,
     SourceConfig,
 )
-from sorethumb.detectors.one_class_svm import OneClassSVMDetector
+from sorethumb_ml.detectors.one_class_svm import OneClassSVMDetector
 from tests.factories.frames import write_planted_csv, write_time_sorted_parquet
 
 pytestmark = pytest.mark.integration
@@ -199,7 +199,7 @@ def test_pca_back_projection_failure_marks_all_flagged_rows_unavailable(
     def _raise(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("forced back-projection failure")
 
-    monkeypatch.setattr("sorethumb.explain.project.back_project_pca", _raise)
+    monkeypatch.setattr("sorethumb_ml.explain.project.back_project_pca", _raise)
 
     result = run_detection(cfg, no_report=True)
     assert result.n_anomalies > 0

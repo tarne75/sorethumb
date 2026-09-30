@@ -7,7 +7,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from sorethumb.config import (
+from sorethumb_ml.config import (
     ColumnsConfig,
     Config,
     ExplainConfig,
@@ -16,22 +16,22 @@ from sorethumb.config import (
     RunConfig,
     SourceConfig,
 )
-from sorethumb.errors import (
+from sorethumb_ml.errors import (
     FeatureWidthWarning,
     LowVarianceWarning,
     MemoryBudgetError,
     NonFiniteWarning,
     PlanError,
 )
-from sorethumb.features.build import (
+from sorethumb_ml.features.build import (
     _check_memory_budget,
     _peak_matrix_multiplier,
     _sanitize,
     apply_feature_plan,
     fit_features,
 )
-from sorethumb.features.correlate import correlated_pairs, drop_correlated
-from sorethumb.features.encode import (
+from sorethumb_ml.features.correlate import correlated_pairs, drop_correlated
+from sorethumb_ml.features.encode import (
     _array_derive_exprs,
     _frequency_expr,
     _missing_indicator_expr,
@@ -40,11 +40,11 @@ from sorethumb.features.encode import (
     build_encoding_exprs,
     compute_demotions,
 )
-from sorethumb.features.reduce import apply_pca, fit_pca
-from sorethumb.features.scale import apply_scaler, fit_scaler
-from sorethumb.features.space import FeatureSpace
-from sorethumb.profiling.classify import ColumnClass, Treatment
-from sorethumb.profiling.plan import (
+from sorethumb_ml.features.reduce import apply_pca, fit_pca
+from sorethumb_ml.features.scale import apply_scaler, fit_scaler
+from sorethumb_ml.features.space import FeatureSpace
+from sorethumb_ml.profiling.classify import ColumnClass, Treatment
+from sorethumb_ml.profiling.plan import (
     ColumnDecision,
     FeaturePlan,
     build_feature_plan,
@@ -1043,7 +1043,7 @@ def test_memory_budget_exceeded_raises():
 # ---------------------------------------------------------------------------
 # _peak_matrix_multiplier / _check_memory_budget (P1-1): the preflight
 # estimate must reflect how many copies of the matrix can be alive at once,
-# not just one -- see src/sorethumb/features/build.py's docstrings.
+# not just one -- see src/sorethumb_ml/features/build.py's docstrings.
 # ---------------------------------------------------------------------------
 
 

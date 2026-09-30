@@ -20,7 +20,7 @@ pytestmark = pytest.mark.benchmark
 
 
 def test_run_benchmark_synthetic_only(tmp_path: Path):
-    from sorethumb.evaluate.benchmark import BenchmarkConfig, run_benchmark
+    from sorethumb_ml.evaluate.benchmark import BenchmarkConfig, run_benchmark
 
     cfg = BenchmarkConfig(
         dataset_names=["synthetic_gaussian"],
@@ -38,7 +38,7 @@ def test_run_benchmark_synthetic_only(tmp_path: Path):
 
 
 def test_run_benchmark_all_detectors(tmp_path: Path):
-    from sorethumb.evaluate.benchmark import BenchmarkConfig, run_benchmark
+    from sorethumb_ml.evaluate.benchmark import BenchmarkConfig, run_benchmark
 
     cfg = BenchmarkConfig(
         dataset_names=["synthetic_gaussian"],
@@ -53,7 +53,7 @@ def test_run_benchmark_all_detectors(tmp_path: Path):
 
 
 def test_run_benchmark_metrics_in_range(tmp_path: Path):
-    from sorethumb.evaluate.benchmark import BenchmarkConfig, run_benchmark
+    from sorethumb_ml.evaluate.benchmark import BenchmarkConfig, run_benchmark
 
     cfg = BenchmarkConfig(
         dataset_names=["synthetic_gaussian"],
@@ -70,7 +70,7 @@ def test_run_benchmark_metrics_in_range(tmp_path: Path):
 
 
 def test_to_markdown_returns_table(tmp_path: Path):
-    from sorethumb.evaluate.benchmark import BenchmarkConfig, run_benchmark, to_markdown
+    from sorethumb_ml.evaluate.benchmark import BenchmarkConfig, run_benchmark, to_markdown
 
     cfg = BenchmarkConfig(
         dataset_names=["synthetic_gaussian"],
@@ -86,7 +86,7 @@ def test_to_markdown_returns_table(tmp_path: Path):
 
 
 def test_to_csv_parseable(tmp_path: Path):
-    from sorethumb.evaluate.benchmark import BenchmarkConfig, run_benchmark, to_csv
+    from sorethumb_ml.evaluate.benchmark import BenchmarkConfig, run_benchmark, to_csv
 
     cfg = BenchmarkConfig(
         dataset_names=["synthetic_gaussian"],
@@ -104,7 +104,7 @@ def test_to_csv_parseable(tmp_path: Path):
 
 
 def test_write_outputs_creates_files(tmp_path: Path):
-    from sorethumb.evaluate.benchmark import BenchmarkConfig, run_benchmark, write_outputs
+    from sorethumb_ml.evaluate.benchmark import BenchmarkConfig, run_benchmark, write_outputs
 
     cfg = BenchmarkConfig(
         dataset_names=["synthetic_gaussian"],
@@ -121,7 +121,7 @@ def test_write_outputs_creates_files(tmp_path: Path):
 
 
 def test_inject_into_readme_no_markers(tmp_path: Path):
-    from sorethumb.evaluate.benchmark import BenchmarkConfig, inject_into_readme, run_benchmark
+    from sorethumb_ml.evaluate.benchmark import BenchmarkConfig, inject_into_readme, run_benchmark
 
     readme = tmp_path / "README.md"
     readme.write_text("# My project\n", encoding="utf-8")
@@ -138,7 +138,7 @@ def test_inject_into_readme_no_markers(tmp_path: Path):
 
 
 def test_inject_into_readme_with_markers(tmp_path: Path):
-    from sorethumb.evaluate.benchmark import (
+    from sorethumb_ml.evaluate.benchmark import (
         _RESULTS_MARKER_END,
         _RESULTS_MARKER_START,
         BenchmarkConfig,
@@ -168,7 +168,7 @@ def test_inject_into_readme_with_markers(tmp_path: Path):
 
 
 def test_inject_into_readme_idempotent(tmp_path: Path):
-    from sorethumb.evaluate.benchmark import (
+    from sorethumb_ml.evaluate.benchmark import (
         _RESULTS_MARKER_END,
         _RESULTS_MARKER_START,
         BenchmarkConfig,
@@ -198,7 +198,7 @@ def test_inject_into_readme_idempotent(tmp_path: Path):
 
 
 def test_benchmark_row_as_dict_has_all_metric_keys(tmp_path: Path):
-    from sorethumb.evaluate.benchmark import BenchmarkConfig, run_benchmark
+    from sorethumb_ml.evaluate.benchmark import BenchmarkConfig, run_benchmark
 
     cfg = BenchmarkConfig(
         dataset_names=["synthetic_gaussian"],
@@ -213,7 +213,7 @@ def test_benchmark_row_as_dict_has_all_metric_keys(tmp_path: Path):
 
 
 def test_run_benchmark_row_has_no_peak_rss_mb(tmp_path: Path):
-    from sorethumb.evaluate.benchmark import BenchmarkConfig, run_benchmark
+    from sorethumb_ml.evaluate.benchmark import BenchmarkConfig, run_benchmark
 
     cfg = BenchmarkConfig(
         dataset_names=["synthetic_gaussian"],

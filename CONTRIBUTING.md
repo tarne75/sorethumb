@@ -78,12 +78,12 @@ uv run pytest -m benchmark
 uv run pytest -m "unit or contract or integration or property or repo_check"
 
 # With coverage
-uv run pytest --cov=sorethumb --cov-report=term-missing
+uv run pytest --cov=sorethumb_ml --cov-report=term-missing
 ```
 
 ## Adding a detector
 
-`sorethumb` discovers detectors via the `sorethumb.detectors` entry-point group. You can
+`sorethumb` discovers detectors via the `sorethumb_ml.detectors` entry-point group. You can
 add a detector in a separate package without modifying this repository.
 
 ### 1. Implement the `Detector` protocol
@@ -92,6 +92,7 @@ add a detector in a separate package without modifying this repository.
 # my_package/my_detector.py
 from typing import ClassVar, Any
 import numpy as np
+
 
 class MyDetector:
     name: ClassVar[str] = "my_detector"
@@ -118,7 +119,7 @@ class MyDetector:
 ### 2. Register it via entry points in your package's `pyproject.toml`
 
 ```toml
-[project.entry-points."sorethumb.detectors"]
+[project.entry-points."sorethumb_ml.detectors"]
 my_detector = "my_package.my_detector:MyDetector"
 ```
 
@@ -135,6 +136,6 @@ Your detector should appear in the list alongside the built-ins.
 
 - ruff for linting and formatting (`uv run ruff check --fix src/ && uv run ruff format src/`)
 - mypy strict on `src/` (`uv run mypy src/`)
-- No `print` in `src/sorethumb/` — use `logging.getLogger(__name__)`
+- No `print` in `src/sorethumb_ml/` — use `logging.getLogger(__name__)`
 - No literal thresholds in modules other than `config.py`
 - Every new degradation point gets a named `SorethumbWarning` subclass in `errors.py`

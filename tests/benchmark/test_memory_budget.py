@@ -1,8 +1,8 @@
 """Subprocess peak-memory tests for the P1-1 preflight budget check and the
 matrix-lifetime fix it backs (dead ``full_space`` reference removed,
 per-group float64 upcast made conditional on ``explain.enabled`` -- see
-``sorethumb._pipeline._group_feature_matrix`` and
-``sorethumb.features.build._peak_matrix_multiplier``).
+``sorethumb_ml._pipeline._group_feature_matrix`` and
+``sorethumb_ml.features.build._peak_matrix_multiplier``).
 
 Marked ``benchmark`` (real detector fitting + subprocess spawning, not fast/
 deterministic), deselected by default::
@@ -96,8 +96,8 @@ def _make_multi_group_parquet(path: Path, seed: int = 0) -> None:
 
 def _multi_group_worker(data_path: str, ws_path: str, conn: Any) -> None:
     try:
-        from sorethumb import run_detection
-        from sorethumb.config import (
+        from sorethumb_ml import run_detection
+        from sorethumb_ml.config import (
             ColumnsConfig,
             Config,
             DetectorConfig,
@@ -181,9 +181,9 @@ def _make_wide_parquet(path: Path, n_rows: int, n_cols: int, seed: int = 0) -> N
 
 def _budget_worker(data_path: str, ws_path: str, max_memory_mb: int, conn: Any) -> None:
     try:
-        from sorethumb import run_detection
-        from sorethumb.config import Config, DetectorConfig, ExplainConfig, RunConfig, SourceConfig
-        from sorethumb.errors import MemoryBudgetError
+        from sorethumb_ml import run_detection
+        from sorethumb_ml.config import Config, DetectorConfig, ExplainConfig, RunConfig, SourceConfig
+        from sorethumb_ml.errors import MemoryBudgetError
 
         cfg = Config(
             source=SourceConfig(uri=data_path, format="parquet"),

@@ -12,7 +12,7 @@ import math
 
 import pytest
 
-from sorethumb.evaluate.pipeline_benchmark import (
+from sorethumb_ml.evaluate.pipeline_benchmark import (
     PipelineBenchmarkConfig,
     assert_complete_and_error_free,
     expected_cells,
@@ -101,7 +101,7 @@ def test_fmt_row_for_table_renders_nan_roc_auc_as_na():
     """A single-class holdout (e.g. swamping's at-risk-normals-only
     population) makes roc_auc/average_precision genuinely undefined (NaN) --
     the table must show 'n/a', never a literal 'nan' string."""
-    from sorethumb.evaluate.pipeline_benchmark import _fmt_row_for_table
+    from sorethumb_ml.evaluate.pipeline_benchmark import _fmt_row_for_table
 
     row = make_pipeline_row(
         scenario="swamping_contaminated",

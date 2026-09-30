@@ -16,9 +16,9 @@ import sqlite3
 import polars as pl
 import pytest
 
-from sorethumb.errors import StoreError
-from sorethumb.store.db import Store, _iter_sql_statements
-from sorethumb.store.workspace import Workspace, make_group_key
+from sorethumb_ml.errors import StoreError
+from sorethumb_ml.store.db import Store, _iter_sql_statements
+from sorethumb_ml.store.workspace import Workspace, make_group_key
 from tests.factories.workspaces import open_workspace as _open_ws
 
 pytestmark = pytest.mark.contract
@@ -415,7 +415,7 @@ def test_store_completed_groups(tmp_path):
 
 
 def test_write_read_results_roundtrip(tmp_path):
-    from sorethumb.store.results import read_results, write_results
+    from sorethumb_ml.store.results import read_results, write_results
 
     with _open_ws(tmp_path) as ws:
         df = pl.DataFrame({"row_id": [0, 1, 2], "score": [0.1, 0.9, 0.5], "flagged": [False, True, False]})
@@ -431,7 +431,7 @@ def test_write_read_results_roundtrip(tmp_path):
 
 
 def test_write_results_registers_artifact(tmp_path):
-    from sorethumb.store.results import write_results
+    from sorethumb_ml.store.results import write_results
 
     with _open_ws(tmp_path) as ws:
         df = pl.DataFrame({"row_id": [0], "score": [0.5]})
@@ -443,7 +443,7 @@ def test_write_results_registers_artifact(tmp_path):
 
 
 def test_read_results_missing_returns_none(tmp_path):
-    from sorethumb.store.results import read_results
+    from sorethumb_ml.store.results import read_results
 
     with _open_ws(tmp_path) as ws:
         result = read_results(ws, "norun", "nogroup")
@@ -454,8 +454,8 @@ def test_write_results_leaves_existing_file_on_failure(tmp_path, monkeypatch):
     """write_results goes through atomic_write (temp file + rename); a failure
     during the rename must leave the previous Parquet file (and any prior
     reader of it) untouched, not a half-written replacement."""
-    from sorethumb import _atomic
-    from sorethumb.store.results import write_results
+    from sorethumb_ml import _atomic
+    from sorethumb_ml.store.results import write_results
 
     with _open_ws(tmp_path) as ws:
         ws.store.upsert_dataset("fp1", "uri", "sfp", "cfp", 3, 3)
@@ -492,7 +492,7 @@ def test_write_results_rejects_an_unsafe_results_frame(tmp_path, df, match):
     join a result row back to its source; write_results must fail closed
     before writing (and registering) a Parquet file it would be dangerous to
     trust."""
-    from sorethumb.store.results import write_results
+    from sorethumb_ml.store.results import write_results
 
     with _open_ws(tmp_path) as ws:
         ws.store.upsert_dataset("fp1", "uri", "sfp", "cfp", 2, 2)

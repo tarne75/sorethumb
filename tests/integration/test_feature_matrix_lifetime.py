@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-import sorethumb._pipeline as pipeline_mod
-from sorethumb._pipeline import run_detection
+import sorethumb_ml._pipeline as pipeline_mod
+from sorethumb_ml._pipeline import run_detection
 from tests.factories.configs import make_config
 from tests.factories.frames import write_planted_csv
 

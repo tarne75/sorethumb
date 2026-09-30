@@ -218,8 +218,8 @@ _step "Package-data assertion"
 # pipeline's reported exit status even though grep DID find the match,
 # spuriously reporting "missing" for content that's actually present. Not
 # using -q (grep drains all of unzip's output before exiting) avoids it.
-unzip -l dist/*.whl | grep 'sorethumb/py.typed' >/dev/null || _fail "py.typed missing from wheel"
-unzip -l dist/*.whl | grep 'sorethumb/store/migrations/001_initial.sql' >/dev/null || _fail "migrations missing from wheel"
+unzip -l dist/*.whl | grep 'sorethumb_ml/py.typed' >/dev/null || _fail "py.typed missing from wheel"
+unzip -l dist/*.whl | grep 'sorethumb_ml/store/migrations/001_initial.sql' >/dev/null || _fail "migrations missing from wheel"
 _ok "py.typed and migrations present in wheel"
 
 _step "Clean-venv install smoke test (core, then each extra)"
@@ -232,12 +232,12 @@ python3 -m venv "$TMP_VENVS/core"
 "$TMP_VENVS/core/bin/pip" install "$WHL" -q
 "$TMP_VENVS/core/bin/sorethumb" --version
 "$TMP_VENVS/core/bin/python" -c "
-import sorethumb
-from sorethumb import Config, SourceConfig, run_detection
-import sorethumb.explain.shap_tree
-import sorethumb.explain.gradient
-import sorethumb.report.charts
-print('core import OK', sorethumb.__version__)
+import sorethumb_ml
+from sorethumb_ml import Config, SourceConfig, run_detection
+import sorethumb_ml.explain.shap_tree
+import sorethumb_ml.explain.gradient
+import sorethumb_ml.report.charts
+print('core import OK', sorethumb_ml.__version__)
 "
 
 for extra in explain report benchmark dev; do
@@ -252,9 +252,9 @@ for extra in explain report benchmark dev; do
   "$venv/bin/pip" install --upgrade pip -q
   "$venv/bin/pip" install "${WHL}[${extra}]" -q
   "$venv/bin/python" -c "
-import sorethumb
+import sorethumb_ml
 ${smoke_import}
-print('$extra import OK', sorethumb.__version__)
+print('$extra import OK', sorethumb_ml.__version__)
 "
 done
 _ok "core + every extra installs cleanly and imports"

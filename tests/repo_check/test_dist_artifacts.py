@@ -30,14 +30,14 @@ _DIST_DIR = Path(__file__).resolve().parent.parent.parent / "dist"
 
 _REQUIRED_WHEEL_PATHS = frozenset(
     {
-        "sorethumb/py.typed",
-        "sorethumb/store/migrations/001_initial.sql",
+        "sorethumb_ml/py.typed",
+        "sorethumb_ml/store/migrations/001_initial.sql",
     }
 )
 _REQUIRED_SDIST_PATHS = frozenset(
     {
-        "src/sorethumb/py.typed",
-        "src/sorethumb/store/migrations/001_initial.sql",
+        "src/sorethumb_ml/py.typed",
+        "src/sorethumb_ml/store/migrations/001_initial.sql",
         "LICENSE",
         "README.md",
     }

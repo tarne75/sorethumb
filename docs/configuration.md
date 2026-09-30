@@ -1,6 +1,6 @@
 # Configuration reference
 
-> **Auto-generated** from `src/sorethumb/config.py` by `docs/generate_config_docs.py`.
+> **Auto-generated** from `src/sorethumb_ml/config.py` by `docs/generate_config_docs.py`.
 > Do not edit manually — run `python docs/generate_config_docs.py` to regenerate.
 
 sorethumb is configured through a single TOML file (default: `sorethumb.toml`).
@@ -125,7 +125,7 @@ so trivial changes do not invalidate cached artefacts.
 | `run.max_rows` | int \| null | null | Truncate the input to at most this many rows (after filtering). Triggers SampleTruncatedWarning. None uses all rows. |
 | `run.reuse_models` | bool | false | If a matching model artefact exists in workdir, skip retraining. Useful for score-forward runs. |
 | `run.retention_days` | int | 90 | Prune run artefacts older than this many days from workdir. |
-| `run.log_level` | str | "INFO" | Python logging level for the sorethumb logger. Logs are written to both the console and {workdir}/logs/sorethumb.log (rotating, 10 MB limit, 5 backups). Does not affect the config hash. |
+| `run.log_level` | str | "INFO" | Python logging level for the sorethumb_ml logger. Logs are written to both the console and {workdir}/logs/sorethumb.log (rotating, 10 MB limit, 5 backups). Does not affect the config hash. |
 | `run.slow_stage_seconds` | int | 300 | Emit a SlowStageWarning if any pipeline stage exceeds this many seconds. Purely diagnostic; does not affect results. |
 
 ## `[history]` — Period-over-period baseline comparison.

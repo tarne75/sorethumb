@@ -13,7 +13,7 @@ import pytest
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
-from sorethumb.scoring.calibrate import Calibrator
+from sorethumb_ml.scoring.calibrate import Calibrator
 from tests.factories.hypothesis_profiles import scaled_examples
 
 pytestmark = pytest.mark.property

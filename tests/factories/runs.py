@@ -12,13 +12,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from sorethumb._pipeline import run_detection
+from sorethumb_ml._pipeline import run_detection
 
 from .configs import make_config
 from .frames import write_planted_csv
 
 if TYPE_CHECKING:
-    from sorethumb._pipeline import RunResult
+    from sorethumb_ml._pipeline import RunResult
 
 
 @dataclass

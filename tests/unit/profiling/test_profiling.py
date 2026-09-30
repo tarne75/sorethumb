@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 import polars as pl
 import pytest
 
-from sorethumb.config import (
+from sorethumb_ml.config import (
     ColumnsConfig,
     Config,
     FeaturesConfig,
@@ -16,10 +16,10 @@ from sorethumb.config import (
     RunConfig,
     SourceConfig,
 )
-from sorethumb.errors import ColumnDroppedWarning, PlanError
-from sorethumb.profiling.classify import ColumnClass, Treatment, classify_column, treatment_for
-from sorethumb.profiling.plan import FeaturePlan, build_feature_plan
-from sorethumb.profiling.profile import ColumnProfile, profile_columns
+from sorethumb_ml.errors import ColumnDroppedWarning, PlanError
+from sorethumb_ml.profiling.classify import ColumnClass, Treatment, classify_column, treatment_for
+from sorethumb_ml.profiling.plan import FeaturePlan, build_feature_plan
+from sorethumb_ml.profiling.profile import ColumnProfile, profile_columns
 from tests.synth import make_frame
 
 pytestmark = pytest.mark.unit
@@ -233,7 +233,7 @@ def _make_profile(**overrides: object) -> ColumnProfile:
 
 def test_check_identifier_aggressive_mode() -> None:
     """Aggressive identifier detection uses cardinality_ratio only."""
-    from sorethumb.profiling.classify import _check_identifier
+    from sorethumb_ml.profiling.classify import _check_identifier
 
     profile = _make_profile(cardinality_ratio=0.99, examples=["abc", "def"])
     cfg = ProfilingConfig(identifier_detection="aggressive", identifier_cardinality_ratio=0.9)
@@ -244,7 +244,7 @@ def test_check_identifier_aggressive_mode() -> None:
 
 def test_check_identifier_hex_pattern() -> None:
     """Long hex strings at high cardinality -> identifier_like."""
-    from sorethumb.profiling.classify import _check_identifier
+    from sorethumb_ml.profiling.classify import _check_identifier
 
     hex_examples = ["deadbeefdeadbeef"] * 50
     profile = _make_profile(cardinality_ratio=0.99, examples=hex_examples)
@@ -256,7 +256,7 @@ def test_check_identifier_hex_pattern() -> None:
 
 def test_check_identifier_no_pattern_returns_none() -> None:
     """Normal strings at high cardinality but no UUID/hex -> (None, '')."""
-    from sorethumb.profiling.classify import _check_identifier
+    from sorethumb_ml.profiling.classify import _check_identifier
 
     plain_examples = ["hello world"] * 50
     profile = _make_profile(cardinality_ratio=0.99, examples=plain_examples)
@@ -333,21 +333,21 @@ def test_numeric_protected_column_not_classified_identifier() -> None:
 
 def test_is_ignored_type_prefix_pattern() -> None:
     """'type:Int64 secret_*' pattern matches on dtype+name."""
-    from sorethumb.profiling.classify import _is_ignored
+    from sorethumb_ml.profiling.classify import _is_ignored
 
     assert _is_ignored("secret_key", "Int64", ["type:Int64 secret_*"], set()) is True
 
 
 def test_is_ignored_type_prefix_no_match() -> None:
     """A type: pattern with the wrong dtype does not ignore the column."""
-    from sorethumb.profiling.classify import _is_ignored
+    from sorethumb_ml.profiling.classify import _is_ignored
 
     assert _is_ignored("secret_key", "String", ["type:Int64 secret_*"], set()) is False
 
 
 def test_is_ignored_protected_col_not_ignored() -> None:
     """Protected columns are never ignored even if they match a pattern."""
-    from sorethumb.profiling.classify import _is_ignored
+    from sorethumb_ml.profiling.classify import _is_ignored
 
     assert _is_ignored("col", "String", ["col"], {"col"}) is False
 
@@ -710,7 +710,7 @@ def test_all_synth_flags_plan_complete(tmp_path: object) -> None:
             with_struct=True,
         )
         # Unnest structs before planning (as the pipeline would)
-        from sorethumb.io.nested import unnest_all
+        from sorethumb_ml.io.nested import unnest_all
 
         df = unnest_all(df)
 
@@ -764,7 +764,7 @@ def test_numeric_id_column_excluded_from_plan(tmp_path: object) -> None:
             "value_b": [float(i) * 2 for i in range(50)],
         }
     )
-    from sorethumb.config import ColumnsConfig
+    from sorethumb_ml.config import ColumnsConfig
 
     cfg = _build_config(tmp_path, columns=ColumnsConfig(id_column="row_id"))
     plan = build_feature_plan(df, cfg)

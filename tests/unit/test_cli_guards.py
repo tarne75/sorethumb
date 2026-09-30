@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 import typer
 
-from sorethumb.cli import _guard_reset_target
+from sorethumb_ml.cli import _guard_reset_target
 
 pytestmark = pytest.mark.unit
 

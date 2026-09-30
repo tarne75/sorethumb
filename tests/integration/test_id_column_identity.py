@@ -15,8 +15,8 @@ import numpy as np
 import polars as pl
 import pytest
 
-from sorethumb._pipeline import run_detection
-from sorethumb.config import (
+from sorethumb_ml._pipeline import run_detection
+from sorethumb_ml.config import (
     ColumnsConfig,
     Config,
     DetectorConfig,
@@ -24,7 +24,7 @@ from sorethumb.config import (
     ScoringConfig,
     SourceConfig,
 )
-from sorethumb.errors import SchemaError
+from sorethumb_ml.errors import SchemaError
 
 pytestmark = pytest.mark.integration
 

@@ -1,4 +1,4 @@
-"""Integration tests for sorethumb.history: ledger, period completion, rolling
+"""Integration tests for sorethumb_ml.history: ledger, period completion, rolling
 windows against a real Workspace/SQLite store.
 
 See tests/unit/history/test_periods.py for the pure period-label/window math
@@ -14,19 +14,19 @@ import numpy as np
 import polars as pl
 import pytest
 
-from sorethumb import Config
-from sorethumb._pipeline import run_detection
-from sorethumb.config import DetectorConfig
-from sorethumb.history.ledger import (
+from sorethumb_ml import Config
+from sorethumb_ml._pipeline import run_detection
+from sorethumb_ml.config import DetectorConfig
+from sorethumb_ml.history.ledger import (
     clear_period,
     completed_groups,
     iter_pending_periods,
     last_complete_period,
     resolve_backfill_range,
 )
-from sorethumb.history.periods import step_back, step_forward
-from sorethumb.history.windows import WindowResult, compute_rolling_windows
-from sorethumb.store.workspace import Workspace, make_group_key
+from sorethumb_ml.history.periods import step_back, step_forward
+from sorethumb_ml.history.windows import WindowResult, compute_rolling_windows
+from sorethumb_ml.store.workspace import Workspace, make_group_key
 from tests.factories.configs import make_config
 from tests.factories.frames import write_two_period_parquet
 
@@ -823,7 +823,7 @@ def test_period_with_one_failed_group_is_not_marked_complete(tmp_path: Path) -> 
     with the same inputs must re-execute the failed group and only then
     complete the period.
     """
-    from sorethumb.detectors.isolation_forest import IsolationForestDetector
+    from sorethumb_ml.detectors.isolation_forest import IsolationForestDetector
 
     parquet = tmp_path / "grouped.parquet"
     _one_day_two_group_parquet(parquet)
@@ -871,7 +871,7 @@ def test_interruption_between_groups_recovers_all_totals_on_retry(tmp_path: Path
     retry must record every group, including the one that was only resumed
     (skipped) this time, not just the one it (re-)executes.
     """
-    import sorethumb._pipeline as pipe
+    import sorethumb_ml._pipeline as pipe
 
     parquet = tmp_path / "grouped.parquet"
     _one_day_two_group_parquet(parquet)

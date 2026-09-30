@@ -11,11 +11,11 @@ import pytest
 
 pytestmark = pytest.mark.contract
 
-# ── sorethumb.errors ──────────────────────────────────────────────────────────
+# ── sorethumb_ml.errors ──────────────────────────────────────────────────────────
 
 
 def test_all_sorethumb_errors_are_exceptions() -> None:
-    from sorethumb.errors import (
+    from sorethumb_ml.errors import (
         ConfigError,
         DetectorError,
         ExplainError,
@@ -47,7 +47,7 @@ def test_all_sorethumb_errors_are_exceptions() -> None:
 
 
 def test_all_sorethumb_warnings_are_user_warnings() -> None:
-    from sorethumb.errors import (
+    from sorethumb_ml.errors import (
         CalibrationModeWarning,
         ColumnDroppedWarning,
         FallbackAttributionWarning,
@@ -76,7 +76,7 @@ def test_all_sorethumb_warnings_are_user_warnings() -> None:
 
 
 def test_sorethumb_errors_can_be_raised_and_caught() -> None:
-    from sorethumb.errors import ConfigError, SchemaError, SourceError
+    from sorethumb_ml.errors import ConfigError, SchemaError, SourceError
 
     for cls in (ConfigError, SchemaError, SourceError):
         with pytest.raises(cls, match="boom"):
@@ -84,7 +84,7 @@ def test_sorethumb_errors_can_be_raised_and_caught() -> None:
 
 
 def test_sorethumb_warnings_can_be_issued() -> None:
-    from sorethumb.errors import ColumnDroppedWarning, SorethumbWarning
+    from sorethumb_ml.errors import ColumnDroppedWarning, SorethumbWarning
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -95,47 +95,47 @@ def test_sorethumb_warnings_can_be_issued() -> None:
     assert issubclass(ColumnDroppedWarning, SorethumbWarning)
 
 
-# ── sorethumb.logging ─────────────────────────────────────────────────────────
+# ── sorethumb_ml.logging ────────────────────────────────────────────────────
 
 
 def test_logging_configure_runs() -> None:
-    from sorethumb.logging import configure
+    from sorethumb_ml.logging import configure
 
     configure("WARNING")
-    assert logging.getLogger("sorethumb").level == 0  # basicConfig is a no-op when handlers exist
+    assert logging.getLogger("sorethumb_ml").level == 0  # basicConfig is a no-op when handlers exist
 
 
 def test_logging_configure_accepts_all_levels() -> None:
-    from sorethumb.logging import configure
+    from sorethumb_ml.logging import configure
 
     for level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
         configure(level)  # must not raise
 
 
 def test_logging_configure_invalid_level_falls_back() -> None:
-    from sorethumb.logging import configure
+    from sorethumb_ml.logging import configure
 
     configure("NOT_A_LEVEL")  # falls back to INFO via getattr(..., logging.INFO)
 
 
-# ── sorethumb.scoring.__init__ ────────────────────────────────────────────────
+# ── sorethumb_ml.scoring.__init__ ────────────────────────────────────────────────
 
 
 def test_scoring_public_api_matches_all_list() -> None:
-    import sorethumb.scoring as scoring
-    from sorethumb.scoring import Calibrator, ScoreEnsemble  # proves both names resolve
+    import sorethumb_ml.scoring as scoring
+    from sorethumb_ml.scoring import Calibrator, ScoreEnsemble  # proves both names resolve
 
     assert scoring.Calibrator is Calibrator
     assert scoring.ScoreEnsemble is ScoreEnsemble
     assert set(scoring.__all__) == {"Calibrator", "ScoreEnsemble"}
 
 
-# ── sorethumb.store.__init__ ──────────────────────────────────────────────────
+# ── sorethumb_ml.store.__init__ ──────────────────────────────────────────────────
 
 
 def test_store_public_api_matches_all_list() -> None:
-    import sorethumb.store as store
-    from sorethumb.store import Store, Workspace, make_group_key  # proves all three resolve
+    import sorethumb_ml.store as store
+    from sorethumb_ml.store import Store, Workspace, make_group_key  # proves all three resolve
 
     assert store.Store is Store
     assert store.Workspace is Workspace
@@ -143,12 +143,12 @@ def test_store_public_api_matches_all_list() -> None:
     assert set(store.__all__) == {"Store", "Workspace", "make_group_key"}
 
 
-# ── sorethumb.explain.__init__ ────────────────────────────────────────────────
+# ── sorethumb_ml.explain.__init__ ────────────────────────────────────────────────
 
 
 def test_explain_public_api_matches_all_list() -> None:
-    import sorethumb.explain as explain
-    from sorethumb.explain import (
+    import sorethumb_ml.explain as explain
+    from sorethumb_ml.explain import (
         aggregate_to_original,
         back_project_pca,
         blend,
@@ -182,35 +182,35 @@ def test_explain_public_api_matches_all_list() -> None:
     }
 
 
-# ── sorethumb.__init__ (package public API) ───────────────────────────────────
+# ── sorethumb_ml.__init__ (package public API) ───────────────────────────────────
 
 
 def test_package_all_exports_importable() -> None:
-    import sorethumb
+    import sorethumb_ml
 
-    for name in sorethumb.__all__:
-        assert hasattr(sorethumb, name), f"sorethumb.{name} missing from package"
+    for name in sorethumb_ml.__all__:
+        assert hasattr(sorethumb_ml, name), f"sorethumb_ml.{name} missing from package"
 
 
 def test_package_public_api_callable_or_instantiable() -> None:
-    import sorethumb
+    import sorethumb_ml
 
     callables = [
-        sorethumb.run_detection,
-        sorethumb.load_dataset,
-        sorethumb.list_detectors,
-        sorethumb.build_feature_plan,
-        sorethumb.apply_feature_plan,
-        sorethumb.evaluate_scores,
+        sorethumb_ml.run_detection,
+        sorethumb_ml.load_dataset,
+        sorethumb_ml.list_detectors,
+        sorethumb_ml.build_feature_plan,
+        sorethumb_ml.apply_feature_plan,
+        sorethumb_ml.evaluate_scores,
     ]
     for fn in callables:
         assert callable(fn), f"{fn} should be callable"
 
 
 def test_list_detectors_returns_known_detectors() -> None:
-    import sorethumb
+    import sorethumb_ml
 
-    names = sorethumb.list_detectors()
+    names = sorethumb_ml.list_detectors()
     assert isinstance(names, list)
     assert "isolation_forest" in names
     assert "kmeans_distance" in names
@@ -218,9 +218,9 @@ def test_list_detectors_returns_known_detectors() -> None:
 
 
 def test_config_and_source_config_constructable() -> None:
-    import sorethumb
+    import sorethumb_ml
 
-    sc = sorethumb.SourceConfig(uri="/tmp/test.csv")
+    sc = sorethumb_ml.SourceConfig(uri="/tmp/test.csv")
     assert sc.uri == "/tmp/test.csv"
     assert sc.format == "auto"
     assert sc.dataset_id is None
@@ -229,9 +229,11 @@ def test_config_and_source_config_constructable() -> None:
 def test_source_config_dataset_id_validation() -> None:
     import pytest
 
-    import sorethumb
+    import sorethumb_ml
 
-    assert sorethumb.SourceConfig(uri="/tmp/x.csv", dataset_id="sales.eu-2024").dataset_id == "sales.eu-2024"
+    assert (
+        sorethumb_ml.SourceConfig(uri="/tmp/x.csv", dataset_id="sales.eu-2024").dataset_id == "sales.eu-2024"
+    )
     for bad in ("has space", "slash/id", "café", "x" * 129, ""):
         with pytest.raises(ValueError, match="dataset_id"):
-            sorethumb.SourceConfig(uri="/tmp/x.csv", dataset_id=bad)
+            sorethumb_ml.SourceConfig(uri="/tmp/x.csv", dataset_id=bad)

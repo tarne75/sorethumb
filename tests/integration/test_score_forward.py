@@ -13,12 +13,12 @@ import numpy as np
 import polars as pl
 import pytest
 
-from sorethumb import Config, score_forward
-from sorethumb._pipeline import run_detection
-from sorethumb.config import DetectorConfig, ExplainConfig, FeaturesConfig, ProfilingConfig, ReportConfig
-from sorethumb.errors import StoreError
-from sorethumb.store.models import load_model
-from sorethumb.store.workspace import Workspace
+from sorethumb_ml import Config, score_forward
+from sorethumb_ml._pipeline import run_detection
+from sorethumb_ml.config import DetectorConfig, ExplainConfig, FeaturesConfig, ProfilingConfig, ReportConfig
+from sorethumb_ml.errors import StoreError
+from sorethumb_ml.store.models import load_model
+from sorethumb_ml.store.workspace import Workspace
 from tests.factories.configs import make_config
 from tests.factories.detectors import ban_all_fitting as _ban_all_fitting
 from tests.factories.frames import write_planted_csv

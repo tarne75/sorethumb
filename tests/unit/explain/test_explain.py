@@ -5,18 +5,18 @@ import warnings
 import numpy as np
 import pytest
 
-from sorethumb.errors import ExplainError, FallbackAttributionWarning
-from sorethumb.explain.blend import blend
-from sorethumb.explain.centroid import centroid_attributions
-from sorethumb.explain.gradient import gradient_attributions
-from sorethumb.explain.native import ecod_attributions, hbos_attributions
-from sorethumb.explain.project import (
+from sorethumb_ml.errors import ExplainError, FallbackAttributionWarning
+from sorethumb_ml.explain.blend import blend
+from sorethumb_ml.explain.centroid import centroid_attributions
+from sorethumb_ml.explain.gradient import gradient_attributions
+from sorethumb_ml.explain.native import ecod_attributions, hbos_attributions
+from sorethumb_ml.explain.project import (
     aggregate_to_original,
     back_project_pca,
     permutation_importance,
     top_n_reasons,
 )
-from sorethumb.explain.shap_tree import tree_shap_attributions
+from sorethumb_ml.explain.shap_tree import tree_shap_attributions
 
 pytestmark = pytest.mark.unit
 
@@ -30,7 +30,7 @@ def _rng_data(n: int = 100, d: int = 4, seed: int = 0) -> np.ndarray:
 
 
 def _fit_if(n: int = 200, d: int = 4, seed: int = 0):
-    from sorethumb.detectors.isolation_forest import IsolationForestDetector
+    from sorethumb_ml.detectors.isolation_forest import IsolationForestDetector
 
     X = _rng_data(n, d, seed)
     det = IsolationForestDetector(n_estimators=50)
@@ -39,7 +39,7 @@ def _fit_if(n: int = 200, d: int = 4, seed: int = 0):
 
 
 def _fit_kmeans(n: int = 200, d: int = 4, k: int = 2, seed: int = 0):
-    from sorethumb.detectors.kmeans_distance import KMeansDetector
+    from sorethumb_ml.detectors.kmeans_distance import KMeansDetector
 
     X = _rng_data(n, d, seed)
     det = KMeansDetector(k=k)
@@ -48,7 +48,7 @@ def _fit_kmeans(n: int = 200, d: int = 4, k: int = 2, seed: int = 0):
 
 
 def _fit_ocsvm(n: int = 100, d: int = 4, seed: int = 0):
-    from sorethumb.detectors.one_class_svm import OneClassSVMDetector
+    from sorethumb_ml.detectors.one_class_svm import OneClassSVMDetector
 
     X = _rng_data(n, d, seed)
     det = OneClassSVMDetector()
@@ -57,7 +57,7 @@ def _fit_ocsvm(n: int = 100, d: int = 4, seed: int = 0):
 
 
 def _fit_ecod(n: int = 200, d: int = 4, seed: int = 0):
-    from sorethumb.detectors.ecod import ECODDetector
+    from sorethumb_ml.detectors.ecod import ECODDetector
 
     X = _rng_data(n, d, seed)
     det = ECODDetector()
@@ -66,7 +66,7 @@ def _fit_ecod(n: int = 200, d: int = 4, seed: int = 0):
 
 
 def _fit_hbos(n: int = 200, d: int = 4, seed: int = 0):
-    from sorethumb.detectors.hbos import HBOSDetector
+    from sorethumb_ml.detectors.hbos import HBOSDetector
 
     X = _rng_data(n, d, seed)
     det = HBOSDetector()
@@ -123,7 +123,7 @@ def test_gradient_consistent_sign_convention():
 
 
 def test_kernel_shap_attributions_shape():
-    from sorethumb.explain.gradient import kernel_shap_attributions
+    from sorethumb_ml.explain.gradient import kernel_shap_attributions
 
     det, X = _fit_if(n=30, d=4, seed=0)
     attrs, tag = kernel_shap_attributions(det, X, background_k=5, max_rows=5000)
@@ -132,7 +132,7 @@ def test_kernel_shap_attributions_shape():
 
 
 def test_kernel_shap_attributions_row_cap():
-    from sorethumb.explain.gradient import kernel_shap_attributions
+    from sorethumb_ml.explain.gradient import kernel_shap_attributions
 
     det, X = _fit_if(n=30, d=3, seed=0)
     attrs, _ = kernel_shap_attributions(det, X, background_k=3, max_rows=10)
@@ -145,7 +145,7 @@ def test_kernel_shap_falls_back_to_gradient_when_shap_not_installed(monkeypatch)
     gracefully to the plain gradient method, never raise."""
     import sys
 
-    from sorethumb.explain.gradient import kernel_shap_attributions
+    from sorethumb_ml.explain.gradient import kernel_shap_attributions
 
     det, X = _fit_if(n=30, d=4, seed=0)
     monkeypatch.setitem(sys.modules, "shap", None)
@@ -180,7 +180,7 @@ def test_centroid_non_negative():
 
 
 def test_centroid_requires_fit_first():
-    from sorethumb.detectors.kmeans_distance import KMeansDetector
+    from sorethumb_ml.detectors.kmeans_distance import KMeansDetector
 
     X = _rng_data()
     det = KMeansDetector(k=2)
@@ -552,7 +552,7 @@ def test_permutation_importance_range():
 
 
 def test_permutation_importance_aggregates_derived():
-    from sorethumb.detectors.isolation_forest import IsolationForestDetector
+    from sorethumb_ml.detectors.isolation_forest import IsolationForestDetector
 
     X = _rng_data(n=200, d=3)
     det = IsolationForestDetector(n_estimators=50)

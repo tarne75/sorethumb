@@ -13,11 +13,11 @@ import numpy as np
 import polars as pl
 import pytest
 
-from sorethumb._pipeline import run_detection
-from sorethumb.analysis.contrast import compute_contrast
-from sorethumb.report.charts import render_trend_chart
-from sorethumb.report.csv import write_group_csv
-from sorethumb.report.html import GroupSection, RunMeta, render_report
+from sorethumb_ml._pipeline import run_detection
+from sorethumb_ml.analysis.contrast import compute_contrast
+from sorethumb_ml.report.charts import render_trend_chart
+from sorethumb_ml.report.csv import write_group_csv
+from sorethumb_ml.report.html import GroupSection, RunMeta, render_report
 from tests.factories.configs import make_config
 from tests.factories.frames import write_planted_csv
 from tests.factories.golden import assert_matches_golden
@@ -187,7 +187,7 @@ class TestWriteGroupCsv:
     def test_leaves_existing_csv_on_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """Written via atomic_write (temp file + rename): a failure partway
         through must leave a prior file untouched, not truncated."""
-        from sorethumb import _atomic
+        from sorethumb_ml import _atomic
 
         path = write_group_csv(_RECORDS_DF, tmp_path, "atomickey1234567")
         original = path.read_bytes()
@@ -273,7 +273,7 @@ class TestRenderReport:
             assert grp.group_key in content
 
     def test_chart_png_embedded(self, tmp_path: Path):
-        from sorethumb.report.charts import render_trend_chart
+        from sorethumb_ml.report.charts import render_trend_chart
 
         png_b64 = render_trend_chart(
             period_labels=["2026-09-01"],
@@ -336,7 +336,7 @@ class TestRenderReport:
     def test_leaves_existing_index_html_on_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """index.html is written via atomic_write (temp file + rename): a
         failure partway through must leave a prior report untouched."""
-        from sorethumb import _atomic
+        from sorethumb_ml import _atomic
 
         path = render_report(_RUN_META, [_group()], tmp_path)
         original = path.read_bytes()
@@ -509,7 +509,7 @@ def test_repeat_run_does_not_blank_the_report(tmp_path: Path) -> None:
 
 def test_render_report_for_run_rebuilds_a_deleted_report(tmp_path: Path) -> None:
     """render_report_for_run recreates index.html + group CSVs purely from persisted state."""
-    from sorethumb import Workspace, render_report_for_run
+    from sorethumb_ml import Workspace, render_report_for_run
 
     csv = tmp_path / "data.csv"
     write_planted_csv(csv, n_normal=200, n_anomaly=5, seed=1)
@@ -543,7 +543,7 @@ def test_run_detection_marks_report_failed_on_renderer_exception(
     "success"-shaped from the caller's point of view. Detection/scoring must
     still be reported as having succeeded; the report failure must be
     explicit and named, not just an absent path."""
-    import sorethumb._pipeline as pipeline_mod
+    import sorethumb_ml._pipeline as pipeline_mod
 
     def _boom(*_a: object, **_kw: object) -> None:
         raise RuntimeError("renderer exploded")
@@ -569,7 +569,7 @@ def test_render_report_for_run_tolerates_a_missing_group_results_file(tmp_path: 
     is a data-availability gap for that one group, not a rendering failure
     -- render_report_for_run must still succeed, rendering that group as
     having no anomalies, exactly like GroupSection's own default."""
-    from sorethumb import Workspace, render_report_for_run
+    from sorethumb_ml import Workspace, render_report_for_run
 
     csv = tmp_path / "data.csv"
     write_planted_csv(csv, n_normal=200, n_anomaly=5, seed=4)

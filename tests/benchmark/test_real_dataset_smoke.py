@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 if TYPE_CHECKING:
-    from sorethumb.evaluate.benchmark import BenchmarkRow
+    from sorethumb_ml.evaluate.benchmark import BenchmarkRow
 
 pytestmark = [pytest.mark.benchmark, pytest.mark.slow, pytest.mark.network]
 
@@ -35,7 +35,7 @@ _MAX_ROWS = 20_000  # cap so a nightly run stays bounded even on covtype
 def test_detector_beats_random_on_real_dataset(
     dataset: str, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
-    from sorethumb.evaluate.benchmark import BenchmarkConfig, run_benchmark
+    from sorethumb_ml.evaluate.benchmark import BenchmarkConfig, run_benchmark
 
     cfg = BenchmarkConfig(
         dataset_names=[dataset],

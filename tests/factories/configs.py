@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sorethumb.config import (
+from sorethumb_ml.config import (
     ColumnsConfig,
     Config,
     DetectorConfig,

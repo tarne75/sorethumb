@@ -12,9 +12,9 @@ import pytest
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
-from sorethumb.config import ColumnsConfig, FeaturesConfig, ProfilingConfig
-from sorethumb.profiling.classify import ColumnClass, classify_column, treatment_for
-from sorethumb.profiling.profile import profile_columns
+from sorethumb_ml.config import ColumnsConfig, FeaturesConfig, ProfilingConfig
+from sorethumb_ml.profiling.classify import ColumnClass, classify_column, treatment_for
+from sorethumb_ml.profiling.profile import profile_columns
 from tests.factories.hypothesis_profiles import scaled_examples
 from tests.synth import make_frame
 

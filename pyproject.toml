@@ -3,10 +3,13 @@ requires = ["hatchling>=1.25,<2"]
 build-backend = "hatchling.build"
 
 [project]
-# PyPI distribution name only -- "sorethumb" was taken. The import name
-# (`import sorethumb`), CLI command, and everything else stay unchanged;
-# see prompts/release-launch-plan.md Item 1 for the full rationale and the
-# exact list of runtime/doc references that read this name specifically.
+# PyPI distribution name -- "sorethumb" was taken. The import package is
+# named `sorethumb_ml` (see [project.scripts] and [tool.hatch.build]
+# below); the CLI command, config/db/log filenames, workspace directory
+# name, and GitHub repo all stay "sorethumb" -- see
+# prompts/release-launch-plan.md Item 1 for the original rationale and
+# prompts/actions/action-list-20260930.md P0-1 for the import-package
+# rename this comment now also reflects.
 name = "sorethumb-ml"
 version = "0.1.0"
 description = "Unsupervised anomaly detection for tabular data"
@@ -92,7 +95,7 @@ dev = [
 ]
 
 [project.scripts]
-sorethumb = "sorethumb.cli:app"
+sorethumb = "sorethumb_ml.cli:app"
 
 [project.urls]
 Homepage = "https://github.com/tarne75/sorethumb"
@@ -102,7 +105,7 @@ Changelog = "https://github.com/tarne75/sorethumb/blob/main/CHANGELOG.md"
 Issues = "https://github.com/tarne75/sorethumb/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/sorethumb"]
+packages = ["src/sorethumb_ml"]
 
 # Explicit allowlist (P2-2), not a denylist: without this, hatchling's default
 # sdist falls back to "everything in the project root not excluded by the
@@ -177,7 +180,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["sorethumb"]
+known-first-party = ["sorethumb_ml"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 25
@@ -186,13 +189,13 @@ max-complexity = 25
 "tests/**" = ["ANN", "D", "S", "PLR", "PLC", "FBT", "F401", "DTZ", "F841", "N806", "SLF001", "ARG002", "RUF059"]
 "docs/**" = ["INP001"]
 # db.py builds IN-clause placeholders dynamically using '?' * len(list) — safe parameterised SQL
-"src/sorethumb/store/db.py" = ["S608"]
+"src/sorethumb_ml/store/db.py" = ["S608"]
 # charts.py calls matplotlib.use("Agg") before pyplot import — canonical pattern; renaming to mpl is unconventional
-"src/sorethumb/report/charts.py" = ["ICN001"]
+"src/sorethumb_ml/report/charts.py" = ["ICN001"]
 # _pipeline.py: run_detection and _run_group are intentionally long orchestrators (82 and 72 stmts respectively)
-"src/sorethumb/_pipeline.py" = ["PLR0915"]
+"src/sorethumb_ml/_pipeline.py" = ["PLR0915"]
 # cli.py: _generate_starter_toml contains nested helpers that inflate the statement count
-"src/sorethumb/cli.py" = ["PLR0915"]
+"src/sorethumb_ml/cli.py" = ["PLR0915"]
 
 # ── Mypy ─────────────────────────────────────────────────────────────────────
 [tool.mypy]
@@ -222,10 +225,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = [
-    "sorethumb.scoring.combine",
-    "sorethumb.scoring.calibrate",
-    "sorethumb.features.reduce",
-    "sorethumb.detectors.kmeans_distance",
+    "sorethumb_ml.scoring.combine",
+    "sorethumb_ml.scoring.calibrate",
+    "sorethumb_ml.features.reduce",
+    "sorethumb_ml.detectors.kmeans_distance",
 ]
 warn_return_any = false
 
@@ -252,12 +255,12 @@ markers = [
     "repo_check: tests that validate repository-level consistency (generated docs, README snippets, config schema) rather than library behaviour",
 ]
 filterwarnings = [
-    "error::sorethumb.errors.SorethumbWarning",
+    "error::sorethumb_ml.errors.SorethumbWarning",
 ]
 
 # ── Coverage ─────────────────────────────────────────────────────────────────
 [tool.coverage.run]
-source = ["src/sorethumb"]
+source = ["src/sorethumb_ml"]
 branch = true
 omit = ["tests/*"]
 

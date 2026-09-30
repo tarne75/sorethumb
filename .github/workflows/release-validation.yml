@@ -166,15 +166,15 @@ jobs:
             "$venv/bin/pip" install "$artifact"
             "$venv/bin/sorethumb" --version
             "$venv/bin/python" -c "
-          import sorethumb
-          from sorethumb import Config, SourceConfig, run_detection
+          import sorethumb_ml
+          from sorethumb_ml import Config, SourceConfig, run_detection
           # explain/report/benchmark modules must import fine with no optional
           # extra installed -- every shap/matplotlib/pandas/datasets import in
           # them is lazy (function-level), not at module load time.
-          import sorethumb.explain.shap_tree
-          import sorethumb.explain.gradient
-          import sorethumb.report.charts
-          print('import OK ($artifact_name)', sorethumb.__version__)
+          import sorethumb_ml.explain.shap_tree
+          import sorethumb_ml.explain.gradient
+          import sorethumb_ml.report.charts
+          print('import OK ($artifact_name)', sorethumb_ml.__version__)
           "
             echo "::endgroup::"
 
@@ -191,9 +191,9 @@ jobs:
               "$venv/bin/pip" install --upgrade pip
               "$venv/bin/pip" install "${artifact}[${extra}]"
               "$venv/bin/python" -c "
-          import sorethumb
+          import sorethumb_ml
           ${smoke_import}  # noqa: F401
-          print('import OK ($artifact_name, $extra)', sorethumb.__version__)
+          print('import OK ($artifact_name, $extra)', sorethumb_ml.__version__)
           "
               echo "::endgroup::"
             done

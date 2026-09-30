@@ -255,7 +255,7 @@ writeup.
 
 ## Full-pipeline scenario benchmark — sklearn baselines only, no PyOD
 
-`src/sorethumb/evaluate/pipeline_benchmark.py`'s `sklearn:*` comparison rows use
+`src/sorethumb_ml/evaluate/pipeline_benchmark.py`'s `sklearn:*` comparison rows use
 bare `sklearn.ensemble.IsolationForest` / `sklearn.neighbors.LocalOutlierFactor` /
 `sklearn.svm.OneClassSVM` (already a sorethumb dependency), not PyOD. This is a
 deliberate scope decision, not an oversight: sorethumb's `ecod`/`hbos`/`lof`

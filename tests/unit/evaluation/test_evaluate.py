@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sorethumb.evaluate.metrics import FlagMetrics, Metrics, evaluate_flags, evaluate_scores
+from sorethumb_ml.evaluate.metrics import FlagMetrics, Metrics, evaluate_flags, evaluate_scores
 from tests.factories.benchmark_rows import make_benchmark_row
 
 pytestmark = pytest.mark.unit
@@ -365,7 +365,7 @@ def test_evaluate_flags_rejects_non_binary_labels():
 
 
 def test_synthetic_dataset_load():
-    from sorethumb.evaluate.benchmark import DATASETS, SyntheticEntry
+    from sorethumb_ml.evaluate.benchmark import DATASETS, SyntheticEntry
 
     synth = next(d for d in DATASETS if isinstance(d, SyntheticEntry))
     X, y = synth.load(Path("/tmp"))
@@ -376,7 +376,7 @@ def test_synthetic_dataset_load():
 
 
 def test_synthetic_dataset_contamination_matches():
-    from sorethumb.evaluate.benchmark import SyntheticEntry
+    from sorethumb_ml.evaluate.benchmark import SyntheticEntry
 
     ds = SyntheticEntry(
         name="t",
@@ -394,13 +394,13 @@ def test_synthetic_dataset_contamination_matches():
 
 
 def test_to_markdown_empty():
-    from sorethumb.evaluate.benchmark import to_markdown
+    from sorethumb_ml.evaluate.benchmark import to_markdown
 
     assert "No benchmark" in to_markdown([])
 
 
 def test_benchmark_config_defaults():
-    from sorethumb.evaluate.benchmark import BenchmarkConfig
+    from sorethumb_ml.evaluate.benchmark import BenchmarkConfig
 
     cfg = BenchmarkConfig()
     assert cfg.dataset_names == []
@@ -410,7 +410,7 @@ def test_benchmark_config_defaults():
 
 
 def test_dataset_registry_has_synthetic():
-    from sorethumb.evaluate.benchmark import DATASETS
+    from sorethumb_ml.evaluate.benchmark import DATASETS
 
     names = [d.name for d in DATASETS]
     assert "synthetic_gaussian" in names
@@ -418,7 +418,7 @@ def test_dataset_registry_has_synthetic():
 
 
 def test_dataset_entry_has_licence():
-    from sorethumb.evaluate.benchmark import DATASETS
+    from sorethumb_ml.evaluate.benchmark import DATASETS
 
     for ds in DATASETS:
         assert ds.licence, f"{ds.name} has no licence"
@@ -430,7 +430,7 @@ def test_covtype_loader_restricts_to_class_2_vs_class_4(tmp_path: Path, monkeypa
     majority within this pair) versus class 4 (anomaly, rare) -- every other
     cover type (1, 3, 5, 6, 7) must be dropped from the dataset entirely, not
     silently folded into "normal" by a bare `target == 4` comparison."""
-    from sorethumb.evaluate.benchmark import DATASETS
+    from sorethumb_ml.evaluate.benchmark import DATASETS
 
     covtype_entry = next(d for d in DATASETS if d.name == "covtype")
 
@@ -471,7 +471,7 @@ def test_benchmark_row_nan_average_precision_renders_na_in_csv_dict():
 
 
 def test_benchmark_row_nan_does_not_render_as_literal_nan_string():
-    from sorethumb.evaluate.benchmark import to_markdown
+    from sorethumb_ml.evaluate.benchmark import to_markdown
 
     row = make_benchmark_row(roc_auc=float("nan"), roc_auc_std=float("nan"))
     md = to_markdown([row])
@@ -479,19 +479,19 @@ def test_benchmark_row_nan_does_not_render_as_literal_nan_string():
 
 
 def test_benchmark_row_has_no_peak_rss_mb_field():
-    from sorethumb.evaluate.benchmark import BenchmarkRow
+    from sorethumb_ml.evaluate.benchmark import BenchmarkRow
 
     assert "peak_rss_mb" not in BenchmarkRow.__dataclass_fields__
 
 
 def test_benchmark_table_cols_has_no_peak_rss_mb():
-    from sorethumb.evaluate.benchmark import _TABLE_COLS
+    from sorethumb_ml.evaluate.benchmark import _TABLE_COLS
 
     assert "peak_rss_mb" not in _TABLE_COLS
 
 
 def test_generate_metadata_fields_populated():
-    from sorethumb.evaluate.benchmark import generate_metadata
+    from sorethumb_ml.evaluate.benchmark import generate_metadata
 
     meta = generate_metadata()
     assert meta.generated_at
@@ -508,8 +508,8 @@ def test_generate_metadata_matches_installed_versions():
     import scipy
     import sklearn
 
-    from sorethumb import __version__ as sorethumb_version
-    from sorethumb.evaluate.benchmark import generate_metadata
+    from sorethumb_ml import __version__ as sorethumb_version
+    from sorethumb_ml.evaluate.benchmark import generate_metadata
 
     meta = generate_metadata()
     assert meta.sorethumb_version == sorethumb_version
@@ -519,7 +519,7 @@ def test_generate_metadata_matches_installed_versions():
 
 
 def test_to_markdown_with_metadata_includes_summary_line():
-    from sorethumb.evaluate.benchmark import generate_metadata, to_markdown
+    from sorethumb_ml.evaluate.benchmark import generate_metadata, to_markdown
 
     row = make_benchmark_row()
     meta = generate_metadata()
@@ -529,7 +529,7 @@ def test_to_markdown_with_metadata_includes_summary_line():
 
 
 def test_to_markdown_without_metadata_omits_summary_line():
-    from sorethumb.evaluate.benchmark import to_markdown
+    from sorethumb_ml.evaluate.benchmark import to_markdown
 
     row = make_benchmark_row()
     md = to_markdown([row])
@@ -537,7 +537,7 @@ def test_to_markdown_without_metadata_omits_summary_line():
 
 
 def test_inject_into_readme_with_metadata(tmp_path: Path):
-    from sorethumb.evaluate.benchmark import (
+    from sorethumb_ml.evaluate.benchmark import (
         _RESULTS_MARKER_END,
         _RESULTS_MARKER_START,
         generate_metadata,
@@ -560,7 +560,7 @@ def test_inject_into_readme_with_metadata(tmp_path: Path):
 def test_write_outputs_with_metadata_creates_json(tmp_path: Path):
     import json
 
-    from sorethumb.evaluate.benchmark import generate_metadata, write_outputs
+    from sorethumb_ml.evaluate.benchmark import generate_metadata, write_outputs
 
     row = make_benchmark_row()
     meta = generate_metadata()
@@ -572,7 +572,7 @@ def test_write_outputs_with_metadata_creates_json(tmp_path: Path):
 
 
 def test_write_outputs_without_metadata_skips_json(tmp_path: Path):
-    from sorethumb.evaluate.benchmark import write_outputs
+    from sorethumb_ml.evaluate.benchmark import write_outputs
 
     row = make_benchmark_row()
     write_outputs([row], tmp_path)

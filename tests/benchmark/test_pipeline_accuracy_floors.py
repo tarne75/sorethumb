@@ -65,7 +65,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 if TYPE_CHECKING:
-    from sorethumb.evaluate.pipeline_benchmark import PipelineBenchmarkRow
+    from sorethumb_ml.evaluate.pipeline_benchmark import PipelineBenchmarkRow
 
 pytestmark = pytest.mark.benchmark
 
@@ -94,7 +94,7 @@ _SANITY_FLOOR = 0.35
 @pytest.fixture(scope="session")
 def pipeline_rows() -> dict[tuple[str, str], PipelineBenchmarkRow]:
     """Run every guarded (scenario, ablation) cell once, 3 seeds each."""
-    from sorethumb.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
+    from sorethumb_ml.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
 
     scenarios = sorted({s for s, _ in [*_FLOORS, *_SANITY_ONLY]})
     ablations = sorted({a for _, a in [*_FLOORS, *_SANITY_ONLY]})
@@ -169,7 +169,7 @@ def swamping_rows() -> dict[str, PipelineBenchmarkRow]:
     hand: the observed direction flips seed-to-seed at n_seeds=3 for some
     ablations, but is stable by n_seeds=10).
     """
-    from sorethumb.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
+    from sorethumb_ml.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
 
     cfg = PipelineBenchmarkConfig(
         scenario_names=["__no_ordinary_scenarios__"],  # skip the unrelated per-scenario loop entirely

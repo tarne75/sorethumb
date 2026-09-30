@@ -19,7 +19,7 @@ from typing import Any, get_args, get_origin
 # Allow running without installing the package
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from sorethumb.config import (
+from sorethumb_ml.config import (
     ColumnsConfig,
     DetectorConfig,
     ExplainConfig,
@@ -125,7 +125,7 @@ def _extra_params_section() -> list[str]:
 
     Enumerates the accepted keys per detector from the installed scikit-learn.
     """
-    from sorethumb.detectors import registry  # noqa: PLC0415
+    from sorethumb_ml.detectors import registry  # noqa: PLC0415
 
     lines = [
         "## Detector `extra_params`",
@@ -177,13 +177,12 @@ def generate() -> str:
     lines = [
         "# Configuration reference",
         "",
-        "> **Auto-generated** from `src/sorethumb/config.py` by `docs/generate_config_docs.py`.",
+        "> **Auto-generated** from `src/sorethumb_ml/config.py` by `docs/generate_config_docs.py`.",
         "> Do not edit manually — run `python docs/generate_config_docs.py` to regenerate.",
         "",
         "sorethumb is configured through a single TOML file (default: `sorethumb.toml`).",
         "A config file is optional — passing a data file directly to `sorethumb run`",
-        "uses all defaults with `workdir = \"sorethumb-workspace\"` and prompts to save a "
-        "config on first run:",
+        'uses all defaults with `workdir = "sorethumb-workspace"` and prompts to save a config on first run:',
         "",
         "```bash",
         "sorethumb run /path/to/data.parquet",
@@ -356,7 +355,7 @@ def main() -> None:
 
         drift = check_doc_drift(root)
         if drift:
-            print("\nERROR: prose docs have drifted from src/sorethumb/config.py:")
+            print("\nERROR: prose docs have drifted from src/sorethumb_ml/config.py:")
             for p in drift:
                 print(f"  - {p}")
             failed = True

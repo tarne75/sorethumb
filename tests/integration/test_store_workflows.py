@@ -12,17 +12,22 @@ import warnings
 import numpy as np
 import pytest
 
-from sorethumb.errors import ModelIntegrityError, ModelSchemaDriftError, ModelSchemaDriftWarning, StoreError
-from sorethumb.store.models import plan_digest, save_model, score_with_existing
-from sorethumb.store.results import read_results, write_results
-from sorethumb.store.workspace import make_group_key
+from sorethumb_ml.errors import (
+    ModelIntegrityError,
+    ModelSchemaDriftError,
+    ModelSchemaDriftWarning,
+    StoreError,
+)
+from sorethumb_ml.store.models import plan_digest, save_model, score_with_existing
+from sorethumb_ml.store.results import read_results, write_results
+from sorethumb_ml.store.workspace import make_group_key
 from tests.factories.workspaces import open_workspace as _open_ws
 
 pytestmark = pytest.mark.integration
 
 
 def _fit_detector(n: int = 100, d: int = 4, seed: int = 0):
-    from sorethumb.detectors.isolation_forest import IsolationForestDetector
+    from sorethumb_ml.detectors.isolation_forest import IsolationForestDetector
 
     rng = np.random.default_rng(seed)
     X = rng.standard_normal((n, d))
@@ -32,7 +37,7 @@ def _fit_detector(n: int = 100, d: int = 4, seed: int = 0):
 
 
 def _fitted_calibrator(det, X: np.ndarray):
-    from sorethumb.scoring.calibrate import Calibrator
+    from sorethumb_ml.scoring.calibrate import Calibrator
 
     c = Calibrator()
     scores = det.score_samples(X)

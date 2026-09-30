@@ -16,7 +16,7 @@ pytestmark = pytest.mark.benchmark
 
 
 def test_run_pipeline_benchmark_single_scenario():
-    from sorethumb.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
+    from sorethumb_ml.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
 
     cfg = PipelineBenchmarkConfig(
         scenario_names=["point"], n_seeds=1, include_baselines=False, include_swamping=False
@@ -32,7 +32,7 @@ def test_run_pipeline_benchmark_single_scenario():
 
 
 def test_run_pipeline_benchmark_multiple_seeds_reports_ci():
-    from sorethumb.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
+    from sorethumb_ml.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
 
     cfg = PipelineBenchmarkConfig(
         scenario_names=["point"], n_seeds=3, include_baselines=False, include_swamping=False
@@ -47,7 +47,7 @@ def test_run_pipeline_benchmark_multiple_seeds_reports_ci():
 
 
 def test_run_pipeline_benchmark_multiple_ablations():
-    from sorethumb.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
+    from sorethumb_ml.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
 
     cfg = PipelineBenchmarkConfig(
         scenario_names=["point"],
@@ -62,7 +62,7 @@ def test_run_pipeline_benchmark_multiple_ablations():
 
 
 def test_run_pipeline_benchmark_includes_sklearn_baselines():
-    from sorethumb.evaluate.pipeline_benchmark import (
+    from sorethumb_ml.evaluate.pipeline_benchmark import (
         _SKLEARN_BASELINE_DETECTORS,
         PipelineBenchmarkConfig,
         run_pipeline_benchmark,
@@ -86,7 +86,7 @@ def test_run_pipeline_benchmark_includes_sklearn_baselines():
 def test_run_pipeline_benchmark_includes_swamping():
     """P2-1: the matched clean/contaminated pair, both scored against the
     same at-risk-normal holdout -- see evaluate.scenarios module docstring."""
-    from sorethumb.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
+    from sorethumb_ml.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
 
     cfg = PipelineBenchmarkConfig(
         scenario_names=["point"],
@@ -112,7 +112,7 @@ def test_run_pipeline_benchmark_includes_swamping():
 
 
 def test_run_pipeline_benchmark_reports_peak_memory():
-    from sorethumb.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
+    from sorethumb_ml.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
 
     cfg = PipelineBenchmarkConfig(
         scenario_names=["point"], n_seeds=1, include_baselines=False, include_swamping=False
@@ -125,7 +125,7 @@ def test_run_pipeline_benchmark_reports_peak_memory():
 
 
 def test_to_markdown_returns_table():
-    from sorethumb.evaluate.pipeline_benchmark import (
+    from sorethumb_ml.evaluate.pipeline_benchmark import (
         PipelineBenchmarkConfig,
         run_pipeline_benchmark,
         to_markdown,
@@ -142,7 +142,11 @@ def test_to_markdown_returns_table():
 
 
 def test_to_csv_parseable():
-    from sorethumb.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark, to_csv
+    from sorethumb_ml.evaluate.pipeline_benchmark import (
+        PipelineBenchmarkConfig,
+        run_pipeline_benchmark,
+        to_csv,
+    )
 
     cfg = PipelineBenchmarkConfig(
         scenario_names=["point"], n_seeds=1, include_baselines=False, include_swamping=False
@@ -157,7 +161,7 @@ def test_to_csv_parseable():
 
 
 def test_write_outputs_creates_files(tmp_path):
-    from sorethumb.evaluate.pipeline_benchmark import (
+    from sorethumb_ml.evaluate.pipeline_benchmark import (
         PipelineBenchmarkConfig,
         run_pipeline_benchmark,
         write_outputs,
@@ -174,7 +178,7 @@ def test_write_outputs_creates_files(tmp_path):
 
 
 def test_inject_into_readme_idempotent(tmp_path):
-    from sorethumb.evaluate.pipeline_benchmark import (
+    from sorethumb_ml.evaluate.pipeline_benchmark import (
         _RESULTS_MARKER_END,
         _RESULTS_MARKER_START,
         PipelineBenchmarkConfig,
@@ -198,7 +202,11 @@ def test_inject_into_readme_idempotent(tmp_path):
 def test_scenario_error_is_captured_not_raised():
     """An unknown scenario name inside the worker must come back as an error
     row, not crash the whole batch."""
-    from sorethumb.evaluate.pipeline_benchmark import DEFAULT_ABLATION, _pipeline_batch_worker, _run_isolated
+    from sorethumb_ml.evaluate.pipeline_benchmark import (
+        DEFAULT_ABLATION,
+        _pipeline_batch_worker,
+        _run_isolated,
+    )
 
     batch = _run_isolated(_pipeline_batch_worker, ("does_not_exist", None, DEFAULT_ABLATION, [0]))
     assert batch["error"] is not None
