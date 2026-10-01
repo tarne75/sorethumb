@@ -398,19 +398,6 @@ sorethumb detectors --json
 
 ---
 
-## `sorethumb benchmark`
-
-Run the evaluation harness against labelled benchmark datasets. Requires the
-`[benchmark]` optional dependency group (`uv sync --extra benchmark`).
-
-```bash
-sorethumb benchmark --log-level DEBUG
-```
-
-**Options:** `--log-level`
-
----
-
 ## `sorethumb config` sub-commands
 
 ### `sorethumb config check`

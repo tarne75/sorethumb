@@ -41,7 +41,7 @@ minimal. Everything below is opt-in, matched to the feature it enables:
 |---|---|---|
 | `explain` | shap, numba | TreeSHAP / KernelSHAP explanations. Without it, explanations fall back to the pure-numpy gradient method with a warning — the run itself never fails. |
 | `report` | matplotlib | Trend charts in the HTML report. |
-| `benchmark` | datasets, pandas | `sorethumb benchmark` (both the real-dataset and full-pipeline-scenario suites). |
+| `benchmark` | datasets, pandas | `scripts/run_benchmark.py` (both the real-dataset and full-pipeline-scenario suites) and `pytest -m benchmark`. |
 | `dev` | pytest, ruff, mypy, pre-commit, hypothesis, ... | Everything needed to run the test suite and quality checks in this repo. |
 
 `uv sync --all-extras --frozen` installs all four, which is what you want for

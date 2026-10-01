@@ -641,8 +641,8 @@ def expected_cells(cfg: PipelineBenchmarkConfig) -> set[tuple[str, str]]:
 def assert_complete_and_error_free(rows: list[PipelineBenchmarkRow], expected: set[tuple[str, str]]) -> None:
     """Raise if *rows* doesn't cover exactly *expected* (scenario, ablation) pairs error-free.
 
-    Intended for the publication path (the ``sorethumb benchmark`` CLI
-    command, before injecting results into the README) -- a benchmark run
+    Intended for the publication path (``scripts/run_benchmark.py``,
+    before injecting results into the README) -- a benchmark run
     that silently drops a cell, gains an unrequested one (a config/harness
     drift bug), or reports an errored cell must never ship as if it were
     complete, working evidence.
@@ -797,7 +797,7 @@ def inject_into_readme(rows: list[PipelineBenchmarkRow], readme_path: Path) -> b
         )
         return False
 
-    auto_gen = "<!-- AUTO-GENERATED — do not edit manually; run `sorethumb benchmark` to regenerate. -->"
+    auto_gen = "<!-- AUTO-GENERATED — do not edit manually; run `python scripts/run_benchmark.py --output-dir benchmark_results --readme README.md` to regenerate. -->"
     table_md = f"{_RESULTS_MARKER_START}\n{auto_gen}\n\n{to_markdown(rows)}{_RESULTS_MARKER_END}"
 
     before = original[: original.index(_RESULTS_MARKER_START)]

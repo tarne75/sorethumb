@@ -308,17 +308,20 @@ sorethumb anomalies --top 100 --json | jq '.[] | {rank, score: .composite_score,
 
 ## Benchmark results
 
-One command regenerates both tables below and injects them into this file
-(from a clone — see [Installation](#installation); not yet on PyPI):
+One maintainer script regenerates both tables below and, when you point it at
+this file, injects them (from a clone — see [Installation](#installation); not
+yet on PyPI). It is a repo script, not part of the installed `sorethumb`
+command, and it only writes where you tell it to:
 
 ```bash
 pip install ".[benchmark]"
-sorethumb benchmark
+python scripts/run_benchmark.py --output-dir benchmark_results --readme README.md
 ```
 
-`sorethumb benchmark` runs two independent suites (each can be disabled with
-`--no-pipeline` / `--no-legacy`) and writes `benchmark_results/*.md` / `*.csv`
-alongside the injected tables. Average precision (AP) is the headline metric
+`scripts/run_benchmark.py` runs two independent suites (each can be disabled
+with `--no-pipeline` / `--no-legacy`) and writes `*.md` / `*.csv` into the
+required `--output-dir`; the README is edited only if `--readme` is given.
+Average precision (AP) is the headline metric
 in both — it accounts for class imbalance in a way ROC-AUC does not.
 
 ### Full-pipeline scenario benchmark
@@ -336,7 +339,7 @@ are the same scenario fit with bare sklearn detectors and no sorethumb
 pipeline at all, for comparison (PyOD is deliberately not used here — see
 `docs/approximations.md`).
 
-**Matrix shape**: `sorethumb benchmark` runs every scenario under the shipped
+**Matrix shape**: `scripts/run_benchmark.py` runs every scenario under the shipped
 *default* ablation only (plus its `sklearn:*` baselines) — 10 pipeline
 ablations exist in total (`AblationSpec`s: PCA on, standard scaler, each
 detector alone, all six detectors, composite/union combination), but only
@@ -362,11 +365,11 @@ capable of rejecting a default configuration: a real accuracy regression
 fails that suite. It also documents where the *shipped default* combination
 mode (`intersection`) genuinely underperforms (`local`, `varying_density` —
 see `docs/approximations.md`) rather than asserting something the data shows
-is false. The `sorethumb benchmark` CLI command itself refuses to publish a
+is false. `scripts/run_benchmark.py` itself refuses to publish a
 matrix with a missing or errored cell (`assert_complete_and_error_free`).
 
 <!-- pipeline-benchmark-results-start -->
-<!-- AUTO-GENERATED — do not edit manually; run `sorethumb benchmark` to regenerate. -->
+<!-- AUTO-GENERATED — do not edit manually; run `python scripts/run_benchmark.py --output-dir benchmark_results --readme README.md` to regenerate. -->
 
 | scenario | kind | ablation | n_seeds | n_train | n_holdout | roc_auc | average_precision | precision_at_k | recall_at_k | flag_precision | flag_recall | flag_f1 | flag_false_positive_rate | flag_count | fit_seconds | score_seconds | peak_memory_mb |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -416,13 +419,13 @@ sample (`BenchmarkConfig(max_rows=20_000)`) and the shipped default three
 detectors (`isolation_forest`, `kmeans_distance`, `one_class_svm`) — the full,
 uncapped datasets (Covtype has 581k rows) take on the order of an hour to
 regenerate, dominated by `one_class_svm`'s O(n²) training cost; run without
-`max_rows` for full-dataset numbers. `sorethumb benchmark`'s `--seeds` only
+`max_rows` for full-dataset numbers. `scripts/run_benchmark.py`'s `--seeds` only
 controls this suite (default 5; the table below was regenerated with 3 for a
 faster turnaround — still real mean ± standard deviation across independent
 seeds, not a single draw).
 
 <!-- benchmark-results-start -->
-<!-- AUTO-GENERATED — do not edit manually; run `sorethumb benchmark` to regenerate. -->
+<!-- AUTO-GENERATED — do not edit manually; run `python scripts/run_benchmark.py --output-dir benchmark_results --readme README.md` to regenerate. -->
 
 Generated 2026-09-29T01:58:13+00:00 on macOS-26.6.2-arm64-arm-64bit — Python 3.12.9, sorethumb 0.1.0, numpy 2.5.2, scipy 1.18.1, scikit-learn 1.9.0.
 

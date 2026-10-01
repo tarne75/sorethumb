@@ -45,7 +45,9 @@ during pre-release hardening rather than changes from an earlier release.
 - **`sorethumb history` / `sorethumb backfill`**: rolling-window trend
   aggregation and historical-period backfilling, both scoped correctly to
   dataset identity and the exact configuration that produced each period.
-- **Two benchmark harnesses**, both run via `sorethumb benchmark`: a
+- **Two benchmark harnesses**, both run via `scripts/run_benchmark.py` (a
+  maintainer script that needs explicit `--output-dir`/`--readme` paths; it
+  is deliberately not part of the `sorethumb` command): a
   full-pipeline synthetic-scenario suite (point/local/contextual/clustered/
   masking/swamping/varying-density anomaly types through the real feature
   pipeline) and a real-dataset (KDDCup99, Covtype) plus legacy-synthetic
