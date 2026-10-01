@@ -1032,25 +1032,38 @@ def backfill(
                 console.print(f"  [dim]would process:[/dim] {lbl}")
             raise typer.Exit(0)
 
-        # Every period's RunResult is collected (not just the last one) so a
-        # failure partway through a long backfill is never silently dropped
-        # -- each period runs independently, so one failing must not stop the
-        # rest, but the command must still exit non-zero and name every
-        # period that had a failed group.
-        failed: list[tuple[str, RunResult]] = []
+        # Each period runs independently, so one period failing must not stop the
+        # rest, and the command must still exit non-zero and name every period that
+        # failed. Two kinds of failure are kept apart: a period whose run finished
+        # with failed *groups* (a RunResult with n_failed), and a period whose run
+        # *raised* a project error before producing a result (source unreadable,
+        # store error, ...), which has no groups to list.
+        failed_groups: list[tuple[str, RunResult]] = []
+        raised: list[tuple[str, str]] = []
+        n_ok = 0
         for period_lbl in pending:
             console.print(f"  Processing period [cyan]{period_lbl}[/cyan]…")
-            result = run_detection(cfg, period_label_override=period_lbl, no_report=True)
+            try:
+                result = run_detection(cfg, period_label_override=period_lbl, no_report=True)
+            except SorethumbError as exc:
+                raised.append((period_lbl, f"{type(exc).__name__}: {exc}"))
+                err_console.print(f"  [red]Period {period_lbl} raised an error:[/red] {exc}")
+                continue
             if result.n_failed:
-                failed.append((period_lbl, result))
+                failed_groups.append((period_lbl, result))
+            else:
+                n_ok += 1
 
-        if failed:
+        if failed_groups or raised:
             err_console.print(
-                f"\n[red bold]Backfill finished with {len(failed)} failed period(s):[/red bold]"
+                f"\n[red bold]Backfill finished with {len(failed_groups) + len(raised)} failed period(s) "
+                f"of {len(pending)} ({n_ok} succeeded):[/red bold]"
             )
-            for period_lbl, result in failed:
-                failed_groups = [g.group_label for g in result.groups if g.status == "failed"]
-                err_console.print(f"  {period_lbl}: {', '.join(failed_groups)}")
+            for period_lbl, result in failed_groups:
+                names = [g.group_label for g in result.groups if g.status == "failed"]
+                err_console.print(f"  {period_lbl}: failed group(s): {', '.join(names)}")
+            for period_lbl, message in raised:
+                err_console.print(f"  {period_lbl}: raised {message}")
             raise typer.Exit(1)
 
         console.print("[green]Backfill complete.[/green]")

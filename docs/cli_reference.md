@@ -373,6 +373,12 @@ trend therefore shows *relative* period-to-period movement, not an absolute
 anomaly level on a shared scale — for that, score every period against one fixed
 run with `sorethumb score --from-run RUN_ID`.
 
+A failing period never stops the others. Periods whose run finished with failed
+groups, and periods whose run raised a project error (for example an unreadable
+source), are collected and summarised separately once every pending period has
+been attempted, and the command then exits `1`. Neither kind is recorded as
+complete, so the next `sorethumb backfill` retries them.
+
 **Options:**
 
 | Option | Default | Description |

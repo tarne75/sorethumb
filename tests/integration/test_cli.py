@@ -827,6 +827,113 @@ def test_backfill_collects_every_result_and_exits_nonzero_on_any_failure(
     assert "Backfill complete." not in output
 
 
+def _raising_backfill(monkeypatch: pytest.MonkeyPatch, bad_label: str, exc: Exception) -> list[str | None]:
+    import sorethumb_ml.cli as cli_mod
+
+    real = cli_mod.run_detection
+    seen: list[str | None] = []
+
+    def _patched(cfg, *, period_label_override=None, **kwargs):
+        seen.append(period_label_override)
+        if period_label_override == bad_label:
+            raise exc
+        return real(cfg, period_label_override=period_label_override, **kwargs)
+
+    monkeypatch.setattr(cli_mod, "run_detection", _patched)
+    return seen
+
+
+def test_backfill_continues_past_a_period_that_raises_and_summarises_it_separately(
+    timeseries_workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1-4: a project error raised for one period (not a failed group) used to abort the whole
+    backfill with a traceback, leaving later periods unprocessed and no summary."""
+    from sorethumb_ml.errors import SourceError
+
+    toml_path, workdir, labels = timeseries_workspace
+    bad = labels[0]  # the first period: a stop-on-first-error loop would skip both that follow
+    seen = _raising_backfill(monkeypatch, bad, SourceError("injected: source vanished"))
+
+    result = runner.invoke(app, ["backfill", "--config", str(toml_path)])
+    output = result.stdout + (result.stderr or "")
+
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert result.exit_code == 1
+    assert set(seen) == set(labels), "later periods must still be processed"
+    # The two healthy periods really ran to completion; the raising one left no totals.
+    assert _totals_period_labels(toml_path, workdir, labels) == set(labels) - {bad}
+    # Complete summary: the count, the raised period with its cause, no success banner.
+    assert "1 failed period(s) of 3 (2 succeeded)" in output
+    assert f"{bad}: raised SourceError: injected: source vanished" in output
+    assert "failed group(s)" not in output  # a raise is not a failed group
+    assert "Backfill complete." not in output
+
+
+def test_backfill_summary_lists_raised_periods_and_failed_groups_separately(
+    timeseries_workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sorethumb_ml.cli as cli_mod
+    from sorethumb_ml._pipeline import GroupSummary, RunResult
+    from sorethumb_ml.errors import StoreError
+
+    toml_path, _workdir, labels = timeseries_workspace
+    raising, group_failing = labels[0], labels[1]
+    real = cli_mod.run_detection
+
+    def _patched(cfg, *, period_label_override=None, **kwargs):
+        if period_label_override == raising:
+            raise StoreError("injected store failure")
+        if period_label_override == group_failing:
+            bad = GroupSummary(
+                group_key="gk",
+                group_label="grp-x",
+                n_records=10,
+                n_anomalies=0,
+                anomaly_rate=None,
+                results_path=None,
+                status="failed",
+                error="injected",
+                elapsed_seconds=0.1,
+                drifted=False,
+                refit_reason=None,
+                warnings_issued=[],
+            )
+            return RunResult(
+                run_id="fake",
+                dataset_uri=cfg.source.uri,
+                dataset_fp="fp",
+                config_hash=cfg.config_hash(),
+                period_label=period_label_override,
+                workspace_path=Path(cfg.run.workdir),
+                groups=[bad],
+                report_path=None,
+                started_at="t0",
+                finished_at="t1",
+            )
+        return real(cfg, period_label_override=period_label_override, **kwargs)
+
+    monkeypatch.setattr(cli_mod, "run_detection", _patched)
+    result = runner.invoke(app, ["backfill", "--config", str(toml_path)])
+    output = result.stdout + (result.stderr or "")
+
+    assert result.exit_code == 1
+    assert "2 failed period(s) of 3 (1 succeeded)" in output
+    assert f"{raising}: raised StoreError: injected store failure" in output
+    assert f"{group_failing}: failed group(s): grp-x" in output
+
+
+def test_backfill_does_not_swallow_non_project_exceptions(
+    timeseries_workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the project's own error type is a recorded period failure; a bug (RuntimeError) must stay loud."""
+    toml_path, _workdir, labels = timeseries_workspace
+    _raising_backfill(monkeypatch, labels[0], RuntimeError("a genuine bug"))
+
+    result = runner.invoke(app, ["backfill", "--config", str(toml_path)])
+
+    assert isinstance(result.exception, RuntimeError)
+
+
 # ---------------------------------------------------------------------------
 # sorethumb workspace reset
 # ---------------------------------------------------------------------------
