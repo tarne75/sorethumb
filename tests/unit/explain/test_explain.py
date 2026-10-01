@@ -8,7 +8,7 @@ import pytest
 from sorethumb_ml.errors import ExplainError, FallbackAttributionWarning
 from sorethumb_ml.explain.blend import blend
 from sorethumb_ml.explain.centroid import centroid_attributions
-from sorethumb_ml.explain.gradient import gradient_attributions
+from sorethumb_ml.explain.gradient import gradient_attributions, marginal_deviation_attributions
 from sorethumb_ml.explain.native import ecod_attributions, hbos_attributions
 from sorethumb_ml.explain.project import (
     aggregate_to_original,
@@ -115,6 +115,95 @@ def test_gradient_consistent_sign_convention():
     attrs, _ = gradient_attributions(det, mean_pt, reference=X, max_rows=10)
     # Not testing sign here (depends on direction) — just that it runs and has right shape
     assert attrs.shape == (1, 4)
+
+
+class _FlatOutsideDetector:
+    """Score that is smooth inside [-3, 3] in every dimension and constant outside it.
+
+    Mimics a saturating detector: dimension 0 is what puts a row out of range,
+    and the only slope left there is a small one on dimension 1.
+    """
+
+    def score_samples(self, X: np.ndarray) -> np.ndarray:
+        inside = (np.abs(X) <= 3.0).all(axis=1)
+        smooth = -(X**2).sum(axis=1)
+        return np.where(inside, smooth, -9.0 - 0.01 * X[:, 1])
+
+
+def test_gradient_misattributes_a_saturated_outlier_without_the_fallback():
+    """Documents the failure mode the saturating fallback exists for."""
+    reference = _rng_data(500, 3, seed=1).clip(-2.5, 2.5)
+    row = np.array([[40.0, 0.5, 0.0]])
+    attrs, _ = gradient_attributions(_FlatOutsideDetector(), row, reference=reference)
+    assert attrs[0, 0] == 0.0
+    assert int(np.argmax(np.abs(attrs[0]))) == 1
+
+
+def test_gradient_saturating_uses_marginal_deviation_outside_reference_range():
+    reference = _rng_data(500, 3, seed=1).clip(-2.5, 2.5)
+    rows = np.array([[40.0, 0.5, 0.0], [0.2, -0.3, 0.1]])
+    attrs, tag = gradient_attributions(_FlatOutsideDetector(), rows, reference=reference, saturating=True)
+    assert tag == "heuristic"
+    assert int(np.argmax(attrs[0])) == 0, "the out-of-range dimension must rank first"
+    expected, _ = marginal_deviation_attributions(rows[:1], reference=reference)
+    np.testing.assert_allclose(attrs[0], expected[0])
+    # The in-range row keeps its real gradient (-d/dx of -sum(x^2) = 2x).
+    np.testing.assert_allclose(attrs[1], 2.0 * rows[1], rtol=1e-4, atol=1e-6)
+
+
+def test_gradient_saturating_replaces_an_all_zero_gradient():
+    class _Constant:
+        def score_samples(self, X: np.ndarray) -> np.ndarray:
+            return np.zeros(len(X))
+
+    reference = _rng_data(300, 2, seed=2)
+    row = np.array([[0.1, 1.5]])  # inside the range, but the score is flat everywhere
+    attrs, _ = gradient_attributions(_Constant(), row, reference=reference, saturating=True)
+    assert int(np.argmax(attrs[0])) == 1
+    plain, _ = gradient_attributions(_Constant(), row, reference=reference)
+    assert not plain.any()
+
+
+def test_gradient_saturating_skips_scoring_rows_it_will_replace():
+    calls: list[int] = []
+
+    class _Counting(_FlatOutsideDetector):
+        def score_samples(self, X: np.ndarray) -> np.ndarray:
+            calls.append(len(X))
+            return super().score_samples(X)
+
+    reference = _rng_data(200, 3, seed=3).clip(-2.5, 2.5)
+    gradient_attributions(_Counting(), np.array([[50.0, 0.0, 0.0]]), reference=reference, saturating=True)
+    assert calls == []
+
+
+def test_marginal_deviation_is_robustly_scaled_and_non_negative():
+    rng = np.random.default_rng(4)
+    reference = np.column_stack([rng.normal(50, 10, 2000), rng.normal(200, 30, 2000), np.zeros(2000)])
+    rows = np.array([[900.0, 230.0, 0.0], [50.0, 50.0, 1.0]])
+    attrs, tag = marginal_deviation_attributions(rows, reference=reference)
+    assert tag == "heuristic"
+    assert (attrs >= 0).all()
+    assert attrs[0, 0] == pytest.approx(85.0, rel=0.1)  # (900 - 50) / ~10
+    assert attrs[0, 1] == pytest.approx(1.0, rel=0.15)  # (230 - 200) / ~30
+    assert attrs[1, 2] == pytest.approx(1.0)  # constant column: scale falls back to 1
+    assert int(np.argmax(attrs[1])) == 1
+
+
+def test_marginal_deviation_binary_column_scale_is_finite():
+    reference = np.column_stack([np.r_[np.zeros(990), np.ones(10)], np.linspace(-1, 1, 1000)])
+    attrs, _ = marginal_deviation_attributions(np.array([[1.0, 0.0]]), reference=reference)
+    assert np.isfinite(attrs).all()
+    assert attrs[0, 0] > 0
+
+
+def test_one_class_svm_rbf_saturates_linear_does_not():
+    from sorethumb_ml.detectors.one_class_svm import OneClassSVMDetector
+
+    assert OneClassSVMDetector().score_saturates_outside_data
+    assert OneClassSVMDetector(kernel="sigmoid").score_saturates_outside_data
+    assert not OneClassSVMDetector(kernel="linear").score_saturates_outside_data
+    assert not OneClassSVMDetector(kernel="poly").score_saturates_outside_data
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +483,48 @@ def test_blend_zero_weight_falls_back_to_equal():
     b = np.ones((5, 3)) * 2.0
     result, _ = blend([(a, "heuristic"), (b, "heuristic")], [0.0, 0.0])
     assert result.shape == (5, 3)
+
+
+def test_blend_drops_a_negligible_source_row_instead_of_normalising_it():
+    """A near-zero row is noise; normalising it would give it full weight."""
+    signal = np.array([[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]])
+    flat = np.array([[0.0, 1e-9, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 3.0]])  # row 0 ~ nothing
+    result, _ = blend([(signal, "exact"), (flat, "heuristic")], [1.0, 1.0])
+    np.testing.assert_allclose(result[0], [1.0, 0.0, 0.0], atol=1e-12)
+    # Rows where both sources carry information are blended as before.
+    np.testing.assert_allclose(result[1], [0.0, 1.0, 0.0])
+
+
+def test_blend_reweights_remaining_sources_per_row():
+    a = np.array([[1.0, 0.0], [1.0, 0.0]])
+    b = np.array([[0.0, 1.0], [0.0, 0.0]])  # no information for row 1
+    c = np.array([[0.0, 1.0], [0.0, 1.0]])
+    result, _ = blend([(a, "heuristic"), (b, "heuristic"), (c, "heuristic")], [2.0, 1.0, 1.0])
+    np.testing.assert_allclose(result[0], [0.5, 0.5])
+    np.testing.assert_allclose(result[1], [2.0 / 3.0, 1.0 / 3.0])
+
+
+def test_blend_row_no_source_informs_is_zero():
+    a = np.array([[0.0, 0.0], [1.0, 0.0]])
+    b = np.array([[0.0, 0.0], [0.0, 1.0]])
+    result, _ = blend([(a, "heuristic"), (b, "heuristic")], [1.0, 1.0])
+    np.testing.assert_array_equal(result[0], [0.0, 0.0])
+    np.testing.assert_allclose(result[1], [0.5, 0.5])
+
+
+def test_blend_all_zero_source_contributes_nothing():
+    a = np.array([[3.0, 4.0]])
+    zero = np.zeros((1, 2))
+    result, _ = blend([(a, "heuristic"), (zero, "heuristic")], [1.0, 1.0])
+    np.testing.assert_allclose(result, [[0.6, 0.8]])
+
+
+def test_blend_zero_weight_source_never_explains_a_row():
+    weighted = np.array([[1.0, 0.0], [0.0, 0.0]])
+    unweighted = np.array([[0.0, 1.0], [0.0, 1.0]])
+    result, _ = blend([(weighted, "heuristic"), (unweighted, "heuristic")], [1.0, 0.0])
+    np.testing.assert_allclose(result[0], [1.0, 0.0])
+    np.testing.assert_array_equal(result[1], [0.0, 0.0])
 
 
 # ---------------------------------------------------------------------------

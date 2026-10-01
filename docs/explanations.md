@@ -70,7 +70,10 @@ directionally correct and comparable across features within a row.
 
 **Label in output:** `model_specific`.
 
-**Applicable when:** detector is `isolation_forest` and `explain.enabled = true`.
+**Applicable when:** detector is `isolation_forest`, `explain.enabled = true`,
+and the `explain` extra (shap) is installed. Without shap, or if TreeSHAP
+fails for a group, Isolation Forest falls back to the gradient method below
+with the out-of-range fallback switched on, and the label becomes `heuristic`.
 
 ---
 
@@ -111,6 +114,24 @@ bounded.
 
 **Label in output:** `heuristic`.
 
+**Rows outside the data (Isolation Forest fallback, RBF/sigmoid One-Class
+SVM):** these scores go flat far from the data. Isolation Forest's score is
+piecewise constant, and an RBF kernel decays to nothing away from every support
+vector, so for a row outside the reference population's range a small step
+changes nothing in exactly the column that put it there. The gradient then
+ranks whatever residual slope the other columns have: a row with
+`amount=900` against a reference around 50 would be explained as `lat` or
+`region`. For these detectors, a row outside the reference range in any
+column, or whose gradient is exactly zero, is attributed instead by its
+reference-scaled marginal deviation, `|x − median| / scale` per column, where
+scale is the reference's IQR/1.349 (falling back to the scaled MAD, then the
+standard deviation, then 1 for a constant column). That keeps growing with
+distance, so the column the row is furthest out in ranks first. It ignores
+interactions between columns, which is why it is used only where the gradient
+has already lost the signal. LOF and linear/polynomial One-Class SVMs keep the
+plain gradient: their scores keep changing outside the data. The label stays
+`heuristic` either way.
+
 **Applicable when:** detector is `one_class_svm` or `lof` — the two detectors
 whose score responds continuously to a small perturbation. OneClassSVM's
 decision function is a differentiable kernel expansion; LOF's score is built
@@ -132,6 +153,15 @@ tags (`exact` > `model_specific` > `heuristic`): averaging an exact ECOD
 decomposition with a heuristic gradient result doesn't un-corrupt the
 heuristic part, so the blend can only be as trustworthy as its least
 trustworthy input.
+
+Each source is L2-normalised per row before blending, so a detector with a
+larger native magnitude cannot dominate. A source row whose norm is negligible
+(at most 1/1000 of that source's median non-zero row norm, or exactly zero)
+carries no information for that row, whether from a flat score or because the
+row is beyond that source's `explain.max_rows` cap. It is left out of that
+row's blend rather than normalised, since normalising would scale numerical
+noise up to the same weight as a real signal, and the remaining sources'
+weights are rescaled for that row.
 
 A detector `combination="composite"` assigned zero weight — dropped by the
 bad-member guard (see the main scoring docs) as anti-correlated with the

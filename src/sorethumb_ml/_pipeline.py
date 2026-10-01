@@ -1976,13 +1976,19 @@ def _compute_attributions(
                 # docstring above). Both operate on flagged rows only for cost
                 # control, and truncate to explain.max_rows — `attr` can come
                 # back shorter than X_flagged.
+                # An RBF/sigmoid OneClassSVM goes flat outside the data, so rows
+                # beyond the reference range get the marginal-deviation fallback
+                # (see explain/gradient.py); LOF's distances keep growing there.
                 max_rows = config.explain.max_rows
+                saturating = isinstance(det, OneClassSVMDetector) and det.score_saturates_outside_data
                 if config.explain.kernel_shap:
                     attr, tag = kernel_shap_attributions(
-                        det, X_flagged, reference=reference, max_rows=max_rows
+                        det, X_flagged, reference=reference, max_rows=max_rows, saturating=saturating
                     )
                 else:
-                    attr, tag = gradient_attributions(det, X_flagged, reference=reference, max_rows=max_rows)
+                    attr, tag = gradient_attributions(
+                        det, X_flagged, reference=reference, max_rows=max_rows, saturating=saturating
+                    )
             else:
                 # An attribution method for this detector type hasn't been
                 # vetted for smoothness. Finite-difference on a step-function

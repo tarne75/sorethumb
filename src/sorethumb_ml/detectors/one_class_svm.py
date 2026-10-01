@@ -102,6 +102,16 @@ class OneClassSVMDetector:
         """Return anomaly scores. Higher = more normal (sklearn decision_function sign)."""
         return self._model.decision_function(X)  # type: ignore[no-any-return]
 
+    @property
+    def score_saturates_outside_data(self) -> bool:
+        """True for kernels whose decision function goes flat far from every support vector.
+
+        RBF and sigmoid do; a finite-difference gradient there loses the
+        dimension that put the row out of range (see ``explain/gradient.py``).
+        Linear and polynomial kernels keep growing with the input, so they don't.
+        """
+        return self._kernel in {"rbf", "sigmoid"}
+
     def natural_flag(self, scores: np.ndarray) -> np.ndarray:
         """Flag rows below the hyperplane (decision_function < 0 = outlier per sklearn)."""
         return scores < 0.0

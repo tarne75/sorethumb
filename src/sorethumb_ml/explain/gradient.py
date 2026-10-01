@@ -19,6 +19,18 @@ before starting and enforce explain.max_rows to keep it bounded.
 Note on sign convention: score_samples returns higher = more normal.
 We negate the finite-difference gradient so positive attribution means
 "this feature pushes the row toward being anomalous".
+
+Saturating scores (``saturating=True``). IsolationForest's score is piecewise
+constant in each input, and an RBF One-Class SVM's decision function flattens
+out once a row is far from every support vector. For a row outside the
+reference population's range, a small perturbation then changes nothing in the
+very dimension that put the row out there, so the gradient there is zero (or
+numerically tiny) and whatever residual slope the other dimensions carry wins
+the ranking: an ``amount`` of 900 against a reference of about 50 gets
+explained as ``lat`` or ``region``. With ``saturating=True``, such rows -- and
+any row whose gradient comes back exactly zero -- are attributed with the
+reference-scaled marginal deviation instead (see
+``marginal_deviation_attributions``). The tag stays ``"heuristic"``.
 """
 
 from __future__ import annotations
@@ -59,6 +71,56 @@ def _check_reference(X: np.ndarray, reference: np.ndarray, caller: str) -> None:
         raise ExplainError(msg)
 
 
+def _robust_scale(reference: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per-dimension (centre, scale) of *reference*: median, and IQR/1.349 -> MAD*1.4826 -> std -> 1."""
+    centre = np.median(reference, axis=0)
+    q75, q25 = np.percentile(reference, [75.0, 25.0], axis=0)
+    scale = (q75 - q25) / 1.349
+    mad = np.median(np.abs(reference - centre), axis=0) * 1.4826
+    scale = np.where(scale > 0, scale, mad)
+    scale = np.where(scale > 0, scale, reference.std(axis=0))
+    scale = np.where(scale > 0, scale, 1.0)
+    return centre, scale
+
+
+def marginal_deviation_attributions(X: np.ndarray, *, reference: np.ndarray) -> tuple[np.ndarray, str]:
+    """Reference-scaled marginal deviation ``|x - median| / scale`` per dimension.
+
+    The fallback for a saturating score (see the module docstring): it ignores
+    the detector and only asks how far each value sits from the bulk of the
+    reference population, in units of that dimension's robust spread (IQR/1.349,
+    falling back to the scaled MAD, then the standard deviation, then 1 for a
+    constant column). Unlike a gradient it keeps growing with the distance, so
+    the dimension a row is furthest out in ranks first. It cannot see
+    interactions (a row that is unusual only as a combination of in-range
+    values gets no signal from it), which is why it is used only where the
+    gradient has already lost the signal.
+
+    ECOD's per-feature tail probabilities were considered instead: they need a
+    separately fitted ECOD, and they saturate too -- every value beyond the
+    reference's extreme gets the same capped tail probability, so 150 and 900
+    would tie against a reference that tops out at 90.
+
+    Returns
+    -------
+    attributions:
+        Shape (n_rows, n_features), non-negative.
+    tag:
+        Always "heuristic".
+
+    """
+    _check_reference(X, reference, "marginal_deviation_attributions")
+    centre, scale = _robust_scale(reference)
+    return np.abs(X - centre) / scale, "heuristic"
+
+
+def _outside_reference_range(X: np.ndarray, reference: np.ndarray) -> np.ndarray:
+    """Boolean mask: rows of *X* below the reference minimum or above its maximum in any dimension."""
+    below = np.less(X, reference.min(axis=0))
+    above = np.greater(X, reference.max(axis=0))
+    return np.asarray((below | above).any(axis=1))
+
+
 def gradient_attributions(
     detector: Any,
     X: np.ndarray,
@@ -66,6 +128,7 @@ def gradient_attributions(
     reference: np.ndarray,
     max_rows: int = 5000,
     step_factor: float = _DEFAULT_STEP_FACTOR,
+    saturating: bool = False,
 ) -> tuple[np.ndarray, str]:
     """Compute central finite-difference attributions for each target row in X.
 
@@ -88,6 +151,11 @@ def gradient_attributions(
         h = step_factor * std(reference[:, d]) per dimension. When the
         reference has zero variance in a dimension, a step relative to that
         feature's own reference magnitude (or 1e-3 for an all-zero feature).
+    saturating:
+        Set for detectors whose score goes flat outside the data (IsolationForest,
+        RBF One-Class SVM). Rows outside the reference range in any dimension are
+        then attributed with ``marginal_deviation_attributions`` without
+        computing a gradient, as are rows whose gradient is exactly zero.
 
     Returns
     -------
@@ -111,10 +179,13 @@ def gradient_attributions(
     fallback = np.where(abs_mean > 0, step_factor * abs_mean, 1e-3)
     steps = np.where(stds > 0, step_factor * stds, fallback)
 
-    projected_calls = 2 * n_rows * n_features
+    use_marginal = _outside_reference_range(X, reference) if saturating else np.zeros(n_rows, dtype=bool)
+    n_gradient_rows = int((~use_marginal).sum())
+
+    projected_calls = 2 * n_gradient_rows * n_features
     logger.info(
         "gradient_attributions: %d rows x %d features → %d score_samples calls.",
-        n_rows,
+        n_gradient_rows,
         n_features,
         projected_calls,
     )
@@ -122,6 +193,8 @@ def gradient_attributions(
     attributions = np.zeros((n_rows, n_features), dtype=np.float64)
 
     for i in range(n_rows):
+        if use_marginal[i]:
+            continue
         row = X[i]
         for d in range(n_features):
             h = steps[d]
@@ -135,6 +208,20 @@ def gradient_attributions(
             # Negate so positive attribution = more anomalous
             attributions[i, d] = -(scores[0] - scores[1]) / (2.0 * h)
 
+    if saturating:
+        # A row inside the reference range can still sit on a flat stretch of a
+        # piecewise-constant score; an all-zero gradient says nothing about it.
+        use_marginal |= ~attributions.any(axis=1)
+        if use_marginal.any():
+            marginal, _ = marginal_deviation_attributions(X[use_marginal], reference=reference)
+            attributions[use_marginal] = marginal
+            logger.info(
+                "gradient_attributions: %d of %d row(s) outside the reference range or with a "
+                "zero gradient; used the reference-scaled marginal deviation for them.",
+                int(use_marginal.sum()),
+                n_rows,
+            )
+
     return attributions, "heuristic"
 
 
@@ -145,6 +232,7 @@ def kernel_shap_attributions(
     reference: np.ndarray,
     background_k: int = 50,
     max_rows: int = 5000,
+    saturating: bool = False,
 ) -> tuple[np.ndarray, str]:
     """KernelSHAP attributions for the target rows *X*, against a k-means summary of *reference*.
 
@@ -173,6 +261,9 @@ def kernel_shap_attributions(
         subsampled with a fixed seed).
     max_rows:
         Rows beyond this cap are silently skipped.
+    saturating:
+        Passed to the gradient fallback used when shap is not installed (see
+        ``gradient_attributions``); KernelSHAP itself does not use it.
 
     """
     try:
@@ -185,7 +276,9 @@ def kernel_shap_attributions(
             stacklevel=2,
         )
         logger.warning("KernelSHAP unavailable (shap not installed): %s", exc)
-        return gradient_attributions(detector, X, reference=reference, max_rows=max_rows)
+        return gradient_attributions(
+            detector, X, reference=reference, max_rows=max_rows, saturating=saturating
+        )
 
     _check_reference(X, reference, "kernel_shap_attributions")
     if X.shape[0] > max_rows:

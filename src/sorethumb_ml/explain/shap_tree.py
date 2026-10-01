@@ -6,7 +6,10 @@ the node array; we catch that, fall back to the gradient method, and emit
 FallbackAttributionWarning — the result tag becomes "heuristic". The same
 fallback applies when shap itself is not installed (it lives in the optional
 ``explain`` extra, not a core dependency) -- explanations degrade to the
-pure-numpy gradient method rather than the run failing.
+pure-numpy gradient method rather than the run failing. That fallback runs
+with ``saturating=True`` (see ``explain/gradient.py``): rows outside the
+reference range, where the forest's score is flat, are attributed by their
+reference-scaled marginal deviation instead of a zero gradient.
 
 The explainer is constructed with check_additivity=False because IsolationForest's
 score_samples does not equal the SHAP sum of its base value and contributions —
@@ -86,7 +89,7 @@ def tree_shap_attributions(
     except ImportError as exc:
         warnings.warn(
             f"shap is not installed; TreeSHAP attributions for group {group_name!r} are "
-            "unavailable. Falling back to gradient attributions (heuristic). "
+            "unavailable. Falling back to gradient/marginal-deviation attributions (heuristic). "
             "Install with: pip install 'sorethumb-ml[explain]'.",
             FallbackAttributionWarning,
             stacklevel=2,
@@ -96,7 +99,7 @@ def tree_shap_attributions(
     except (IndexError, ValueError, RuntimeError) as exc:
         warnings.warn(
             f"TreeSHAP failed for group {group_name!r} ({type(exc).__name__}: {exc}); "
-            "falling back to gradient attributions (heuristic).",
+            "falling back to gradient/marginal-deviation attributions (heuristic).",
             FallbackAttributionWarning,
             stacklevel=2,
         )
@@ -105,5 +108,7 @@ def tree_shap_attributions(
     # Fallback: import here to avoid circular dependency at module load time
     from sorethumb_ml.explain.gradient import gradient_attributions  # noqa: PLC0415
 
-    attrs, _ = gradient_attributions(detector, X, reference=reference)
+    # saturating=True: IsolationForest's score is piecewise constant, so far-out
+    # rows get a zero gradient in exactly the dimension that isolated them.
+    attrs, _ = gradient_attributions(detector, X, reference=reference, saturating=True)
     return attrs, "heuristic"
