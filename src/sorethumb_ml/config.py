@@ -439,7 +439,13 @@ class RunConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    workdir: str = Field(description="Workspace root directory where all run artefacts are stored.")
+    workdir: str = Field(
+        description=(
+            "Workspace root directory where all run artefacts are stored. Required when using the "
+            "library; the CLI fills in ./sorethumb-workspace/ (relative to the current directory) "
+            "when neither --workdir nor this field is given."
+        )
+    )
     seed: int = Field(42, description="Global random seed for reproducible results.")
     strict: bool = Field(
         False,

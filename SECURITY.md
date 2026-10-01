@@ -2,8 +2,9 @@
 
 ## Trust boundary: workspaces are executable, not just data
 
-A `sorethumb` workspace (the directory named by `run.workdir`, default
-`.sorethumb/`) stores fitted detector estimators and score calibrators as
+A `sorethumb` workspace (the directory named by `--workdir` or `run.workdir`;
+by default `./sorethumb-workspace/` in the current directory) stores fitted
+detector estimators and score calibrators, under `models/`, as
 `joblib`/pickle files. Unpickling is code execution: loading a pickle file can
 run arbitrary Python chosen by whoever produced that file, not just the
 `sorethumb` code you installed.

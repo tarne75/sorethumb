@@ -74,13 +74,26 @@ app.add_typer(workspace_app, name="workspace")
 # Common options
 # ---------------------------------------------------------------------------
 
+# Default workspace root: used only when neither --workdir nor a config file's
+# run.workdir is given -- with *or without* a config file. It is a path relative
+# to the CURRENT DIRECTORY (not to the config file or the data file). A dedicated
+# directory, not ".", so a first run never scatters sorethumb.db/models/results/
+# reports/logs beside the source data or other files already in the current
+# directory. docs and README state this value; tests/repo_check/test_workspace_docs.py
+# fails if they drift from it.
+_DEFAULT_WORKDIR = "sorethumb-workspace"
+
 _CONFIG_OPT = Annotated[
     Path | None,
     typer.Option("--config", "-c", help="Path to sorethumb.toml.", envvar="SORETHUMB_CONFIG"),
 ]
 _WORKDIR_OPT = Annotated[
     Path | None,
-    typer.Option("--workdir", "-w", help="Workspace root (overrides config)."),
+    typer.Option(
+        "--workdir",
+        "-w",
+        help=f"Workspace root (overrides run.workdir; default ./{_DEFAULT_WORKDIR}/ in the current directory).",
+    ),
 ]
 _LOG_LEVEL_OPT = Annotated[
     str | None,
@@ -100,11 +113,6 @@ _JSON_OPT = Annotated[
     typer.Option("--json", help="Machine-readable JSON output on stdout."),
 ]
 
-# Zero-config default workspace root (P3-5): used only when neither --workdir
-# nor a config file's run.workdir is given. A dedicated directory, not ".",
-# so a first run never scatters sorethumb.db/models/results/reports/logs
-# beside the source data or other files already in the current directory.
-_DEFAULT_WORKDIR = "sorethumb-workspace"
 # The marker file Workspace.init creates (store/workspace.py's _MARKER_DB) --
 # duplicated here, not imported, since it is that module's private constant.
 _WORKSPACE_MARKER_FILENAME = "sorethumb.db"

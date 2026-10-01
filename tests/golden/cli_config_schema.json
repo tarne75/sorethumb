@@ -489,7 +489,7 @@
           "type": "boolean"
         },
         "workdir": {
-          "description": "Workspace root directory where all run artefacts are stored.",
+          "description": "Workspace root directory where all run artefacts are stored. Required when using the library; the CLI fills in ./sorethumb-workspace/ (relative to the current directory) when neither --workdir nor this field is given.",
           "title": "Workdir",
           "type": "string"
         }

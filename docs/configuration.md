@@ -5,7 +5,8 @@
 
 sorethumb is configured through a single TOML file (default: `sorethumb.toml`).
 A config file is optional — passing a data file directly to `sorethumb run`
-uses all defaults with `workdir = "sorethumb-workspace"` and prompts to save a config on first run:
+uses all defaults with `workdir = "sorethumb-workspace"` (a directory in the current
+directory, not next to the data file) and prompts to save a config on first run:
 
 ```bash
 sorethumb run /path/to/data.parquet
@@ -118,7 +119,7 @@ so trivial changes do not invalidate cached artefacts.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `run.workdir` | str | **required** | Workspace root directory where all run artefacts are stored. |
+| `run.workdir` | str | **required** | Workspace root directory where all run artefacts are stored. Required when using the library; the CLI fills in ./sorethumb-workspace/ (relative to the current directory) when neither --workdir nor this field is given. |
 | `run.seed` | int | 42 | Global random seed for reproducible results. |
 | `run.strict` | bool | false | Promote all SorethumbWarnings to errors. Always active in the test suite. |
 | `run.max_memory_mb` | int | 8192 | Pre-flight cap on the projected feature matrix's memory, sized for how many copies of it (rows x encoded columns x dtype bytes) can realistically be alive at once -- 2x the bare matrix size (one group's matrix plus polars encode/scale headroom), or 4x when explain.enabled (the default) and features.dtype='float32' (explain needs an additional float64 copy of the full matrix). A run whose estimate exceeds this aborts with MemoryBudgetError before any model is fitted. It is not a live RSS ceiling, and does not include detector-internal memory (e.g. a kernel-based fit's O(train_rows^2) usage) -- actual peak memory can still exceed the budget. |

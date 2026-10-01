@@ -174,8 +174,9 @@ print(f"Flagged {result.n_anomalies} rows for review across {result.n_succeeded}
 
 No config file needed. Pass the data file directly and sorethumb runs with
 sensible defaults, writing every artefact under one dedicated
-`./sorethumb-workspace/` directory rather than beside your data or scattered
-loose in the current directory:
+`./sorethumb-workspace/` directory — relative to the directory you run the
+command from, not beside your data file, and not scattered loose in the current
+directory:
 
 ```bash
 cd /path/to/my-analysis
@@ -184,7 +185,15 @@ sorethumb run --log-level INFO /path/to/data.csv
 
 On first run you'll be prompted to save a `sorethumb.toml` for future runs.
 Re-running the same command always uses the file you pass — overriding whatever
-`uri` is in the config — so iterating across datasets is frictionless.
+`uri` is in the config — so iterating across datasets is frictionless. The same
+`./sorethumb-workspace/` default applies to a config file that does not set
+`run.workdir`; `--workdir` and `run.workdir` override it (see
+[Where the workspace lives](https://github.com/tarne75/sorethumb/blob/main/docs/cli_reference.md#where-the-workspace-lives)).
+
+> **The workspace is executable, not just data.** Its `models/` directory holds
+> fitted estimators as `joblib`/pickle files, which run arbitrary code when
+> loaded. Only open a workspace you created or fully trust — see
+> [Honest limitations](#honest-limitations) and `SECURITY.md`.
 
 ### Config-based workflow (full control)
 
@@ -196,7 +205,8 @@ cd /path/to/my-analysis
 ```
 
 `init` writes a fully-commented `sorethumb.toml` and creates a
-`sorethumb-workspace/` directory next to it. Open the file and set the one
+`sorethumb-workspace/` directory next to it (it does nothing if a
+`sorethumb.toml` is already there). Open the file and set the one
 field it leaves for you — `workdir` is already filled in, pointing at the
 workspace `init` just created:
 

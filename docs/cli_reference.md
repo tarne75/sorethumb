@@ -29,7 +29,7 @@ These options appear on most commands and behave identically everywhere:
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
 | `--config PATH` | `-c` | `sorethumb.toml` | Path to the config file. Env: `SORETHUMB_CONFIG`. |
-| `--workdir PATH` | `-w` | from config | Workspace root; overrides `run.workdir` in the config. |
+| `--workdir PATH` | `-w` | `run.workdir`, else `./sorethumb-workspace/` | Workspace root; overrides `run.workdir` in the config. See [Where the workspace lives](#where-the-workspace-lives). |
 | `--log-level STR` | | `INFO` | Python logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 | `--seed INT` | | from config | Random seed; overrides `run.seed`. |
 | `--strict / --no-strict` | | off | Promote all library warnings to errors. |
@@ -58,7 +58,59 @@ The file handler is created as soon as the config is loaded. When running
 without a config file (`sorethumb run <data_file>`), the log is written to
 `./sorethumb-workspace/logs/sorethumb.log`, since workdir defaults to a
 dedicated `./sorethumb-workspace/` directory rather than the current
-directory itself.
+directory itself (see [Where the workspace lives](#where-the-workspace-lives)).
+
+---
+
+## Where the workspace lives
+
+Every artefact sorethumb writes — the SQLite ledger, fitted models, results,
+reports, logs and caches — goes under one **workspace** directory. Its location
+is resolved the same way for every command, with or without a config file:
+
+1. `--workdir PATH`, if given;
+2. otherwise `run.workdir` from the config file, if it sets one;
+3. otherwise the default, `./sorethumb-workspace/`.
+
+The default is **relative to the current directory** you run the command from —
+not to the config file's directory and not to the data file's. A relative
+`run.workdir` in a config file is resolved the same way (against the current
+directory), so run commands from the directory you used when you created the
+workspace, or set an absolute path. (As a library, `run.workdir` is a required
+field of `Config`; only the CLI supplies the default.)
+
+*With no config file* (`sorethumb run data.csv`) nothing is written beside your
+data. The workspace is created at the default location, and you are asked whether
+to save a config (to `--config`, default `sorethumb.toml` in the current directory)
+for future runs. *With a
+config file that omits `run.workdir`*, the same default applies.
+
+`sorethumb init [path]` is the explicit route: it writes `path/sorethumb.toml`
+and creates the workspace at `path/sorethumb-workspace/`, with `run.workdir` in the
+new file already set to that absolute path.
+
+If a `sorethumb.db` exists in the current directory (a workspace made under the
+older default of `.`) and nothing names a workspace, sorethumb refuses to guess:
+pass `--workdir .` to keep using it, or move its contents into
+`./sorethumb-workspace/`.
+
+### What is in a workspace — and why it is executable
+
+```
+sorethumb.db            SQLite ledger: runs, groups, history, artefact index
+models/<run>/…          fitted feature plan, and per group and detector the
+                        estimator and calibrator as joblib/pickle files, plus a manifest
+results/<run>/<group>/  per-group results (Parquet)
+reports/<run>/          rendered HTML / CSV / JSON reports
+cache/  tmp/  logs/     downloaded-dataset and feature caches, scratch, rotating logs
+```
+
+The `models/` files make a workspace **executable, not just data**: unpickling
+them is arbitrary code execution. `sorethumb score --from-run` and
+`run.reuse_models` load them with no sandboxing, and the SHA-256 digests only
+detect accidental corruption, not a crafted file. Treat a workspace you did not
+create yourself like a script you downloaded — see
+[SECURITY.md](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md).
 
 ---
 
@@ -102,23 +154,27 @@ not.
 
 ## `sorethumb init [path]`
 
-Create a workspace directory and write a fully-commented `sorethumb.toml`
-starter file. This is the recommended onboarding path when you want full
-control over every setting.
+Write a fully-commented `sorethumb.toml` starter file into `path` and create the
+workspace at `path/sorethumb-workspace/` (the file's `run.workdir` is filled in
+with that absolute path). This is the recommended onboarding path when you want
+full control over every setting. If `sorethumb.toml` already exists in `path`,
+`init` does nothing.
 
 ```bash
-sorethumb init                        # initialise current directory
-sorethumb init /path/to/my-workspace  # create and initialise a new directory
+sorethumb init                        # sorethumb.toml and sorethumb-workspace/ in the current directory
+sorethumb init /path/to/my-analysis   # the same, in a new directory
 ```
 
 After `init`, open `sorethumb.toml` and set `source.uri` to your data file,
 then run `sorethumb inspect` to verify column classification before training.
+The workspace holds pickled models, so only share or open one you trust — see
+[Where the workspace lives](#where-the-workspace-lives).
 
 **Arguments:**
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `path` | `.` | Directory to create and initialise. |
+| `path` | `.` | Directory that receives `sorethumb.toml` and the `sorethumb-workspace/` workspace (created if missing). |
 
 ---
 
@@ -180,7 +236,7 @@ rows at all), which is not treated as an error.
 
 | Argument | Description |
 |----------|-------------|
-| `data_file` | Optional path to a data file. Overrides `source.uri` in the config. When no `sorethumb.toml` exists, all settings default and workdir defaults to `./sorethumb-workspace/`; you are prompted to save a config for future runs. |
+| `data_file` | Optional path to a data file. Overrides `source.uri` in the config. When no `sorethumb.toml` exists, all settings default and workdir defaults to `./sorethumb-workspace/` in the current directory; you are prompted to save a config for future runs. |
 
 **Options:**
 
