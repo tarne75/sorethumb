@@ -17,6 +17,7 @@ caches, or local settings that were never meant to leave this machine --
 from __future__ import annotations
 
 import email
+import re
 import tarfile
 import zipfile
 from email.message import Message
@@ -122,6 +123,18 @@ def test_sdist_excludes_repository_only_material() -> None:
         if n.startswith(_FORBIDDEN_SDIST_PREFIXES) or any(sub in n for sub in _FORBIDDEN_NAME_SUBSTRINGS)
     ]
     assert not offenders, f"sdist contains unintended file(s): {offenders}"
+
+
+_REVIEW_DOCUMENT = re.compile(r"review[^/]*\.(md|docx|pdf)$", re.IGNORECASE)
+
+
+def test_neither_artifact_contains_a_review_document() -> None:
+    """Review documents are working material about the repository (see .gitignore); an
+    allowlisted sdist should never pick one up, and a wheel never would. This keeps it so."""
+    offenders = [
+        n for n in (*_sdist_names(_sdist_path()), *_wheel_names(_wheel_path())) if _REVIEW_DOCUMENT.search(n)
+    ]
+    assert not offenders, f"review document(s) in a distribution artifact: {offenders}"
 
 
 def _read_wheel_metadata(path: Path) -> Message:

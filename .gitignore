@@ -35,3 +35,11 @@ benchmark_results/
 *.iml
 prompts/
 PLAN.md
+
+# Generated or hand-written review documents (code reviews, audits of the repository,
+# pre-release critiques). They are working material about the project, not part of it, and
+# were never meant to be published; the [Rr][Ee]... classes make the match case-insensitive.
+/reviews/
+*[Rr][Ee][Vv][Ii][Ee][Ww]*.md
+*[Rr][Ee][Vv][Ii][Ee][Ww]*.docx
+*[Rr][Ee][Vv][Ii][Ee][Ww]*.pdf
