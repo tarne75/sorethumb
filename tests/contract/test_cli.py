@@ -654,6 +654,69 @@ def test_explain_plan_json_output(workspace):
     assert "decisions" in data or "output_features" in data
 
 
+def _explain_plan_json(toml_path: Path, *args: str) -> dict:
+    result = runner.invoke(app, ["explain-plan", *args, "--config", str(toml_path), "--json"])
+    assert result.exit_code == 0, result.stdout
+    return json.loads(result.stdout)
+
+
+def test_explain_plan_with_run_id_loads_persisted_plan_not_current_data(workspace):
+    """A run ID selects the plan the run was fitted with; no run ID plans the
+    current data. After the source data changes the two must differ (P0-4)."""
+    import polars as pl
+
+    csv_path, toml_path, workdir = workspace
+    run_id = _run_and_get_run_id(toml_path, workdir)
+
+    historical_before = _explain_plan_json(toml_path, run_id)
+    current_before = _explain_plan_json(toml_path)
+    assert "value_a" in historical_before["output_features"]
+    assert current_before["output_features"] == historical_before["output_features"]
+
+    # value_a becomes entirely null -> a fresh plan now drops it (null_ratio_drop = 0.9).
+    df = pl.read_csv(csv_path).with_columns(pl.lit(None, dtype=pl.Float64).alias("value_a"))
+    df.write_csv(str(csv_path))
+
+    historical_after = _explain_plan_json(toml_path, run_id)
+    current_after = _explain_plan_json(toml_path)
+
+    assert historical_after == historical_before  # persisted plan is immutable
+    assert "value_a" not in current_after["output_features"]
+    assert current_after["output_features"] != historical_after["output_features"]
+
+
+def test_explain_plan_with_run_id_does_not_read_source_data(workspace):
+    csv_path, toml_path, workdir = workspace
+    run_id = _run_and_get_run_id(toml_path, workdir)
+    csv_path.unlink()
+    result = runner.invoke(app, ["explain-plan", run_id, "--config", str(toml_path), "--json"])
+    assert result.exit_code == 0, result.stdout
+    assert "output_features" in json.loads(result.stdout)
+
+
+def test_explain_plan_unknown_run_id_is_not_found(workspace):
+    _, toml_path, workdir = workspace
+    _run_and_get_run_id(toml_path, workdir)
+    result = runner.invoke(app, ["explain-plan", "no-such-run", "--config", str(toml_path), "--json"])
+    assert result.exit_code == 1
+    assert "Run not found: no-such-run" in json.loads(result.stdout)["error"]
+
+    human = runner.invoke(app, ["explain-plan", "no-such-run", "--config", str(toml_path)])
+    assert human.exit_code == 1
+
+
+def test_explain_plan_run_without_persisted_plan_is_clear_error(workspace):
+    _, toml_path, workdir = workspace
+    run_id = _run_and_get_run_id(toml_path, workdir)
+    from sorethumb_ml import Workspace
+
+    with Workspace.open(workdir) as ws:
+        (ws.run_dir(run_id) / "plan.json").unlink()
+    result = runner.invoke(app, ["explain-plan", run_id, "--config", str(toml_path), "--json"])
+    assert result.exit_code == 1
+    assert "No persisted FeaturePlan" in json.loads(result.stdout)["error"]
+
+
 # ---------------------------------------------------------------------------
 # Exit codes
 # ---------------------------------------------------------------------------

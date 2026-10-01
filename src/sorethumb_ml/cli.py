@@ -1365,24 +1365,43 @@ def anomalies(
 
 @app.command(name="explain-plan")
 def explain_plan(
-    run_id: Annotated[str | None, typer.Argument(help="Run ID whose plan to show.")] = None,  # noqa: ARG001
+    run_id: Annotated[
+        str | None,
+        typer.Argument(help="Run ID whose persisted plan to show (default: plan the current source data)."),
+    ] = None,
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
     log_level: _LOG_LEVEL_OPT = None,
     json_output: _JSON_OPT = False,
 ) -> None:
-    """Print the FeaturePlan for a run — what was dropped, encoded, derived, and why."""
+    """Print the FeaturePlan -- what was dropped, encoded, derived, and why.
+
+    With a RUN_ID, shows the plan that run was actually fitted with (loaded
+    from the selected workspace). Without one, plans the current source data
+    under the current config, which may differ from any historical run.
+    """
+    from sorethumb_ml.store.models import load_plan  # noqa: PLC0415
+
     _setup_logging(log_level or "INFO")
     cfg = _load_config(config, workdir=workdir, log_level=log_level, json_output=json_output)
     ws_path = Path(cfg.run.workdir)
-    cache_dir = ws_path / "cache" / "datasets"
-    cache_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        df = load_dataset(cfg.source, cache_dir=cache_dir)
-        plan = build_feature_plan(df, cfg)
-    except SorethumbError as exc:
-        _fail(json_output, str(exc), 2)
+    if run_id is not None:
+        try:
+            with Workspace.open(ws_path) as ws:
+                if ws.store.get_run(run_id) is None:
+                    _fail(json_output, f"Run not found: {run_id}", 1)
+                plan = load_plan(ws, run_id)
+        except SorethumbError as exc:
+            _fail(json_output, str(exc), 1)
+    else:
+        cache_dir = ws_path / "cache" / "datasets"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            df = load_dataset(cfg.source, cache_dir=cache_dir)
+            plan = build_feature_plan(df, cfg)
+        except SorethumbError as exc:
+            _fail(json_output, str(exc), 2)
 
     if json_output:
         typer.echo(plan.to_json())
