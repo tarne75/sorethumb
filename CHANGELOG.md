@@ -88,6 +88,12 @@ during pre-release hardening rather than changes from an earlier release.
 Pre-release hardening surfaced and fixed real issues across the codebase
 before anything shipped:
 
+- **Missing and non-finite values**: float `NaN` is now treated as missing
+  (imputed like a null) instead of leaking into scaling, and the feature
+  matrix no longer replaces anything non-finite with `0.0` after scaling --
+  that made a `+Inf`/`-Inf` row look perfectly typical. Infinities in
+  columns that feed the matrix, and impossible derived values such as a
+  `float32` overflow, now fail with a clear `PlanError`.
 - **Data identity and history correctness**: row identity (`id_column`) is
   validated for existence/uniqueness before any filtering; a group
   selector matching nothing now fails loudly instead of silently

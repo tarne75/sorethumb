@@ -19,19 +19,19 @@ Two public entry points:
 from __future__ import annotations
 
 import logging
-import warnings
 
 import numpy as np
 import polars as pl
 
 from sorethumb_ml.config import Config
-from sorethumb_ml.errors import MemoryBudgetError, NonFiniteWarning, PlanError
+from sorethumb_ml.errors import MemoryBudgetError, PlanError
 from sorethumb_ml.features.correlate import drop_correlated
 from sorethumb_ml.features.encode import build_encoding_exprs, compute_demotions
 from sorethumb_ml.features.reduce import apply_pca, fit_pca
 from sorethumb_ml.features.scale import apply_scaler, fit_scaler
 from sorethumb_ml.features.space import FeatureSpace
 from sorethumb_ml.io.fingerprint import INTERNAL_ROW_ID_COLUMN, schema_fingerprint
+from sorethumb_ml.profiling.missing import float_nan_to_null
 from sorethumb_ml.profiling.plan import FeaturePlan, recompute_output_features
 
 logger = logging.getLogger(__name__)
@@ -191,13 +191,11 @@ def fit_features(df: pl.DataFrame, plan: FeaturePlan, config: Config) -> Feature
             scaled_df = apply_scaler(enc_df.select(feature_cols), scaler_params, feature_cols)
 
     feature_names = scaled_df.columns
+    # Missing values were imputed by the scaler and infinities rejected by
+    # _encode, so a non-finite value here can only be an impossible derived
+    # value (e.g. a dtype overflow): _to_matrix fails on it rather than
+    # replacing it with a made-up number.
     matrix = _to_matrix(scaled_df, config.features.dtype)
-
-    # Sanitize before PCA, not just after: a non-finite value here (e.g. an
-    # empty-list row's __mean/__min/__max going through polars null -> numpy
-    # NaN on the to_numpy() conversion above) would otherwise reach sklearn's
-    # PCA fit directly, which does not handle NaN/Inf gracefully.
-    matrix = _sanitize(matrix, config.features.dtype)
 
     # Snapshot the matrix's exact column order/identity right before the
     # optional PCA step below — this, not plan.output_features (which
@@ -215,10 +213,9 @@ def fit_features(df: pl.DataFrame, plan: FeaturePlan, config: Config) -> Feature
         n_components = components.shape[0]
         matrix = apply_pca(matrix, components, mean, n_features, n_components)
         feature_names = [f"pc_{i}" for i in range(matrix.shape[1])]
-        # Defensive second pass: legitimate finite input can't make PCA
-        # itself produce non-finite output, but this is cheap insurance
-        # against a numerically degenerate (near-singular) fit.
-        matrix = _sanitize(matrix, config.features.dtype)
+        # Finite input can't legitimately make PCA produce non-finite output;
+        # if a numerically degenerate fit does, say so instead of shipping it.
+        _assert_finite(matrix, feature_names, "after PCA")
 
     return FeatureSpace(
         matrix=matrix,
@@ -270,9 +267,7 @@ def apply_feature_plan(df: pl.DataFrame, plan: FeaturePlan) -> FeatureSpace:
     scaled_df = apply_scaler(enc_df, plan.scaler_params, enc_df.columns)
 
     feature_names = scaled_df.columns
-    matrix = _to_matrix(scaled_df, plan.output_dtype)
-    # Sanitize before PCA -- see the matching comment in fit_features.
-    matrix = _sanitize(matrix, plan.output_dtype)
+    matrix = _to_matrix(scaled_df, plan.output_dtype)  # fails on non-finite; see fit_features
 
     if plan.pca_components is not None and plan.pca_mean is not None:
         components = np.array(plan.pca_components, dtype=np.float64)
@@ -281,7 +276,7 @@ def apply_feature_plan(df: pl.DataFrame, plan: FeaturePlan) -> FeatureSpace:
         n_components = components.shape[0]
         matrix = apply_pca(matrix, components, mean, n_features, n_components)
         feature_names = [f"pc_{i}" for i in range(matrix.shape[1])]
-        matrix = _sanitize(matrix, plan.output_dtype)  # defensive second pass
+        _assert_finite(matrix, feature_names, "after PCA")
 
     return FeatureSpace(
         matrix=matrix,
@@ -354,15 +349,57 @@ def _encode(
     demoted: set[str],
     extra_freq: dict[str, dict[str, float]] | None,
 ) -> pl.DataFrame:
-    """Build the encoded polars DataFrame from plan artefacts."""
+    """Build the encoded polars DataFrame from plan artefacts.
+
+    Missing values (null, and float NaN -- see ``profiling.missing``) are left
+    as null here for the scaler to impute with its fitted centre; infinities
+    are rejected (``_assert_no_infinities``).
+    """
+    df = float_nan_to_null(df)
     exprs = build_encoding_exprs(df.schema, plan, demoted, extra_freq)
     if not exprs:
         return pl.DataFrame()
     _assert_no_duplicate_output_names(exprs, plan)
     encoded = df.select(exprs)
-    # Cast everything to Float64 so the scaler operates uniformly
-    cast_exprs = [pl.col(c).cast(pl.Float64) for c in encoded.columns]
-    return encoded.select(cast_exprs)
+    # Cast everything to Float64 so the scaler operates uniformly. A NaN
+    # *derived* from the source (e.g. the mean of a list holding a NaN) is
+    # missing too, so it joins the null path.
+    cast_exprs = [pl.col(c).cast(pl.Float64).fill_nan(None) for c in encoded.columns]
+    encoded = encoded.select(cast_exprs)
+    _assert_no_infinities(encoded, plan)
+    return encoded
+
+
+def _assert_no_infinities(enc_df: pl.DataFrame, plan: FeaturePlan) -> None:
+    """Fail closed on +/-inf in any feature that would enter the matrix (P0-5).
+
+    No transformation can preserve what an infinity means: clipping or
+    imputing it invents a value, and letting it through scaling turns it into
+    an inf/NaN that a later stage would have to hide. Only columns that
+    actually become features are checked, so an infinity in a column the plan
+    drops or ignores (e.g. an identifier) is not an error.
+    """
+    if not enc_df.columns:
+        return
+    counts = enc_df.select([pl.col(c).is_infinite().sum().alias(c) for c in enc_df.columns]).row(
+        0, named=True
+    )
+    bad = {c: int(n) for c, n in counts.items() if n}
+    if not bad:
+        return
+    parts = [
+        f"{plan.derived_to_original.get(c, c)!r}"
+        + (f" (feature {c!r})" if plan.derived_to_original.get(c, c) != c else "")
+        + f": {n} value(s)"
+        for c, n in bad.items()
+    ]
+    raise PlanError(
+        "Infinite value(s) (+Inf/-Inf) found in column(s) that feed the feature matrix -- "
+        + "; ".join(parts)
+        + ". Infinities have no meaningful scaled value and are not silently replaced. "
+        "Clean the source (replace with null to treat as missing, or clip to a real bound), "
+        "or add the column to columns.ignore."
+    )
 
 
 def _assert_no_duplicate_output_names(exprs: list[pl.Expr], plan: FeaturePlan) -> None:
@@ -393,25 +430,38 @@ def _assert_no_duplicate_output_names(exprs: list[pl.Expr], plan: FeaturePlan) -
         )
 
 
-def _to_matrix(df: pl.DataFrame, dtype_str: str) -> np.ndarray:
-    """Convert polars DataFrame to numpy array with the requested dtype."""
-    np_dtype = np.float32 if dtype_str == "float32" else np.float64
-    return df.to_numpy().astype(np_dtype)
-
-
-def _sanitize(matrix: np.ndarray, dtype_str: str) -> np.ndarray:
-    """Replace NaN/±Inf with 0.0, warning if any are found."""
+def _assert_finite(matrix: np.ndarray, feature_names: list[str], stage: str) -> None:
+    """Raise PlanError if *matrix* holds any NaN/+-Inf, naming the offending features."""
     bad = ~np.isfinite(matrix)
-    if bad.any():
-        n_bad = int(bad.sum())
-        warnings.warn(
-            f"{n_bad} non-finite value(s) (NaN or ±Inf) found in the feature matrix "
-            "and replaced with 0.0. An earlier pipeline stage may have misbehaved — "
-            "check profiling logs for columns with high null ratios or extreme values.",
-            NonFiniteWarning,
-            stacklevel=3,
-        )
-        matrix = matrix.copy()
-        matrix[bad] = 0.0
+    if not bad.any():
+        return
+    cols = [feature_names[j] for j in np.flatnonzero(bad.any(axis=0))][:10]
+    raise PlanError(
+        f"{int(bad.sum())} non-finite value(s) (NaN or +-Inf) in the feature matrix {stage}, "
+        f"in feature(s) {cols}. Missing values are imputed and infinities rejected before "
+        "this point, so this is an impossible derived value; it is not replaced with a "
+        "placeholder. Inspect those columns for extreme or degenerate values."
+    )
+
+
+def _to_matrix(df: pl.DataFrame, dtype_str: str) -> np.ndarray:
+    """Convert the scaled polars DataFrame to a finite numpy matrix of the requested dtype.
+
+    Raises PlanError rather than substituting a value when the frame holds a
+    non-finite value, or when a finite float64 value overflows the target
+    dtype (float32 tops out near 3.4e38, so an extreme-but-finite scaled value
+    would otherwise silently become +-Inf).
+    """
+    names = list(df.columns)
+    wide = df.to_numpy().astype(np.float64)
+    _assert_finite(wide, names, "after scaling")
     np_dtype = np.float32 if dtype_str == "float32" else np.float64
-    return matrix.astype(np_dtype)
+    with np.errstate(over="ignore"):
+        matrix = wide.astype(np_dtype)
+    if not np.isfinite(matrix).all():
+        _assert_finite(
+            matrix,
+            names,
+            f"after casting to {dtype_str} (value overflows the dtype; set features.dtype = 'float64' or fix the extreme value)",
+        )
+    return matrix

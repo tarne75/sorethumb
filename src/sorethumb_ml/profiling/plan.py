@@ -27,6 +27,7 @@ from sorethumb_ml.profiling.classify import (
     classify_column,
     treatment_for,
 )
+from sorethumb_ml.profiling.missing import float_nan_to_null
 from sorethumb_ml.profiling.profile import ColumnProfile, profile_columns
 
 _NUMERIC_BASE_TYPES = (
@@ -250,6 +251,10 @@ def build_feature_plan(df: pl.DataFrame, config: Config) -> FeaturePlan:
     schema will produce an identical feature space (before scaling / PCA).
     """
     protected = _build_protected(config.columns)
+
+    # NaN is a missing value (P0-5): normalise before profiling so null
+    # ratios, missing indicators and median imputation all see it.
+    df = float_nan_to_null(df)
 
     profiles = profile_columns(df, config.profiling)
 

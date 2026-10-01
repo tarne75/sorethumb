@@ -178,6 +178,33 @@ KMeans, One-Class SVM) produce materially identical results at both precisions o
 tabular anomaly detection tasks. If your use case requires `float64` precision, set
 `features.dtype = "float64"` in config.
 
+## Missing values and non-finite numbers
+
+Missing values are imputed, not flagged as errors: a null, or a float `NaN`
+(treated as missing, the same as null), is replaced with the column's fitted
+median, and the scaler then places it at that median's scaled position. A
+value *derived* from the source that comes out missing (for example the mean
+of an empty list, or of a list containing a `NaN`) is imputed with the fitted
+centre of that feature (the median for `robust` scaling, the trimmed mean for
+`standard`). Statistics are always fitted on the observed values only. Where
+the missing-indicator rule applies (`profiling.null_ratio_flag`, default `0.0`,
+so any missing value), a `<col>__is_missing` feature records which rows were
+imputed -- which means an isolated missing value in an otherwise complete
+column is itself a rare feature value, and that row can rank as somewhat
+unusual by design.
+
+`+Inf` and `-Inf` are not imputed or clipped: no transformation preserves what
+an infinity means. An infinity in any column that feeds the feature matrix
+fails the run with a `PlanError` naming the column (and, for derived features,
+the source column). Infinities in columns the plan drops or that are listed in
+`columns.ignore` are not an error. Clean the source (set them to null to treat
+them as missing, or clip them to a real bound) and re-run.
+
+The feature matrix is never patched with a placeholder after scaling. If a
+finite value still ends up non-finite (for example an extreme value that
+overflows `float32`), the run fails with a `PlanError` that names the
+feature; set `features.dtype = "float64"` or fix the extreme value.
+
 ## Time derivatives — ordinal, not cyclical
 
 `features.time_derivatives` (hour, dayofweek, day, month, year, quarter) are emitted as

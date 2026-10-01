@@ -20,13 +20,13 @@ from sorethumb_ml.errors import (
     FeatureWidthWarning,
     LowVarianceWarning,
     MemoryBudgetError,
-    NonFiniteWarning,
     PlanError,
 )
 from sorethumb_ml.features.build import (
+    _assert_finite,
     _check_memory_budget,
     _peak_matrix_multiplier,
-    _sanitize,
+    _to_matrix,
     apply_feature_plan,
     fit_features,
 )
@@ -721,19 +721,33 @@ def test_apply_pca_roundtrip():
 
 
 # ---------------------------------------------------------------------------
-# _sanitize
+# Non-finite guards (P0-5): fail clearly, never substitute a value
 # ---------------------------------------------------------------------------
 
 
-def test_sanitize_replaces_nan_with_zero():
-    """_sanitize emits NonFiniteWarning and zeros out NaN/Inf values."""
-    matrix = np.array([[1.0, float("nan"), float("inf")]], dtype=np.float32)
-    with pytest.warns(NonFiniteWarning, match="non-finite"):
-        result = _sanitize(matrix, "float32")
-    assert np.all(np.isfinite(result))
-    assert result[0, 0] == pytest.approx(1.0)
-    assert result[0, 1] == pytest.approx(0.0)
-    assert result[0, 2] == pytest.approx(0.0)
+def test_assert_finite_raises_plan_error_naming_the_feature():
+    matrix = np.array([[1.0, float("nan"), float("inf")]], dtype=np.float64)
+    with pytest.raises(PlanError, match=r"2 non-finite.*\['b', 'c'\]"):
+        _assert_finite(matrix, ["a", "b", "c"], "after scaling")
+
+
+def test_assert_finite_passes_finite_matrix():
+    _assert_finite(np.zeros((3, 2)), ["a", "b"], "after scaling")
+
+
+def test_to_matrix_does_not_replace_nan_or_inf():
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        df = pl.DataFrame({"a": [1.0, bad]})
+        with pytest.raises(PlanError, match="non-finite"):
+            _to_matrix(df, "float64")
+
+
+def test_to_matrix_float32_overflow_of_a_finite_value_fails_clearly():
+    """1e300 is finite in float64 but becomes +Inf as float32: must not be hidden."""
+    df = pl.DataFrame({"a": [1.0, 1e300]})
+    assert np.isfinite(_to_matrix(df, "float64")).all()
+    with pytest.raises(PlanError, match="overflows the dtype"):
+        _to_matrix(df, "float32")
 
 
 # ---------------------------------------------------------------------------

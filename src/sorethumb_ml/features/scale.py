@@ -16,6 +16,9 @@ rather than exploding. A genuinely small but non-zero spread is used as-is: it i
 longer clamped up to 1.0, which previously flattened fine-grained columns to near-zero
 variance.
 
+Missing values: ``fit_scaler`` computes every statistic over the observed (non-null)
+values, and ``apply_scaler`` imputes a null with the fitted centre before scaling.
+
 All per-column quantiles are computed in batched polars aggregations so a wide feature
 matrix triggers a small constant number of full passes rather than one pass per feature.
 """
@@ -138,7 +141,15 @@ def apply_scaler(
     for col in df.columns:
         if col in target_set:
             p = scaler_params[col]
-            exprs.append(((pl.col(col).cast(pl.Float64) - p["center"]) / p["scale"]).alias(col))
+            # A missing value (null) is imputed with the fitted centre before
+            # scaling -- the median (robust) / trimmed mean (standard) of the
+            # observed values -- so it lands at exactly 0.0 as "typical for
+            # this column". That is median/mean imputation, a documented
+            # transformation, not a sentinel; it is applied identically at fit
+            # and score-forward time because the centre is stored in the plan.
+            exprs.append(
+                ((pl.col(col).cast(pl.Float64).fill_null(p["center"]) - p["center"]) / p["scale"]).alias(col)
+            )
         else:
             exprs.append(pl.col(col))
 

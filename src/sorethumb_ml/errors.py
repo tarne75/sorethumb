@@ -83,7 +83,13 @@ class FeatureWidthWarning(SorethumbWarning):
 
 
 class NonFiniteWarning(SorethumbWarning):
-    """NaN or ±Inf values were found and replaced with 0.0 during feature construction."""
+    """Reserved: NaN/±Inf are no longer silently replaced during feature construction (P0-5).
+
+    Missing values are imputed with the fitted centre and infinities or impossible
+    derived values raise ``PlanError``; nothing emits this warning any more. Kept
+    so the public exception surface (and ``-W``/strict-mode filters naming it)
+    does not change.
+    """
 
 
 class LowVarianceWarning(SorethumbWarning):
