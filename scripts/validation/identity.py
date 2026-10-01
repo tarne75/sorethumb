@@ -53,9 +53,9 @@ def code_revision(repo_root: Path) -> str:
 
 
 # Packages whose version can change the numbers this script produces.
-# "sorethumb-ml" is this package's PyPI distribution name (see
-# prompts/release-launch-plan.md Item 1) -- importlib.metadata looks
-# packages up by that, not by the "sorethumb_ml" import name.
+# "sorethumb-ml" is this package's PyPI distribution name --
+# importlib.metadata looks packages up by that, not by the "sorethumb_ml"
+# import name.
 _TRACKED_PACKAGES = ("sorethumb-ml", "numpy", "scipy", "scikit-learn", "polars", "pydantic")
 
 

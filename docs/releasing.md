@@ -56,8 +56,7 @@ secret, and a `testpypi` GitHub Environment. None of this touches the real
 `PYPI_TOKEN` secret or `pypi` environment `publish.yml` uses.
 
 Confirmed already in place for the **production** path (2026-09-29, via
-read-only `gh api`/`gh secret list` checks — see
-`prompts/action-list-20260923.md` P2-5 for the full note): the `pypi`
+read-only `gh api`/`gh secret list` checks): the `pypi`
 GitHub Environment exists with its required-reviewers rule intact, and
 `PYPI_TOKEN` is present as a repository secret. What a TestPyPI rehearsal
 run additionally proves, that a read-only config check cannot: the reusable

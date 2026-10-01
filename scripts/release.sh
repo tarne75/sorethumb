@@ -9,8 +9,7 @@
 # version you mean to release, every check must pass, and you must
 # re-type that version to confirm before anything is pushed. Pushing the
 # PyPI publish itself still requires a separate manual approval click in
-# GitHub's UI (the `pypi` environment's required-reviewers rule, added in
-# release-launch-plan.md Item 2) -- this script only gets you to a pushed
+# GitHub's UI (the `pypi` environment's required-reviewers rule) -- this script only gets you to a pushed
 # tag, never all the way to PyPI on its own.
 #
 # Usage:
@@ -136,8 +135,6 @@ _ok "$TAG does not already exist, locally or on origin"
 #      - The `pip install 'sorethumb-ml[...]'` hints already embedded in
 #        cli.py/gradient.py/shap_tree.py/benchmark.py's own strings likewise
 #        need no change -- same reasoning.
-#    See prompts/release-launch-plan.md Item 1's step 5 for the original
-#    scoping note this codifies.
 # ---------------------------------------------------------------------------
 
 _step "Checking release-state documentation (P0-9: scripts/check_release_state.py)"

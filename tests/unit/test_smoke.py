@@ -21,8 +21,7 @@ def test_version_attribute() -> None:
     not a second hard-coded copy of pyproject.toml's version that can drift
     from it -- so this asserts equality with that metadata, never a literal
     version string. Looked up by the PyPI distribution name "sorethumb-ml",
-    which differs from this import package's own name "sorethumb_ml" (see
-    prompts/release-launch-plan.md Item 1)."""
+    which differs from this import package's own name "sorethumb_ml"."""
     import importlib.metadata
 
     assert sorethumb_ml.__version__ == importlib.metadata.version("sorethumb-ml")

@@ -25,8 +25,7 @@ try:
     # hard-coded copy that can drift from it. Works for an editable dev
     # install too -- uv/pip both write real dist-info metadata for those.
     # Looked up by the PyPI *distribution* name ("sorethumb-ml"), which
-    # differs from this import package's own name -- see
-    # prompts/release-launch-plan.md Item 1.
+    # differs from this import package's own name.
     __version__ = importlib.metadata.version("sorethumb-ml")
 except importlib.metadata.PackageNotFoundError:
     # sorethumb was imported from source without being installed at all

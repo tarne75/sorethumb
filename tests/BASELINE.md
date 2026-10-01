@@ -1,6 +1,6 @@
 # Test-suite baseline (P1-1)
 
-Captured 2026-09-14, immediately before the P1-1 lane refactor (`prompts/pre-release-plan.md`),
+Captured 2026-09-14, immediately before the P1-1 lane refactor,
 on `uv run pytest` with the config in place at that commit (`addopts = ["--strict-markers", "--tb=short"]`,
 only `integration`/`benchmark` markers declared, neither applied to any test module).
 
@@ -398,7 +398,7 @@ format, mypy, and the doc-consistency check all clean.
 ## What P1-7 changed
 
 Rebuilt CI around the lane taxonomy from P1-1..P1-6, and audited the full "Test-refactor
-acceptance criteria" list (`prompts/pre-release-plan.md` line 59) end to end -- 15 of 17
+acceptance criteria" list end to end -- 15 of 17
 criteria fully hold; one required an actual fix (below); one is knowingly partial and carried
 to P3-2, documented rather than silently dropped.
 

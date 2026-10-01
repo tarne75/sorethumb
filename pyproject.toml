@@ -6,10 +6,7 @@ build-backend = "hatchling.build"
 # PyPI distribution name -- "sorethumb" was taken. The import package is
 # named `sorethumb_ml` (see [project.scripts] and [tool.hatch.build]
 # below); the CLI command, config/db/log filenames, workspace directory
-# name, and GitHub repo all stay "sorethumb" -- see
-# prompts/release-launch-plan.md Item 1 for the original rationale and
-# prompts/actions/action-list-20260930.md P0-1 for the import-package
-# rename this comment now also reflects.
+# name, and GitHub repo all stay "sorethumb".
 name = "sorethumb-ml"
 version = "0.1.0"
 description = "Unsupervised anomaly detection for tabular data"

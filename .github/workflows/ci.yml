@@ -13,8 +13,7 @@ on:
 
 # Every astral-sh/setup-uv@<sha> reference below is pinned to an exact commit
 # (bec219d24cd3e171d82865faccec33120bb574f4 == the v10.1.0 tag), not a
-# floating major-version tag, for reproducibility -- see P3-3 in
-# prompts/pre-release-plan.md. `uses:` can't reference `env:`/expressions, so
+# floating major-version tag, for reproducibility. `uses:` can't reference `env:`/expressions, so
 # the SHA is repeated per job rather than centralised. Every other
 # third-party action is pinned to an exact commit the same way (P0-9).
 
@@ -29,8 +28,7 @@ jobs:
   # The required release-gating suite (ruff/format/mypy, repo-check, fast
   # tests across Python versions, integration, property, build+twine+smoke)
   # lives in release-validation.yml so publish.yml can run the exact same
-  # checks against the exact tagged commit, not just trust this run — see
-  # P0-9 in prompts/pre-release-plan.md.
+  # checks against the exact tagged commit, not just trust this run.
   validate:
     uses: ./.github/workflows/release-validation.yml
 

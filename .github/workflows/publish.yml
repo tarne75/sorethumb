@@ -4,7 +4,7 @@ name: Publish
 # trusted publishing. Trusted publishing needs the PyPI project to already
 # exist to configure a trusted publisher against it, which is impossible
 # for this project's first-ever publish -- token auth sidesteps that
-# chicken-and-egg problem. See prompts/release-launch-plan.md Item 2.
+# chicken-and-egg problem.
 # PYPI_TOKEN must be account-scoped (not project-scoped) for this first
 # publish to succeed, since the sorethumb-ml project doesn't exist on PyPI
 # yet; a project-scoped token can be rotated in afterward for tighter

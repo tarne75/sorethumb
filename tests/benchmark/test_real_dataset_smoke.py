@@ -17,8 +17,8 @@ fetch can never silently disable the real-data check where network is expected.
 This is deliberately loose (floor 0.5, one seed, capped rows): it exists to
 catch a broken pipeline or an inverted score direction on real, messy,
 non-Gaussian data, not to set a tight accuracy bar. Tight, dataset-specific
-floors belong in the full harness rebuild (see prompts/pre-release-plan.md
-P3-2); this is the minimal genuine member of the ``slow``/``network`` lanes.
+floors belong in a fuller benchmark harness; this is the minimal genuine
+member of the ``slow``/``network`` lanes.
 """
 
 from __future__ import annotations
