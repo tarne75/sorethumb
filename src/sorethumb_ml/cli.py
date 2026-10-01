@@ -20,7 +20,7 @@ import re
 from collections.abc import Callable
 from datetime import UTC
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 import typer
 from rich.console import Console
@@ -187,7 +187,22 @@ def _parse_detectors_flag(value: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _guard_legacy_dot_workspace() -> None:
+def _fail(json_output: bool, message: str, code: int) -> NoReturn:
+    """Report *message* as the command's failure and exit *code* (P0-3).
+
+    JSON mode: a single ``{"error": message}`` document on stdout -- a
+    --json caller must get exactly one parseable document on the error path
+    just as much as the success path, never Rich text on stderr it has no
+    reason to read. Human mode: unchanged, Rich-formatted text on stderr.
+    """
+    if json_output:
+        typer.echo(json.dumps({"error": message}))
+    else:
+        err_console.print(f"[red]{message}[/red]")
+    raise typer.Exit(code)
+
+
+def _guard_legacy_dot_workspace(*, json_output: bool = False) -> None:
     """Refuse to silently switch a pre-existing "." workspace to the new default.
 
     Before P3-5, the zero-config default workdir was ".". A directory that
@@ -201,18 +216,17 @@ def _guard_legacy_dot_workspace() -> None:
     an explicit choice, in either direction, always wins outright.
     """
     if Path(_WORKSPACE_MARKER_FILENAME).exists():
-        err_console.print(
-            f"[red]Found an existing workspace at '.' ({_WORKSPACE_MARKER_FILENAME}), but "
-            f"no workdir is configured.[/red]\n"
-            f"sorethumb's zero-config default workspace changed from '.' to "
-            f"'./{_DEFAULT_WORKDIR}/' — continuing would look for runs in the new "
-            f"location and never see this one. Choose explicitly:\n"
-            f"  - Keep using this workspace: pass [bold]--workdir .[/bold] "
-            f'(or set [bold]run.workdir = "."[/bold] in sorethumb.toml).\n'
-            f"  - Migrate to the new default: move its contents into "
-            f"[bold]./{_DEFAULT_WORKDIR}/[/bold] yourself, then re-run without --workdir."
+        _fail(
+            json_output,
+            f"Found an existing workspace at '.' ({_WORKSPACE_MARKER_FILENAME}), but no "
+            f"workdir is configured. sorethumb's zero-config default workspace changed "
+            f"from '.' to './{_DEFAULT_WORKDIR}/' -- continuing would look for runs in "
+            f"the new location and never see this one. Choose explicitly: keep using "
+            f'this workspace by passing --workdir . (or setting run.workdir = "." in '
+            f"sorethumb.toml), or migrate to the new default by moving its contents "
+            f"into ./{_DEFAULT_WORKDIR}/ yourself and re-running without --workdir.",
+            2,
         )
-        raise typer.Exit(2)
 
 
 def _load_config(
@@ -223,6 +237,8 @@ def _load_config(
     log_level: str | None = None,
     uri_override: str | None = None,
     detectors_override: list[dict[str, Any]] | None = None,
+    *,
+    json_output: bool = False,
 ) -> Config:
     """Read TOML, apply flag overrides, validate, and return Config.
 
@@ -242,6 +258,11 @@ def _load_config(
     value as the default", which a plain ``bool``/``str`` parameter can't.
     An explicit value always overrides TOML; when not given, TOML's own
     value (or the hardcoded default) applies untouched.
+
+    *json_output* (P0-3): callers from a JSON-capable command pass their own
+    --json flag through here so a config error becomes a single JSON
+    document on stdout instead of Rich text on stderr, matching every other
+    error path in that command. Callers without a JSON mode leave it False.
     """
     import tomllib  # noqa: PLC0415 — stdlib, Python 3.11+
 
@@ -253,10 +274,11 @@ def _load_config(
     raw: dict[str, Any]
     if not config_path.exists():
         if uri_override is None:
-            err_console.print(
-                f"[red]Config file not found:[/red] {config_path}\nRun `sorethumb init` to create one."
+            _fail(
+                json_output,
+                f"Config file not found: {config_path}. Run `sorethumb init` to create one.",
+                2,
             )
-            raise typer.Exit(2)
         raw = {}
     else:
         with config_path.open("rb") as fh:
@@ -275,7 +297,7 @@ def _load_config(
     if workdir is not None:
         run_section["workdir"] = str(workdir)
     elif "workdir" not in run_section:
-        _guard_legacy_dot_workspace()
+        _guard_legacy_dot_workspace(json_output=json_output)
         run_section["workdir"] = _DEFAULT_WORKDIR
     if seed is not None:
         run_section["seed"] = seed
@@ -294,11 +316,8 @@ def _load_config(
     try:
         cfg = Config.model_validate(raw)
     except ValidationError as exc:
-        err_console.print("[red]Configuration errors:[/red]")
-        for err in exc.errors():
-            loc = " → ".join(str(p) for p in err["loc"])
-            err_console.print(f"  [yellow]{loc}[/yellow]: {err['msg']}")
-        raise typer.Exit(2) from exc
+        lines = [f"{' → '.join(str(p) for p in err['loc'])}: {err['msg']}" for err in exc.errors()]
+        _fail(json_output, "Configuration errors: " + "; ".join(lines), 2)
 
     _add_file_handler(Path(cfg.run.workdir), cfg.run.log_level)
     return cfg
@@ -760,9 +779,14 @@ def run(
         log_level=log_level,
         uri_override=data_file,
         detectors_override=detectors_override,
+        json_output=json_output,
     )
 
-    if not config_existed and data_file is not None:
+    # P0-3: never prompt (or print a notice that would pollute stdout) in
+    # --json mode -- a --json caller gets exactly the run's JSON result on
+    # stdout, nothing else, and the config is simply left unsaved rather than
+    # asked about, same as answering "no" would do.
+    if not json_output and not config_existed and data_file is not None:
         console.print(
             f"[dim]No sorethumb.toml found — running with defaults, workdir={cfg.run.workdir!r}.[/dim]"
         )
@@ -775,8 +799,7 @@ def run(
         try:
             re.compile(group_filter)
         except re.error as exc:
-            err_console.print(f"[red]Invalid --group-filter regex:[/red] {exc}")
-            raise typer.Exit(2) from exc
+            _fail(json_output, f"Invalid --group-filter regex: {exc}", 2)
 
     if not json_output:
         console.print(f"[bold]sorethumb run[/bold]  workspace={cfg.run.workdir}")
@@ -802,8 +825,7 @@ def run(
             period_label_override=period,
         )
     except SorethumbError as exc:
-        err_console.print(f"[red]run failed:[/red] {exc}")
-        raise typer.Exit(2) from exc
+        _fail(json_output, f"run failed: {exc}", 2)
 
     if json_output:
         typer.echo(json.dumps(_run_result_to_dict(result), default=str))
@@ -846,7 +868,9 @@ def score(
     yourself or fully trust — see SECURITY.md.
     """
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, seed=seed, strict=strict, log_level=log_level)
+    cfg = _load_config(
+        config, workdir=workdir, seed=seed, strict=strict, log_level=log_level, json_output=json_output
+    )
 
     if not json_output:
         console.print(f"[bold]sorethumb score[/bold]  from_run={from_run}")
@@ -854,8 +878,7 @@ def score(
     try:
         result: RunResult = score_forward(cfg, from_run, strict=cfg.run.strict, no_report=no_report)
     except SorethumbError as exc:
-        err_console.print(f"[red]score --from-run failed:[/red] {exc}")
-        raise typer.Exit(2) from exc
+        _fail(json_output, f"score --from-run failed: {exc}", 2)
 
     if json_output:
         typer.echo(json.dumps(_run_result_to_dict(result), default=str))
@@ -1131,11 +1154,14 @@ def list_runs_cmd(
 ) -> None:
     """List recent runs with status, dataset, group counts, and duration."""
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    cfg = _load_config(config, workdir=workdir, log_level=log_level, json_output=json_output)
     ws_path = Path(cfg.run.workdir)
 
-    with Workspace.open(ws_path) as ws:
-        runs = ws.store.list_runs(limit=limit)
+    try:
+        with Workspace.open(ws_path) as ws:
+            runs = ws.store.list_runs(limit=limit)
+    except SorethumbError as exc:
+        _fail(json_output, str(exc), 1)
 
     if json_output:
         typer.echo(json.dumps(runs, default=str))
@@ -1182,16 +1208,18 @@ def show(
 ) -> None:
     """Show detail for one run or group, including feature plan summary."""
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    cfg = _load_config(config, workdir=workdir, log_level=log_level, json_output=json_output)
     ws_path = Path(cfg.run.workdir)
 
-    with Workspace.open(ws_path) as ws:
-        run_row = ws.store.get_run(run_id)
-        if run_row is None:
-            err_console.print(f"[red]Run not found:[/red] {run_id}")
-            raise typer.Exit(1)
+    try:
+        with Workspace.open(ws_path) as ws:
+            run_row = ws.store.get_run(run_id)
+            if run_row is None:
+                _fail(json_output, f"Run not found: {run_id}", 1)
 
-        groups = ws.store.all_run_groups(run_id)
+            groups = ws.store.all_run_groups(run_id)
+    except SorethumbError as exc:
+        _fail(json_output, str(exc), 1)
 
     if group:
         groups = [g for g in groups if g.get("group_key") == group]
@@ -1254,31 +1282,35 @@ def anomalies(
     import polars as pl  # noqa: PLC0415
 
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    cfg = _load_config(config, workdir=workdir, log_level=log_level, json_output=json_output)
     ws_path = Path(cfg.run.workdir)
 
-    with Workspace.open(ws_path) as ws:
-        if run_id is None:
-            recent = ws.store.list_runs(limit=1)
-            if not recent:
-                err_console.print("[red]No runs found in this workspace.[/red]")
-                raise typer.Exit(1)
-            run_id = str(recent[0]["run_id"])
+    try:
+        with Workspace.open(ws_path) as ws:
+            if run_id is None:
+                recent = ws.store.list_runs(limit=1)
+                if not recent:
+                    _fail(json_output, "No runs found in this workspace.", 1)
+                run_id = str(recent[0]["run_id"])
 
-        groups = ws.store.all_run_groups(run_id)
-        if not groups:
-            err_console.print(f"[red]Run not found or has no groups:[/red] {run_id}")
-            raise typer.Exit(1)
+            groups = ws.store.all_run_groups(run_id)
+            if not groups:
+                _fail(json_output, f"Run not found or has no groups: {run_id}", 1)
 
-        frames: list[pl.DataFrame] = []
-        for g in groups:
-            parquet = ws.results_dir(run_id, g["group_key"]) / "anomalies.parquet"
-            if parquet.exists():
-                df = pl.read_parquet(str(parquet))
-                if len(df) > 0:
-                    frames.append(df.with_columns(pl.lit(str(g.get("group_label", ""))).alias("_group")))
+            frames: list[pl.DataFrame] = []
+            for g in groups:
+                parquet = ws.results_dir(run_id, g["group_key"]) / "anomalies.parquet"
+                if parquet.exists():
+                    df = pl.read_parquet(str(parquet))
+                    if len(df) > 0:
+                        frames.append(df.with_columns(pl.lit(str(g.get("group_label", ""))).alias("_group")))
+    except SorethumbError as exc:
+        _fail(json_output, str(exc), 1)
 
     if not frames:
+        if json_output:
+            typer.echo("[]")
+            raise typer.Exit(0)
         console.print(f"[yellow]No anomaly rows found for run {run_id}.[/yellow]")
         raise typer.Exit(0)
 
@@ -1341,13 +1373,16 @@ def explain_plan(
 ) -> None:
     """Print the FeaturePlan for a run — what was dropped, encoded, derived, and why."""
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    cfg = _load_config(config, workdir=workdir, log_level=log_level, json_output=json_output)
     ws_path = Path(cfg.run.workdir)
     cache_dir = ws_path / "cache" / "datasets"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    df = load_dataset(cfg.source, cache_dir=cache_dir)
-    plan = build_feature_plan(df, cfg)
+    try:
+        df = load_dataset(cfg.source, cache_dir=cache_dir)
+        plan = build_feature_plan(df, cfg)
+    except SorethumbError as exc:
+        _fail(json_output, str(exc), 2)
 
     if json_output:
         typer.echo(plan.to_json())
@@ -1426,7 +1461,7 @@ def config_check(
     to inspect what a run would actually use before there's a run to
     `config show` from.
     """
-    cfg = _load_config(config, workdir=workdir)
+    cfg = _load_config(config, workdir=workdir, json_output=json_output)
     if json_output:
         typer.echo(json.dumps(_redact_config(cfg), indent=2))
         return
@@ -1465,15 +1500,17 @@ def config_show(
     By default prints a human-readable summary. Use --json for the raw JSON
     or --output <path> to reconstruct a sorethumb.toml you can edit and re-run.
     """
-    cfg = _load_config(config, workdir=workdir)
+    cfg = _load_config(config, workdir=workdir, json_output=json_output)
     ws_path = Path(cfg.run.workdir)
 
-    with Workspace.open(ws_path) as ws:
-        run_row = ws.store.get_run(run_id)
+    try:
+        with Workspace.open(ws_path) as ws:
+            run_row = ws.store.get_run(run_id)
+    except SorethumbError as exc:
+        _fail(json_output, str(exc), 1)
 
     if run_row is None:
-        err_console.print(f"[red]Run not found:[/red] {run_id}")
-        raise typer.Exit(1)
+        _fail(json_output, f"Run not found: {run_id}", 1)
 
     config_json: str = run_row.get("config_json") or "{}"
 
@@ -1533,11 +1570,14 @@ def workspace_ls(
 ) -> None:
     """List runs, datasets, and artefact counts in the workspace."""
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    cfg = _load_config(config, workdir=workdir, log_level=log_level, json_output=json_output)
     ws_path = Path(cfg.run.workdir)
 
-    with Workspace.open(ws_path) as ws:
-        runs = ws.store.list_runs(limit=50)
+    try:
+        with Workspace.open(ws_path) as ws:
+            runs = ws.store.list_runs(limit=50)
+    except SorethumbError as exc:
+        _fail(json_output, str(exc), 1)
 
     if json_output:
         typer.echo(json.dumps({"runs": runs}, default=str))
@@ -1736,7 +1776,13 @@ def workspace_reset(
     console.print(f"[red bold]This will destroy:[/red bold] {ws_path}")
     if not yes:
         console.print("Type the full workspace path to confirm (Ctrl-C to abort):")
-        typed = input("> ").strip()
+        try:
+            typed = input("> ").strip()
+        except EOFError:
+            # P0-3: closed stdin must terminate cleanly, not crash with a
+            # traceback -- same outcome as typing the wrong path: abort.
+            err_console.print("[red]No input available (stdin closed). Aborting.[/red]")
+            raise typer.Exit(1) from None
         if typed != str(ws_path):
             err_console.print("[red]Path did not match. Aborting.[/red]")
             raise typer.Exit(1)

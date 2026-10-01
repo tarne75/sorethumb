@@ -11,6 +11,8 @@ from __future__ import annotations
 import ast
 import json
 import os
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -746,3 +748,140 @@ def test_score_help_does_not_overstate_digest_safety():
     ]
     for claim in forbidden_claims:
         assert claim not in help_text, f"score --help overstates safety with: {claim!r}"
+
+
+# ---------------------------------------------------------------------------
+# JSON mode: no prompts, no stray notices, exactly one JSON document on both
+# success and error paths, and a closed stdin never hangs (P0-3).
+#
+# These spawn a real child process with stdin closed (subprocess.DEVNULL),
+# not CliRunner: CliRunner's fake stdin is an in-memory, in-process stream,
+# and these are specifically stdin-closed / whole-process-output contracts —
+# the outcome a real automation pipeline piping ``sorethumb ... --json``
+# actually depends on, against the real entry point, not an in-process call.
+# ---------------------------------------------------------------------------
+
+
+def _run_json_subprocess(args: list[str], *, timeout: float = 30.0) -> subprocess.CompletedProcess[str]:
+    """Run the CLI as a real child process with stdin closed.
+
+    ``python -c "from sorethumb_ml.cli import app; app()"`` stands in for the
+    installed ``sorethumb`` console script (identical callable, no PATH
+    dependency), invoked as a genuine subprocess so a real, closed stdin file
+    descriptor is exercised -- not an in-memory stream. ``timeout`` makes a
+    regression to "prompts and blocks forever" fail the test instead of
+    hanging the suite.
+    """
+    return subprocess.run(
+        [sys.executable, "-c", "from sorethumb_ml.cli import app; app()", *args],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def test_run_json_first_run_does_not_prompt_with_closed_stdin(tmp_path: Path):
+    """The exact scenario that used to hang: --json, no config file yet, a
+    bare data-file argument (which triggers the "save settings?" prompt),
+    and closed stdin. Must run to completion with exactly one JSON document
+    on stdout, never asking to save a config."""
+    csv_path = tmp_path / "data.csv"
+    _write_csv(csv_path, n_rows=200)
+    workdir = tmp_path / "ws"
+
+    proc = _run_json_subprocess(["run", str(csv_path), "--workdir", str(workdir), "--no-report", "--json"])
+
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads(proc.stdout)  # fails outright if anything but pure JSON is on stdout
+    assert "run_id" in data
+    assert not (tmp_path / "sorethumb.toml").exists()  # never asked, never wrote one
+    assert "Save settings" not in proc.stdout
+    assert "Save settings" not in proc.stderr
+
+
+def test_run_json_group_filter_error_emits_single_json_document(workspace):
+    _, toml_path, _ = workspace
+    proc = _run_json_subprocess(["run", "--config", str(toml_path), "--group-filter", "[invalid(", "--json"])
+    assert proc.returncode == 2
+    data = json.loads(proc.stdout)
+    assert "error" in data
+    assert "group-filter" in data["error"].lower()
+
+
+def test_config_check_json_missing_file_emits_single_json_document(tmp_path: Path):
+    missing = tmp_path / "does_not_exist.toml"
+    proc = _run_json_subprocess(["config", "check", "--config", str(missing), "--json"])
+    assert proc.returncode == 2
+    data = json.loads(proc.stdout)
+    assert "error" in data
+    assert str(missing) in data["error"]
+
+
+def test_runs_json_missing_workspace_emits_single_json_document(tmp_path: Path):
+    """Previously an unhandled StoreError crashed with a traceback instead of
+    the JSON caller's expected single document (P0-3)."""
+    toml_path = tmp_path / "sorethumb.toml"
+    _write_toml(toml_path, tmp_path / "unused.csv", tmp_path / "never-created-ws")
+    proc = _run_json_subprocess(["runs", "--config", str(toml_path), "--json"])
+    assert proc.returncode == 1
+    data = json.loads(proc.stdout)
+    assert "error" in data
+
+
+def test_show_json_run_not_found_emits_single_json_document(workspace):
+    _, toml_path, _ = workspace
+    runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
+    proc = _run_json_subprocess(["show", "does-not-exist", "--config", str(toml_path), "--json"])
+    assert proc.returncode == 1
+    data = json.loads(proc.stdout)
+    assert "error" in data
+    assert "does-not-exist" in data["error"]
+
+
+def test_anomalies_json_zero_anomalies_emits_empty_json_array(workspace):
+    """A run with no flagged rows must still emit valid JSON in --json mode
+    (P0-3) -- previously this printed a plain sentence instead, so a --json
+    caller had to special-case "nothing found" as a JSON parse failure.
+
+    Emptying the persisted results directly (rather than engineering genuine
+    zero-anomaly detector agreement, which isn't reliably deterministic --
+    see test_run_summary_and_json_surface_warnings_issued's docstring for
+    the same reasoning) isolates this command's own output-shape contract.
+    """
+    import polars as pl
+
+    from sorethumb_ml import Workspace
+
+    _, toml_path, workdir = workspace
+    result = runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
+    assert result.exit_code == 0
+
+    with Workspace.open(workdir) as ws:
+        run_id = ws.store.list_runs(limit=1)[0]["run_id"]
+        for g in ws.store.all_run_groups(run_id):
+            parquet = ws.results_dir(run_id, g["group_key"]) / "anomalies.parquet"
+            pl.DataFrame({"rank": []}, schema={"rank": pl.Int64}).write_parquet(parquet)
+
+    proc = _run_json_subprocess(["anomalies", run_id, "--config", str(toml_path), "--json"])
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == []
+
+
+def test_anomalies_json_run_not_found_emits_single_json_document(workspace):
+    _, toml_path, workdir = workspace
+    runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
+    proc = _run_json_subprocess(["anomalies", "does-not-exist", "--config", str(toml_path), "--json"])
+    assert proc.returncode == 1
+    data = json.loads(proc.stdout)
+    assert "error" in data
+
+
+def test_config_show_json_run_not_found_emits_single_json_document(workspace):
+    _, toml_path, _ = workspace
+    runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
+    proc = _run_json_subprocess(["config", "show", "does-not-exist", "--config", str(toml_path), "--json"])
+    assert proc.returncode == 1
+    data = json.loads(proc.stdout)
+    assert "error" in data
