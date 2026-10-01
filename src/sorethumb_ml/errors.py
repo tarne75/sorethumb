@@ -112,16 +112,6 @@ class FeatureWidthWarning(SorethumbWarning):
     """One-hot columns were demoted to frequency encoding to stay within max_feature_width."""
 
 
-class NonFiniteWarning(SorethumbWarning):
-    """Reserved: NaN/±Inf are no longer silently replaced during feature construction (P0-5).
-
-    Missing values are imputed with the fitted centre and infinities or impossible
-    derived values raise ``PlanError``; nothing emits this warning any more. Kept
-    so the public exception surface (and ``-W``/strict-mode filters naming it)
-    does not change.
-    """
-
-
 class LowVarianceWarning(SorethumbWarning):
     """PCA retained components explain less than pca_min_explained_variance of total variance."""
 
@@ -149,10 +139,6 @@ class ModelSchemaDriftWarning(SorethumbWarning):
 
 class ModelVersionMismatchWarning(SorethumbWarning):
     """A persisted model was fitted under different library versions; scores may not be reproducible."""
-
-
-class CalibrationModeWarning(SorethumbWarning):
-    """Calibration mode changed between runs; cross-run score comparison is invalid."""
 
 
 class SlowStageWarning(SorethumbWarning):

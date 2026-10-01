@@ -103,7 +103,7 @@ so trivial changes do not invalidate cached artefacts.
 | `scoring.combination` | "composite" \| "intersection" \| "union" | "intersection" | 'composite' averages normalised detector scores and applies a single global threshold. 'intersection' thresholds each detector independently then flags rows where ALL detectors agree (high precision). 'union' thresholds each detector independently then flags rows where ANY detector agrees (high recall). |
 | `scoring.weighting` | "equal" \| "manual" \| "agreement" | "equal" | How detector weights are set for combination='composite' (ignored by 'intersection' / 'union'). 'equal': 1/n each. 'manual': from `weights`. 'agreement': by each detector's rank correlation (leave-one-out Spearman) with the consensus ranking; anti-correlated or flat detectors get weight 0. |
 | `scoring.weights` | dict[str, float] | {} | Per-detector weights, used only when weighting='manual'. |
-| `scoring.min_records` | int | 100 | Minimum rows needed to run scoring. Fewer rows raise a CalibrationModeWarning (or error in strict mode). |
+| `scoring.min_records` | int | 100 | Minimum rows a group needs to be scored. Smaller groups are skipped and reported with status too_few_records (not an error, even in strict mode). |
 
 ## `[explain]` — SHAP-based anomaly explanation controls.
 

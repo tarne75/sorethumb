@@ -386,8 +386,8 @@ class ScoringConfig(BaseModel):
         100,
         ge=1,
         description=(
-            "Minimum rows needed to run scoring. Fewer rows raise a CalibrationModeWarning "
-            "(or error in strict mode)."
+            "Minimum rows a group needs to be scored. Smaller groups are skipped and "
+            "reported with status too_few_records (not an error, even in strict mode)."
         ),
     )
 

@@ -56,7 +56,7 @@ jobs:
   # Informational overall branch coverage + required >=85% diff coverage on
   # changed lines. Replaces the old global --cov-fail-under merge gate,
   # which incentivised padding (assertion-free importlib.reload tests) more
-  # than it caught real regressions — see tests/BASELINE.md (P1-3, P1-7).
+  # than it caught real regressions — see tests/README.md.
   coverage:
     runs-on: ubuntu-latest
     timeout-minutes: 15

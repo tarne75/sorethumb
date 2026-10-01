@@ -9,6 +9,7 @@ See tests/integration/test_cli.py for the workflow-correctness tests (does
 from __future__ import annotations
 
 import ast
+import importlib.metadata
 import json
 import os
 import subprocess
@@ -19,6 +20,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+import sorethumb_ml
 from sorethumb_ml.cli import app
 from tests.factories.frames import write_grouped_csv as _write_csv
 from tests.factories.golden import assert_matches_golden
@@ -104,8 +106,12 @@ def _run_and_get_run_id(toml_path: Path, workdir: Path) -> str:
 def test_version():
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
+    # Compare with the single source of truth, not a literal that goes stale
+    # at the next release: the CLI, the package attribute and the installed
+    # distribution metadata must all agree.
     assert "sorethumb" in result.stdout
-    assert "0.1" in result.stdout
+    assert sorethumb_ml.__version__ in result.stdout
+    assert sorethumb_ml.__version__ == importlib.metadata.version("sorethumb-ml")
 
 
 # ---------------------------------------------------------------------------

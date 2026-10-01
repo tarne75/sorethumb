@@ -19,7 +19,7 @@ from sorethumb_ml import _pipeline
 from sorethumb_ml._pipeline import _group_summary, run_detection
 from sorethumb_ml.cli import app
 from sorethumb_ml.config import Config, DetectorConfig, SourceConfig
-from sorethumb_ml.errors import NonFiniteWarning, SampleTruncatedWarning, SlowStageWarning
+from sorethumb_ml.errors import SampleTruncatedWarning, SlowStageWarning
 from tests.factories.configs import make_config
 from tests.factories.frames import write_leading_anomaly_csv as _write_csv
 
@@ -162,7 +162,7 @@ def test_run_reuse_models_skips_refitting(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def _warn_in_group(**kwargs):
-    warnings.warn("synthetic non-finite in group", NonFiniteWarning, stacklevel=2)
+    warnings.warn("synthetic in-group warning", SlowStageWarning, stacklevel=2)
     return _group_summary(
         kwargs["group_key"],
         kwargs["group_label"],
@@ -181,12 +181,12 @@ def test_run_strict_promotes_in_group_warnings_to_failure(
 
     lenient = run_detection(_cfg(csv, tmp_path / "ws_lenient"), no_report=True)
     assert lenient.n_succeeded == 1
-    assert any("non-finite" in w for w in lenient.warnings_issued)
+    assert any("synthetic in-group" in w for w in lenient.warnings_issued)
 
     strict = run_detection(_cfg(csv, tmp_path / "ws_strict", run_kwargs={"strict": True}), no_report=True)
     assert strict.n_succeeded == 0
     assert strict.n_failed == 1
-    assert "NonFiniteWarning" in (strict.groups[0].error or "")
+    assert "SlowStageWarning" in (strict.groups[0].error or "")
 
 
 # ---------------------------------------------------------------------------

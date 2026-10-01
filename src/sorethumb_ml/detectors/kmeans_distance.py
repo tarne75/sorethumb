@@ -21,8 +21,8 @@ k is selected automatically by combining the elbow criterion (normalised inertia
 curve) with the best silhouette score, sampled to 20 000 rows for silhouette
 because it is O(n²). See docs/approximations.md.
 
-After scoring, ``last_labels`` and ``last_contributions`` are populated for the
-explanation layer (§8.3 centroid attribution).
+Per-feature centroid attribution (§8.3) is computed on demand by
+``centroid_attributions``; the detector keeps no per-call scoring state.
 """
 
 from __future__ import annotations
@@ -121,8 +121,6 @@ class KMeansDetector:
         self._chosen_k: int | None = None
         self._large_centroids: np.ndarray | None = None  # subset of centroids used for scoring
         self._natural_threshold: float | None = None  # Tukey upper fence, fixed at fit time
-        self.last_labels: np.ndarray | None = None
-        self.last_contributions: np.ndarray | None = None
 
     @classmethod
     def available_extra_params(cls) -> dict[str, Any]:
@@ -187,11 +185,7 @@ class KMeansDetector:
         # Distance from each point to each large centroid, then the nearest.
         # euclidean_distances builds only the (n, n_large) matrix — never the
         # (n, n_large, d) difference tensor. See _nearest_large_centroid.
-        nearest_idx, distances = _nearest_large_centroid(X, centres)
-
-        # Store for explanation layer: contributions against the nearest large centroid
-        self.last_labels = nearest_idx
-        self.last_contributions = X - centres[nearest_idx]  # signed per-dimension
+        _, distances = _nearest_large_centroid(X, centres)
 
         return -distances
 

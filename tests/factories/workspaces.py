@@ -1,6 +1,6 @@
-"""Lifecycle-resource fixtures: ``Workspace`` and ``CliRunner``.
+"""Lifecycle-resource fixtures for ``Workspace``.
 
-Both are cheap to construct, but a ``Workspace`` holds an open SQLite
+A ``Workspace`` holds an open SQLite
 connection that must be closed — otherwise a held file handle can block
 cleanup of its ``tmp_path`` (notably on Windows). Fixtures that hand out a
 ``Workspace`` always ``yield`` and close it in a ``finally``.
@@ -12,7 +12,6 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
 from sorethumb_ml.store.workspace import Workspace
 
@@ -34,9 +33,3 @@ def open_workspace(tmp_path: Path, name: str = "ws") -> Workspace:
     protocol via ``with open_workspace(tmp_path) as ws:``).
     """
     return Workspace.init(tmp_path / name)
-
-
-@pytest.fixture
-def cli_runner() -> CliRunner:
-    """A Typer ``CliRunner``. Stateless, so no teardown is needed."""
-    return CliRunner()

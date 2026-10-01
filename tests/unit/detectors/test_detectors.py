@@ -74,24 +74,6 @@ def test_kmeans_scores_negative_distance():
     assert (scores <= 0).all()
 
 
-def test_kmeans_last_labels_populated():
-    X = _normal_data(n=100)
-    det = KMeansDetector(k=3)
-    det.fit(X, seed=0)
-    det.score_samples(X)
-    assert det.last_labels is not None
-    assert det.last_labels.shape == (100,)
-
-
-def test_kmeans_last_contributions_populated():
-    X = _normal_data(n=100)
-    det = KMeansDetector(k=3)
-    det.fit(X, seed=0)
-    det.score_samples(X)
-    assert det.last_contributions is not None
-    assert det.last_contributions.shape == (100, 4)
-
-
 def test_kmeans_natural_flag_tukey_outliers():
     # Use k=1 so all points share one centroid: clear outliers have large distances
     rng = np.random.default_rng(1)

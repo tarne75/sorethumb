@@ -627,9 +627,6 @@ def run_detection(
 
     issued_warnings: list[str] = []
 
-    def _capture_warning(message: warnings.WarningMessage) -> None:
-        issued_warnings.append(str(message.message))
-
     slow_after = config.run.slow_stage_seconds
 
     with ws, _strict_warnings(config.run.strict):

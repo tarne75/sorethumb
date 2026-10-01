@@ -530,7 +530,7 @@
         },
         "min_records": {
           "default": 100,
-          "description": "Minimum rows needed to run scoring. Fewer rows raise a CalibrationModeWarning (or error in strict mode).",
+          "description": "Minimum rows a group needs to be scored. Smaller groups are skipped and reported with status too_few_records (not an error, even in strict mode).",
           "minimum": 1,
           "title": "Min Records",
           "type": "integer"
