@@ -29,6 +29,14 @@ from sorethumb_ml._atomic import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
+# Shown under every trend chart. Each period is fitted and self-calibrated on its own, so the
+# chart is a relative diagnostic; reading it as an absolute level would be a misreading.
+_TREND_CHART_NOTE = (
+    "Each period is fitted and self-calibrated independently, so this trend shows relative "
+    "movement, not an absolute anomaly level. For one fixed scale, score later data against an "
+    "accepted reference run with <code>sorethumb score --from-run</code>."
+)
+
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
@@ -301,7 +309,10 @@ def _group_section(grp: GroupSection, idx: int, *, csv_written: bool) -> str:
     # Chart tab
     chart_html = ""
     if grp.chart_png_b64:
-        chart_html = f'<img class="chart-img" src="data:image/png;base64,{html.escape(grp.chart_png_b64)}" alt="Trend chart">'
+        chart_html = (
+            f'<img class="chart-img" src="data:image/png;base64,{html.escape(grp.chart_png_b64)}" alt="Trend chart">'
+            f"<p><small>{_TREND_CHART_NOTE}</small></p>"
+        )
     parts.append(
         f'<div class="tab-panel" data-group="{idx}" data-tab="chart">'
         f"{chart_html or '<p>No chart available.</p>'}</div>"

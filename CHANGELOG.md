@@ -8,6 +8,7 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- README "Is it the right tool?" section: a ranked shortlist for human review, not a sole control where a miss is unacceptable; labelled validation and domain review before relying on error rates; a fixed reference run for absolute comparison over time; and only trusted workspaces. HTML report trend charts now carry a note that independent-period trends are relative, not an absolute level.
 - `docs/stability.md`: the pre-1.0 API and stability policy. The top-level `sorethumb_ml` export set is now pinned by an exact-equality contract test, which also rejects public names that are importable but not exported.
 
 ### Changed

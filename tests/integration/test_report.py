@@ -287,6 +287,16 @@ class TestRenderReport:
         content = path.read_text(encoding="utf-8")
         assert "data:image/png;base64," in content
 
+    def test_trend_chart_is_labelled_a_relative_diagnostic(self, tmp_path: Path):
+        grp = _group(chart_png_b64="AAAA")
+        content = render_report(_RUN_META, [grp], tmp_path).read_text(encoding="utf-8")
+        assert "relative movement, not an absolute anomaly level" in content
+        assert "score --from-run" in content
+
+    def test_no_trend_note_when_there_is_no_chart(self, tmp_path: Path):
+        content = render_report(_RUN_META, [_group()], tmp_path).read_text(encoding="utf-8")
+        assert "relative movement" not in content
+
     def test_plan_dropped_rendered(self, tmp_path: Path):
         grp = _group(plan_dropped=[{"column": "id_col", "reason": "identifier"}])
         path = render_report(_RUN_META, [grp], tmp_path)

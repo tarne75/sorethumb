@@ -153,6 +153,34 @@ Databricks, or any cloud vendor.
 
 ---
 
+## Is it the right tool?
+
+Use it where a ranked shortlist for a person to review is the goal: on a
+single machine (Linux or macOS, see [Supported platforms](#supported-platforms)),
+over data that fits [the scale guide](#scale-guide), with someone able to judge
+whether a flagged record is actually interesting.
+
+- **Do not use it as the only control where a missed anomaly is unacceptable.**
+  It is unsupervised and ranks statistical oddity, so it can miss exactly the
+  record you care about. Where missing one has serious consequences, use a
+  labelled, supervised or domain-specific control and treat this as an extra
+  signal at most.
+- **Validate before you rely on error rates.** If a decision depends on how
+  many flagged records are false positives, or how many true anomalies are
+  missed, measure that on labelled data and have a domain reviewer check the
+  flagged records. Scores and flagged counts are not calibrated risk
+  probabilities and are not a prevalence estimate, and should not be presented
+  as either.
+- **Compare over time on one scale.** For an absolute comparison across periods,
+  fit one accepted reference run and score later data against it with
+  `sorethumb score --from-run RUN_ID`. Treat `backfill` and independent-run
+  history as relative diagnostics only.
+- **Only reuse models from a workspace you made or fully trust.** A workspace is
+  executable, not just data: do not accept a downloaded, shared or externally
+  supplied workspace. See [SECURITY.md](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md#trust-boundary-workspaces-are-executable-not-just-data).
+
+---
+
 ## Supported platforms
 
 Tested and supported: **Linux and macOS**, Python 3.11–3.13. CI runs the full
