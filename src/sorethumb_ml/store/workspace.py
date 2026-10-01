@@ -20,6 +20,23 @@ from sorethumb_ml.store.db import Store
 logger = logging.getLogger(__name__)
 
 _MARKER_DB = "sorethumb.db"
+# SQLite files that sit beside the database while it is open or after a crash.
+_DB_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+# Sub-directories init() creates. Their top-level names are everything else a
+# workspace owns (see owned_entry_names); add new ones here, not in init().
+_SUBDIRS = ("cache/datasets", "cache/features", "models", "results", "reports", "logs", "tmp")
+
+
+def owned_entry_names() -> tuple[str, ...]:
+    """Names, directly under a workspace root, of every entry sorethumb creates.
+
+    The database, its SQLite sidecar files, and the top-level directories from
+    ``init()``. ``sorethumb workspace reset`` deletes exactly these, so a
+    workspace created inside a directory that already held the user's own files
+    (``--workdir ~/projects/q3-analysis``) never loses them.
+    """
+    dirs = dict.fromkeys(sub.split("/", 1)[0] for sub in _SUBDIRS)
+    return (_MARKER_DB, *(_MARKER_DB + suffix for suffix in _DB_SIDECAR_SUFFIXES), *dirs)
 
 
 def group_value_json_default(value: object) -> str:
@@ -76,7 +93,7 @@ class Workspace:
         """
         root = Path(path).resolve()
         root.mkdir(parents=True, exist_ok=True)
-        for sub in ("cache/datasets", "cache/features", "models", "results", "reports", "logs", "tmp"):
+        for sub in _SUBDIRS:
             (root / sub).mkdir(parents=True, exist_ok=True)
         db_path = root / _MARKER_DB
         store = Store(db_path)

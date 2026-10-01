@@ -1987,7 +1987,14 @@ def workspace_reset(
         typer.Option("--yes", help="Skip interactive confirmation (for unattended use)."),
     ] = False,
 ) -> None:
-    """Destructively delete all workspace data.
+    """Destructively delete everything sorethumb stored in the workspace.
+
+    Deletes only what sorethumb creates there: sorethumb.db (and its
+    -wal/-shm/-journal files) and the cache/, logs/, models/, reports/,
+    results/ and tmp/ directories. Anything else in the directory -- your own
+    data, notebooks, notes -- is left alone, and the directory itself is
+    removed only if nothing else remains. A symlink among those entries is
+    removed, never followed.
 
     Requires interactive confirmation of the workspace path (or --yes for
     unattended use). Named explicitly so you know exactly what will be destroyed
@@ -2010,7 +2017,16 @@ def workspace_reset(
     except SorethumbError as exc:
         _fail(False, f"Refusing to reset {ws_path}: not a sorethumb workspace ({exc})", _classify_error(exc))
 
-    console.print(f"[red bold]This will destroy:[/red bold] {_e(ws_path)}")
+    from sorethumb_ml.store.workspace import owned_entry_names  # noqa: PLC0415
+
+    owned = [
+        ws_path / name
+        for name in owned_entry_names()
+        if (ws_path / name).is_symlink() or (ws_path / name).exists()
+    ]
+    console.print(f"[red bold]This will destroy sorethumb's data in:[/red bold] {_e(ws_path)}")
+    for entry in owned:
+        console.print(f"  - {_e(entry.name)}{'/' if entry.is_dir() and not entry.is_symlink() else ''}")
     if not yes:
         console.print("Type the full workspace path to confirm (Ctrl-C to abort):")
         try:
@@ -2027,12 +2043,28 @@ def workspace_reset(
     import shutil  # noqa: PLC0415
 
     try:
-        shutil.rmtree(ws_path)
+        for entry in owned:
+            # A symlink is removed itself, never followed; rmtree never follows
+            # symlinks inside the directories it deletes either.
+            if entry.is_symlink() or not entry.is_dir():
+                entry.unlink()
+            else:
+                shutil.rmtree(entry)
+        remaining = sorted(ws_path.iterdir())
+        if not remaining:
+            ws_path.rmdir()
     except OSError as exc:
         err_console.print(f"[red]Failed to fully delete {_e(ws_path)}:[/red] {_e(exc)}")
         raise typer.Exit(int(ExitCode.RUNTIME)) from exc
 
-    console.print(f"[green]Workspace destroyed:[/green] {_e(ws_path)}")
+    if remaining:
+        console.print(
+            f"[green]Workspace data deleted;[/green] kept {_e(ws_path)} because it holds other files:"
+        )
+        for entry in remaining:
+            console.print(f"  - {_e(entry.name)}")
+    else:
+        console.print(f"[green]Workspace destroyed:[/green] {_e(ws_path)}")
 
 
 # ---------------------------------------------------------------------------

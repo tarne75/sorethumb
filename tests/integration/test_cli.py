@@ -8,6 +8,7 @@ tests/contract/test_cli.py.
 from __future__ import annotations
 
 import json
+import shutil
 import tomllib
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -1014,3 +1015,51 @@ def test_workspace_reset_resolves_a_symlinked_workdir_before_deleting(
 
     assert result.exit_code == 0, result.stdout + (result.stderr or "")
     assert not real_ws.exists()
+
+
+def test_workspace_reset_keeps_files_it_did_not_create(tmp_path: Path) -> None:
+    """--workdir pointed at the user's own directory makes it a workspace; reset
+    must delete only sorethumb's entries and leave the user's files (and so the
+    directory) in place."""
+    project = tmp_path / "projects" / "q3" / "analysis"
+    project.mkdir(parents=True)
+    csv_path = _write_csv(project / "data.csv", n_rows=300)
+    (project / "notes.txt").write_text("mine", encoding="utf-8")
+    toml_path = tmp_path / "sorethumb.toml"
+    _write_toml(toml_path, csv_path, project)
+    assert runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"]).exit_code == 0
+    assert (project / "sorethumb.db").is_file()
+
+    result = runner.invoke(app, ["workspace", "reset", "--config", str(toml_path), "--yes"])
+
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+    assert sorted(p.name for p in project.iterdir()) == ["data.csv", "notes.txt"]
+    assert (project / "notes.txt").read_text(encoding="utf-8") == "mine"
+    assert "notes.txt" in result.stdout
+
+
+def test_workspace_reset_removes_a_dedicated_workspace_entirely(workspace) -> None:
+    _, toml_path, workdir = workspace
+    runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
+    (workdir / "sorethumb.db-wal").write_bytes(b"")  # a leftover SQLite sidecar is sorethumb's too
+
+    result = runner.invoke(app, ["workspace", "reset", "--config", str(toml_path), "--yes"])
+
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+    assert not workdir.exists()
+
+
+def test_workspace_reset_unlinks_a_symlinked_entry_without_following_it(workspace, tmp_path: Path) -> None:
+    _, toml_path, workdir = workspace
+    runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
+    elsewhere = tmp_path / "elsewhere-reports"
+    elsewhere.mkdir()
+    (elsewhere / "keep.html").write_text("keep", encoding="utf-8")
+    shutil.rmtree(workdir / "reports")
+    (workdir / "reports").symlink_to(elsewhere, target_is_directory=True)
+
+    result = runner.invoke(app, ["workspace", "reset", "--config", str(toml_path), "--yes"])
+
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+    assert not workdir.exists()
+    assert (elsewhere / "keep.html").read_text(encoding="utf-8") == "keep"

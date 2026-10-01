@@ -669,6 +669,14 @@ sorethumb workspace migrate
 logs. Requires interactive confirmation of the workspace path, or `--yes` for
 unattended use.
 
+Only what sorethumb creates is deleted: `sorethumb.db` (with any
+`-wal`/`-shm`/`-journal` files beside it) and the `cache/`, `logs/`,
+`models/`, `reports/`, `results/` and `tmp/` directories. Anything else in the
+directory is kept — so a `--workdir` pointed at a directory that already held
+your own files leaves them in place — and is listed. The directory itself is
+removed only when nothing else remains in it (exit 0 either way). A symlink
+among those entries is removed, never followed.
+
 Refuses outright, regardless of `--yes`, unless the target actually opens
 as a real sorethumb workspace (has a `sorethumb.db` marker) — and always
 refuses a filesystem/drive root, your home directory, the current working
