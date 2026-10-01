@@ -91,6 +91,7 @@ Pre-release hardening surfaced and fixed real issues across the codebase
 before anything shipped:
 
 - **Attribution scale and background come from a normal reference**: the gradient and KernelSHAP explainers now take target rows separately from a required `reference` matrix. Perturbation step sizes and the KernelSHAP background were previously derived from the flagged rows themselves, so an explanation changed with the other rows flagged in the same run and a lone flagged row had a zero-variance fallback step. The pipeline passes the unflagged rows as the reference (the whole population when fewer than 10 are unflagged) and computes attributions only for flagged rows.
+- **Attribution backend failures are reported**: when a detector's attribution backend raised, the failure was logged at debug level only and the detector silently contributed nothing. It now emits one `AttributionBackendWarning` per detector and group (cause in the message, the traceback in a warning-level log record); other detectors' explanations for the group are preserved, and `run.strict` promotes the warning to a group failure like any other project warning.
 - **Missing and non-finite values**: float `NaN` is now treated as missing
   (imputed like a null) instead of leaking into scaling, and the feature
   matrix no longer replaces anything non-finite with `0.0` after scaling --

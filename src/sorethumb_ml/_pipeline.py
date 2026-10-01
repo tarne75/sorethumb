@@ -32,6 +32,7 @@ import polars as pl
 from sorethumb_ml.config import Config, SourceConfig
 from sorethumb_ml.detectors import registry
 from sorethumb_ml.errors import (
+    AttributionBackendWarning,
     ConfigError,
     ReportGenerationWarning,
     SampleTruncatedWarning,
@@ -1722,6 +1723,7 @@ def _finalize_group(
         flagged_idx=flagged_idx,
         plan=plan,
         group_space=group_space,
+        group_label=group_label,
     )
 
     # ── Build result DataFrame ────────────────────────────────────────────
@@ -1843,6 +1845,7 @@ def _compute_attributions(
     flagged_idx: np.ndarray,
     plan: FeaturePlan,
     group_space: FeatureSpace,
+    group_label: str,
 ) -> tuple[dict[str, np.ndarray], str, dict[int, str]] | None:
     """Compute blended attributions for flagged rows. Returns None on failure.
 
@@ -1988,8 +1991,26 @@ def _compute_attributions(
                     type(det).__name__,
                 )
                 continue
-        except Exception:
-            logger.debug("Attribution skipped for detector %r.", det_name, exc_info=True)
+        except Exception as exc:
+            # One warning per detector and group (this loop visits each once), with
+            # the cause in both the message and the log record. The warning is
+            # raised outside the explainer's try block, so ``run.strict`` (which
+            # promotes SorethumbWarning to an error) really does fail the group
+            # instead of being swallowed here. Other detectors still explain.
+            cause = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "Attribution backend failed for detector %r in group %r: %s",
+                det_name,
+                group_label,
+                cause,
+                exc_info=True,
+            )
+            warnings.warn(
+                f"Attribution backend failed for detector {det_name!r} in group {group_label!r} "
+                f"({cause}); it contributes no explanation.",
+                AttributionBackendWarning,
+                stacklevel=2,
+            )
             continue
 
         covered[: len(attr)] = True

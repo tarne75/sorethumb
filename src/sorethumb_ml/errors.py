@@ -104,6 +104,15 @@ class FallbackAttributionWarning(SorethumbWarning):
     """TreeSHAP failed and the gradient method was used as a fallback attribution."""
 
 
+class AttributionBackendWarning(SorethumbWarning):
+    """A detector's attribution backend raised; that detector contributes no explanation.
+
+    Emitted once per detector and group. Other detectors' explanations for the
+    group are unaffected. Under ``run.strict`` it fails the group like any other
+    project warning.
+    """
+
+
 class ModelSchemaDriftWarning(SorethumbWarning):
     """A persisted model's feature schema no longer matches; the group was refit."""
 

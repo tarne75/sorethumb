@@ -48,6 +48,7 @@ def test_all_sorethumb_errors_are_exceptions() -> None:
 
 def test_all_sorethumb_warnings_are_user_warnings() -> None:
     from sorethumb_ml.errors import (
+        AttributionBackendWarning,
         CalibrationModeWarning,
         ColumnDroppedWarning,
         FallbackAttributionWarning,
@@ -61,6 +62,7 @@ def test_all_sorethumb_warnings_are_user_warnings() -> None:
     )
 
     for cls in (
+        AttributionBackendWarning,
         CalibrationModeWarning,
         ColumnDroppedWarning,
         FallbackAttributionWarning,
