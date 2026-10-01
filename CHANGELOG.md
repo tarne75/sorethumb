@@ -6,6 +6,10 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `docs/stability.md`: the pre-1.0 API and stability policy. The top-level `sorethumb_ml` export set is now pinned by an exact-equality contract test, which also rejects public names that are importable but not exported.
+
 ### Changed
 
 - `run --json` reports rows flagged for review as `n_flagged` (top level and per group) and no longer emits the redundant `n_anomalies` alias; the name describes a review shortlist rather than a prevalence estimate. Not breaking: nothing has been released.

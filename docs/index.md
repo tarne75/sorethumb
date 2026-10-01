@@ -10,5 +10,6 @@
 - [Adapting to your data](adapting-to-your-data.md)
 - [Explanations: model-specific vs heuristic](explanations.md)
 - [Approximations and error characteristics](approximations.md)
+- [API and stability policy](stability.md)
 - [Contributing](../CONTRIBUTING.md)
 - [Releasing, rehearsing, and rolling back](releasing.md) (maintainer-only)

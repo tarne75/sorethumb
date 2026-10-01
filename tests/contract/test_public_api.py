@@ -187,6 +187,67 @@ def test_explain_public_api_matches_all_list() -> None:
 # ── sorethumb_ml.__init__ (package public API) ───────────────────────────────────
 
 
+# The intended top-level export set. Changing it is a public-API change: edit this list in the
+# same commit, add a CHANGELOG entry, and follow docs/stability.md.
+_EXPECTED_TOP_LEVEL_EXPORTS = frozenset(
+    {
+        "Config",
+        "Detector",
+        "FeaturePlan",
+        "FeatureSpace",
+        "GroupSummary",
+        "Metrics",
+        "RunResult",
+        "SorethumbError",
+        "SourceConfig",
+        "Workspace",
+        "__version__",
+        "apply_feature_plan",
+        "build_feature_plan",
+        "evaluate_scores",
+        "list_detectors",
+        "load_dataset",
+        "render_report_for_run",
+        "run_detection",
+        "score_forward",
+    }
+)
+
+
+def test_package_all_is_exactly_the_intended_export_set() -> None:
+    """Exact equality, not a subset: an accidental addition or a dropped name both fail."""
+    import sorethumb_ml
+
+    exported = list(sorethumb_ml.__all__)
+    assert len(exported) == len(set(exported)), "duplicate names in sorethumb_ml.__all__"
+    assert set(exported) == _EXPECTED_TOP_LEVEL_EXPORTS
+    assert exported == sorted(exported), "__all__ is kept sorted"
+
+
+def test_no_public_name_is_importable_from_the_top_level_without_being_exported() -> None:
+    """A public-looking attribute that is not in __all__ is a leak that star-imports hide and
+    attribute access exposes. Submodules imported as a side effect are not names the package
+    defines, so they are ignored."""
+    import types
+
+    import sorethumb_ml
+
+    leaked = sorted(
+        name
+        for name, value in vars(sorethumb_ml).items()
+        if not name.startswith("_") and not isinstance(value, types.ModuleType)
+    )
+    assert set(leaked) == _EXPECTED_TOP_LEVEL_EXPORTS - {"__version__"}
+
+
+def test_every_exported_name_is_documented_in_the_package_docstring() -> None:
+    import sorethumb_ml
+
+    doc = sorethumb_ml.__doc__ or ""
+    missing = [name for name in sorethumb_ml.__all__ if name not in doc]
+    assert not missing, f"exported but not mentioned in the package docstring: {missing}"
+
+
 def test_package_all_exports_importable() -> None:
     import sorethumb_ml
 

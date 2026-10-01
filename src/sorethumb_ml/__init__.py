@@ -14,7 +14,14 @@ evaluate_scores(scores, ...)   — ROC-AUC, AP, P@k, R@k, F1
 Types
 -----
 Config, SourceConfig, RunResult, GroupSummary, FeaturePlan, FeatureSpace,
-Metrics, Workspace, SorethumbError
+Metrics, Workspace, SorethumbError, Detector (the protocol third-party
+detectors implement)
+
+``__version__`` is the installed distribution's version.
+
+Stability: these names are the supported top-level surface; anything else,
+including every underscore-prefixed module and the sub-packages' contents, is
+internal even where importable. See docs/stability.md for the pre-1.0 policy.
 """
 
 import importlib.metadata
