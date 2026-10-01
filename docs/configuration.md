@@ -42,7 +42,7 @@ so trivial changes do not invalidate cached artefacts.
 | `source.read_options` | dict[str, object] | {} | Format-specific reader overrides, e.g. {'delimiter': '\|', 'null_values': ['NA']}. Passed verbatim to the polars scan_* call. |
 | `source.cache` | bool | true | Cache downloaded files locally. Disable only for tiny or always-fresh sources. |
 | `source.max_nesting_depth` | int | 5 | Maximum recursion depth for struct unnesting. 0 disables unnesting. |
-| `source.max_download_bytes` | int | 2000000000 | Reject an http(s) download whose declared (Content-Length) or actual streamed size exceeds this many bytes. Guards against an unbounded or misconfigured remote response. |
+| `source.max_download_bytes` | int | 2000000000 | Reject an http(s) download whose declared (Content-Length) or actual streamed size exceeds this many bytes. The streamed count is always enforced; a missing or malformed Content-Length is logged and ignored. Guards against an unbounded or misconfigured remote response. |
 
 ## `[columns]` — Logical roles for specific columns.
 

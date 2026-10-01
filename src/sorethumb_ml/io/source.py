@@ -560,6 +560,38 @@ def _strip_authorization(headers: dict[str, str]) -> dict[str, str]:
     return {k: v for k, v in headers.items() if k.lower() != "authorization"}
 
 
+_CONTENT_LENGTH_RE = re.compile(r"[0-9]+")
+
+
+def _declared_content_length(raw: str | None, url: str) -> int | None:
+    """Parse a ``Content-Length`` header into a byte count, or ``None``.
+
+    The declared length is only an early-rejection optimisation: the streaming
+    ceiling in :func:`_download_once` is what actually bounds the download.
+    So an absent header (chunked transfer) and a *malformed* one (non-numeric,
+    negative, signed, containing a list because the server sent duplicates, or
+    otherwise not a plain run of ASCII digits) are both treated as "not
+    declared" -- the malformed case is logged and ignored rather than failing a
+    download that the streaming ceiling can still bound safely. Never raises.
+    """
+    if raw is None:
+        return None
+    value = raw.strip()
+    if _CONTENT_LENGTH_RE.fullmatch(value) is None:
+        logger.warning(
+            "Ignoring malformed Content-Length %r from '%s'; the streaming size limit still applies.",
+            raw[:64],
+            redact_source_uri(url),
+        )
+        return None
+    if len(value) > 18:
+        # More digits than any real size (and int() refuses absurdly long digit
+        # strings): a well-formed but impossible declaration, so report it as
+        # larger than any ceiling instead of letting int() raise.
+        return 10**18
+    return int(value)
+
+
 def _download_once(
     client: httpx.Client,
     url: str,
@@ -635,11 +667,11 @@ def _download_once(
             if resp.status_code >= 400:
                 raise SourceError(f"HTTP {resp.status_code} downloading '{redact_source_uri(url)}'")
 
-            declared = resp.headers.get("content-length")
-            if declared is not None and int(declared) > max_bytes:
+            declared = _declared_content_length(resp.headers.get("content-length"), url)
+            if declared is not None and declared > max_bytes:
                 raise SourceError(
                     f"Refusing to download '{redact_source_uri(url)}': declared size "
-                    f"{int(declared):,} bytes exceeds source.max_download_bytes={max_bytes:,}."
+                    f"{declared:,} bytes exceeds source.max_download_bytes={max_bytes:,}."
                 )
 
             written = 0

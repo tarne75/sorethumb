@@ -77,8 +77,9 @@ class SourceConfig(BaseModel):
         gt=0,
         description=(
             "Reject an http(s) download whose declared (Content-Length) or actual "
-            "streamed size exceeds this many bytes. Guards against an unbounded or "
-            "misconfigured remote response."
+            "streamed size exceeds this many bytes. The streamed count is always "
+            "enforced; a missing or malformed Content-Length is logged and ignored. "
+            "Guards against an unbounded or misconfigured remote response."
         ),
     )
 

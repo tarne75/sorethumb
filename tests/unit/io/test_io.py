@@ -6,6 +6,7 @@ import json
 import warnings
 from pathlib import Path
 
+import httpx
 import polars as pl
 import pytest
 
@@ -1099,6 +1100,184 @@ def test_download_rejects_oversized_streamed_body_without_content_length(tmp_pat
             max_bytes=100,
             transport=httpx.MockTransport(handler),
         )
+
+
+def _content_length_response(declared: str | None, body: bytes, *, piece: int = 0) -> httpx.Response:
+    """A 200 whose Content-Length header is exactly *declared* (None = absent).
+
+    A streamed body is used so httpx does not derive or validate the header from
+    the content, letting the header disagree with the body like a hostile or
+    buggy server's would.
+    """
+
+    def chunks():
+        step = piece or len(body) or 1
+        for i in range(0, len(body), step):
+            yield body[i : i + step]
+
+    headers = {} if declared is None else {"content-length": declared}
+    return httpx.Response(200, headers=headers, content=chunks())
+
+
+@pytest.mark.parametrize(
+    "declared",
+    ["abc", "-5", "+5", "1e3", "0x10", "", "   ", "12, 12", "1.5", "12 bytes"],
+)
+def test_download_ignores_a_malformed_content_length_and_still_downloads(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, declared: str
+) -> None:
+    """A malformed header is logged and ignored (the streaming ceiling still
+    bounds the download); it must not raise a bare ValueError or fail a
+    perfectly good download."""
+    import logging
+
+    import httpx
+
+    from sorethumb_ml.io.source import _download_to
+
+    body = b"a,b\n1,2\n"
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return _content_length_response(declared, body)
+
+    dest = tmp_path / "out.csv"
+    with caplog.at_level(logging.WARNING, logger="sorethumb_ml.io.source"):
+        _download_to(
+            "http://8.8.8.8/data.csv", {}, dest, max_bytes=1000, transport=httpx.MockTransport(handler)
+        )
+    assert dest.read_bytes() == body
+    assert "malformed Content-Length" in caplog.text
+
+
+@pytest.mark.parametrize("declared", ["abc", "-1", "-999999999", "12, 12", None])
+def test_download_enforces_the_streaming_ceiling_when_content_length_is_absent_or_malformed(
+    tmp_path: Path, declared: str | None
+) -> None:
+    import httpx
+
+    from sorethumb_ml.errors import SourceError
+    from sorethumb_ml.io.source import _download_to
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return _content_length_response(declared, b"x" * 5000, piece=50)
+
+    with pytest.raises(SourceError, match="streamed size exceeded"):
+        _download_to(
+            "http://8.8.8.8/data.csv",
+            {},
+            tmp_path / "out.csv",
+            max_bytes=100,
+            transport=httpx.MockTransport(handler),
+        )
+
+
+def test_download_stops_reading_an_oversized_streamed_body_at_the_ceiling(tmp_path: Path) -> None:
+    """A multi-megabyte chunked body against a small ceiling: the download is
+    refused before the body is fully consumed and never writes past the ceiling."""
+    import httpx
+
+    from sorethumb_ml.errors import SourceError
+    from sorethumb_ml.io.source import _download_to
+
+    piece, total_pieces = 64 * 1024, 64  # 4 MiB offered
+    consumed = 0
+
+    def body():
+        nonlocal consumed
+        for _ in range(total_pieces):
+            consumed += 1
+            yield b"x" * piece
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body())  # chunked: no Content-Length
+
+    max_bytes = 1_500_000
+    dest = tmp_path / "out.csv"
+    with pytest.raises(SourceError, match="streamed size exceeded"):
+        _download_to(
+            "http://8.8.8.8/data.csv", {}, dest, max_bytes=max_bytes, transport=httpx.MockTransport(handler)
+        )
+    assert consumed < total_pieces  # stopped early, did not drain the whole body
+    assert dest.stat().st_size <= max_bytes
+
+
+def test_download_rejects_a_content_length_with_an_absurd_number_of_digits(tmp_path: Path) -> None:
+    """int() would raise on a several-thousand-digit string; it is a well-formed
+    but impossible declared size, so it is rejected as too large with SourceError."""
+    import httpx
+
+    from sorethumb_ml.errors import SourceError
+    from sorethumb_ml.io.source import _download_to
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return _content_length_response("9" * 5000, b"x")
+
+    with pytest.raises(SourceError, match="declared size"):
+        _download_to(
+            "http://8.8.8.8/data.csv",
+            {},
+            tmp_path / "out.csv",
+            max_bytes=100,
+            transport=httpx.MockTransport(handler),
+        )
+
+
+def test_download_accepts_a_content_length_exactly_at_the_ceiling(tmp_path: Path) -> None:
+    import httpx
+
+    from sorethumb_ml.io.source import _download_to
+
+    body = b"x" * 100
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return _content_length_response(" 100 ", body)  # surrounding whitespace is tolerated
+
+    dest = tmp_path / "out.csv"
+    _download_to("http://8.8.8.8/data.csv", {}, dest, max_bytes=100, transport=httpx.MockTransport(handler))
+    assert dest.read_bytes() == body
+
+
+def test_download_a_content_length_one_over_the_ceiling_is_rejected_up_front(tmp_path: Path) -> None:
+    import httpx
+
+    from sorethumb_ml.errors import SourceError
+    from sorethumb_ml.io.source import _download_to
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return _content_length_response("101", b"x" * 10)
+
+    with pytest.raises(SourceError, match="declared size"):
+        _download_to(
+            "http://8.8.8.8/data.csv",
+            {},
+            tmp_path / "out.csv",
+            max_bytes=100,
+            transport=httpx.MockTransport(handler),
+        )
+
+
+def test_malformed_content_length_log_redacts_the_url(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    import httpx
+
+    from sorethumb_ml.io.source import _download_to
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return _content_length_response("nope", b"ok")
+
+    with caplog.at_level(logging.WARNING, logger="sorethumb_ml.io.source"):
+        _download_to(
+            f"http://8.8.8.8/data.csv?token={_SECRET_TOKEN}",
+            {},
+            tmp_path / "out.csv",
+            max_bytes=100,
+            transport=httpx.MockTransport(handler),
+        )
+    assert "malformed Content-Length" in caplog.text
+    assert _SECRET_TOKEN not in caplog.text
 
 
 # ---------------------------------------------------------------------------

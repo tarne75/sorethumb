@@ -12,6 +12,7 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- HTTP source downloads handle `Content-Length` explicitly: an absent header (chunked transfer) and a malformed one (non-numeric, negative, signed, duplicated or with an impossible number of digits) are treated as undeclared, with the malformed case logged and ignored, while the streaming `source.max_download_bytes` ceiling is always enforced. Previously a malformed value raised a bare `ValueError` instead of a `SourceError`.
 - `sorethumb init` no longer reports success when the workspace could not be created: it prints an error, suppresses the success banner, exits `1`, and states explicitly when `sorethumb.toml` was nevertheless written. Unwritable target paths now fail cleanly instead of with a traceback.
 - Ranking and flag selection now use a stable descending sort with the earliest source row as the tie-break, so rank order and `explain.max_rows` selection are deterministic when rows share a composite score. Previously a reversed unstable argsort reversed tie groups, and the exact-k tie-break used array position, which is not source order once a group is time-sorted.
 

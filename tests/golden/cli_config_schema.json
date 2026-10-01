@@ -622,7 +622,7 @@
         },
         "max_download_bytes": {
           "default": 2000000000,
-          "description": "Reject an http(s) download whose declared (Content-Length) or actual streamed size exceeds this many bytes. Guards against an unbounded or misconfigured remote response.",
+          "description": "Reject an http(s) download whose declared (Content-Length) or actual streamed size exceeds this many bytes. The streamed count is always enforced; a missing or malformed Content-Length is logged and ignored. Guards against an unbounded or misconfigured remote response.",
           "exclusiveMinimum": 0,
           "title": "Max Download Bytes",
           "type": "integer"
