@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the evaluation harnesses and, optionally, refresh the README's benchmark tables.
+"""Run the evaluation harnesses and, optionally, refresh the benchmark tables in a document.
 
 This used to be the public ``sorethumb benchmark`` command. It is a
 maintainer/release tool, not part of the product interface: it edits files, so
@@ -8,9 +8,11 @@ paths instead of guessing them.
 
 * ``--output-dir`` is required: the ``*.md`` / ``*.csv`` result files are
   written there, and nowhere else.
-* ``--readme`` is optional: the README is edited only when you pass it. There is
-  no default, and no path is derived from where the package is installed. A
-  path inside the ``sorethumb_ml`` package directory is refused.
+* ``--readme`` is optional: the Markdown document that holds the result markers
+  (``docs/benchmarks.md`` in this repository; the README carries only a summary)
+  is edited only when you pass it. There is no default, and no path is derived
+  from where the package is installed. A path inside the ``sorethumb_ml``
+  package directory is refused.
 
 Two independent suites, both on by default:
 
@@ -21,7 +23,7 @@ Two independent suites, both on by default:
 
 Usage:
     uv run python scripts/run_benchmark.py --output-dir benchmark_results
-    uv run python scripts/run_benchmark.py --output-dir benchmark_results --readme README.md
+    uv run python scripts/run_benchmark.py --output-dir benchmark_results --readme docs/benchmarks.md
     uv run python scripts/run_benchmark.py --output-dir /tmp/bench --no-legacy --pipeline-seeds 1
 
 Exit codes: 0 success; 1 an incomplete or errored pipeline matrix (nothing is
@@ -53,7 +55,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--readme",
         type=Path,
         default=None,
-        help="README to inject the result tables into. Omit to leave every README untouched.",
+        help=(
+            "Markdown document to inject the result tables into (docs/benchmarks.md in this repo). "
+            "Omit to leave every document untouched."
+        ),
     )
     parser.add_argument(
         "--seeds",

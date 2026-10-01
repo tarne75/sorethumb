@@ -12,6 +12,7 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- README: installation, a core-only example and a short "What it does not do" list now come first, and the full benchmark matrices moved to `docs/benchmarks.md`, leaving a compact summary and a link. `scripts/run_benchmark.py --readme` is unchanged but now targets `docs/benchmarks.md`, where the result markers live.
 - `run --json` reports rows flagged for review as `n_flagged` (top level and per group) and no longer emits the redundant `n_anomalies` alias; the name describes a review shortlist rather than a prevalence estimate. Not breaking: nothing has been released.
 
 ### Fixed
