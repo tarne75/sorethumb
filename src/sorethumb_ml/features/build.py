@@ -57,7 +57,7 @@ def _extract_row_ids(df: pl.DataFrame) -> np.ndarray:
 
 
 def _peak_matrix_multiplier(config: Config) -> float:
-    """Estimate how many "base matrix" units can be alive simultaneously (P1-1).
+    """Estimate how many "base matrix" units can be alive simultaneously.
 
     The base unit is one matrix at the configured dtype (``n_rows x n_cols x
     dtype_bytes`` -- what ``estimated_mb`` below already computes). Real
@@ -83,7 +83,7 @@ def _peak_matrix_multiplier(config: Config) -> float:
     feature matrix for a large, uncapped ``train_row_cap``) -- that is
     detector- and hyperparameter-specific in a way a single matrix-shaped
     formula cannot honestly capture; ``train_row_cap`` remains the lever for
-    it. This estimates matrix memory only, same as before P1-1, just less
+    it. This estimates matrix memory only, same as before, just less
     wrong about how many copies of it actually coexist.
     """
     multiplier = 1.0 + 1.0  # the group's own matrix + encode/scale headroom
@@ -165,7 +165,7 @@ def fit_features(df: pl.DataFrame, plan: FeaturePlan, config: Config) -> Feature
     enc_df = _encode(df, plan, demoted, extra_freq)
     _assert_encoded_frame_is_usable(enc_df)
 
-    # Pre-flight memory check (P1-1: sized for how many copies of this
+    # Pre-flight memory check (sized for how many copies of this
     # matrix can realistically be alive at once, not just one).
     _check_memory_budget(len(enc_df), len(enc_df.columns), config)
 
@@ -371,7 +371,7 @@ def _encode(
 
 
 def _assert_no_infinities(enc_df: pl.DataFrame, plan: FeaturePlan) -> None:
-    """Fail closed on +/-inf in any feature that would enter the matrix (P0-5).
+    """Fail closed on +/-inf in any feature that would enter the matrix.
 
     No transformation can preserve what an infinity means: clipping or
     imputing it invents a value, and letting it through scaling turns it into

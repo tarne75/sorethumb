@@ -17,7 +17,7 @@ that specific run in GitHub's UI (Actions → the run → Review deployments).
 Nothing reaches PyPI without that manual click, no matter what triggered
 the workflow.
 
-### The release-state commit (P0-9)
+### The release-state commit
 
 Before the tag, one commit on the tag day must make the repository say what is
 about to be true. `scripts/check_release_state.py` (run by `release.sh`, and
@@ -40,7 +40,7 @@ Because the changelog date must equal the tag date, make this commit, push it,
 let CI pass, and tag on the same UTC day; if the day rolls over, re-date it in
 a new commit rather than tagging over the mismatch.
 
-## Rehearsing the publish path before trusting it with a real release (P2-5)
+## Rehearsing the publish path before trusting it with a real release
 
 `.github/workflows/publish-testpypi.yml` runs the *exact same* shape of
 pipeline as `publish.yml` — the reusable `release-validation.yml` suite,

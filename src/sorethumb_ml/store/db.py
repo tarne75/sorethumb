@@ -387,7 +387,7 @@ class Store:
         ``Config.config_hash()`` explicitly -- the same canonical value used
         to derive ``run_id`` itself and recorded on ``totals``/
         ``period_execution`` for the same execution. Hashing the full
-        ``config_json`` here instead (the pre-P0-6 behaviour) produced a
+        ``config_json`` here instead (the previous behaviour) produced a
         *different* value under the same column name, silently breaking any
         join or comparison across those tables. A caller that omits it (only
         tests do) gets the empty string, not a differently-computed guess.

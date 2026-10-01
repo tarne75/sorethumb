@@ -126,7 +126,7 @@ def test_score_forward_missing_model_is_failed_not_complete_and_is_retried(tmp_p
     """A score-forward group that requests a detector never fitted in the
     source run must be recorded as failed -- both in the RunResult and the
     ledger -- and a retry with the same inputs must re-execute it rather than
-    treating it as already complete (P0-1).
+    treating it as already complete.
     """
     ws = tmp_path / "ws"
     src_csv, new_csv = tmp_path / "train.csv", tmp_path / "new.csv"
@@ -166,7 +166,7 @@ def test_score_forward_missing_model_is_failed_not_complete_and_is_retried(tmp_p
 def test_score_forward_rejects_incomplete_source_run(tmp_path: Path) -> None:
     """A source run that is still 'running' (crashed before completion) or
     'failed' has no trustworthy persisted models and must be rejected outright,
-    not scored against (P0-5)."""
+    not scored against."""
     ws = tmp_path / "ws"
     csv = tmp_path / "data.csv"
     _planted_csv(csv, seed=0)
@@ -182,7 +182,7 @@ def test_score_forward_rejects_incomplete_source_run(tmp_path: Path) -> None:
 
 def test_score_forward_rejects_score_forward_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A score-forward run never persists its own models -- it must be
-    rejected as a source for a further score-forward run (P0-5)."""
+    rejected as a source for a further score-forward run."""
     ws = tmp_path / "ws"
     csv = tmp_path / "data.csv"
     _planted_csv(csv, seed=0)
@@ -198,7 +198,7 @@ def test_score_forward_rejects_score_forward_source(tmp_path: Path, monkeypatch:
 
 def test_score_forward_rejects_corrupted_model_file(tmp_path: Path) -> None:
     """A corrupted persisted estimator file must fail the group loudly, not be
-    silently unpickled or skipped as though it were never fitted (P0-5)."""
+    silently unpickled or skipped as though it were never fitted."""
     ws = tmp_path / "ws"
     csv = tmp_path / "data.csv"
     _planted_csv(csv, seed=0)
@@ -218,7 +218,7 @@ def test_score_forward_rejects_corrupted_model_file(tmp_path: Path) -> None:
 
 def test_score_forward_rejects_swapped_manifest(tmp_path: Path) -> None:
     """A manifest copied onto a different detector's files must be rejected,
-    not loaded as though it described the file it's sitting next to (P0-5)."""
+    not loaded as though it described the file it's sitting next to."""
     ws = tmp_path / "ws"
     csv = tmp_path / "data.csv"
     _planted_csv(csv, seed=0)
@@ -239,7 +239,7 @@ def test_score_forward_rejects_swapped_manifest(tmp_path: Path) -> None:
 
 
 def test_score_forward_hbos_out_of_range_not_scored_as_normal(tmp_path: Path) -> None:
-    """P1-5 regression at the score-forward layer: after a fitted HBOS model
+    """Regression at the score-forward layer: after a fitted HBOS model
     is persisted and reloaded from disk (the exact path ``score_forward``
     uses -- no refit), a value far outside the training range must not
     inherit a dense edge bin's normal-looking score.
@@ -277,7 +277,7 @@ def test_score_forward_multi_detector_round_trip_succeeds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A clean, uncorrupted multi-detector source run must score forward
-    successfully end to end (P0-5's positive case)."""
+    successfully end to end (the positive case)."""
     ws = tmp_path / "ws"
     src_csv, new_csv = tmp_path / "train.csv", tmp_path / "new.csv"
     _planted_csv(src_csv, seed=0)
@@ -327,7 +327,7 @@ def test_score_forward_rejects_drifted_schema(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fit-time vs. score-time config validation (P0-6)
+# Fit-time vs. score-time config validation
 # ---------------------------------------------------------------------------
 
 
@@ -485,7 +485,7 @@ def test_score_forward_allows_legal_scoring_explain_report_overrides(
 
 
 # ---------------------------------------------------------------------------
-# Provenance surfacing (P0-6)
+# Provenance surfacing
 # ---------------------------------------------------------------------------
 
 

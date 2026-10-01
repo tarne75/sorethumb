@@ -1,4 +1,4 @@
-"""P0-9: the release-state checker rejects a tag whose repository state contradicts it.
+"""The release-state checker rejects a tag whose repository state contradicts it.
 
 Every case builds a small synthetic repository in ``tmp_path`` in the state a
 correct release-state commit leaves behind, then breaks exactly one thing.

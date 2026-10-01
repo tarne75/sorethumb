@@ -1,4 +1,4 @@
-"""Unit tests for P0-4: null group handling and typed group-key identity.
+"""Unit tests for null group handling and typed group-key identity.
 
 ``make_group_key`` must key on each column's *typed* value, not a
 pre-stringified one -- otherwise ``None``, ``""``, and the literal string

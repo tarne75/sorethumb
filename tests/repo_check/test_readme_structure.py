@@ -1,4 +1,4 @@
-"""P2-6: the README is the PyPI long description and the first thing a reader sees.
+"""The README is the PyPI long description and the first thing a reader sees.
 
 It leads with how to install, a core-only example and the short list of limitations;
 the full benchmark matrices live in ``docs/benchmarks.md``, with only a compact summary

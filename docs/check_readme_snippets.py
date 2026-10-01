@@ -6,7 +6,7 @@ CI runs this so a snippet that stops being copy-paste runnable fails the build:
 
 - ```python``` blocks are run in a subprocess from a fresh temp dir (nonzero
   exit fails). The 60-second quickstart generates its own small synthetic
-  dataset in-process (P0-2) -- no network access, no dependency beyond this
+  dataset in-process -- no network access, no dependency beyond this
   package's own core requirements.
 - ```toml``` blocks must parse; a block whose top-level tables are config
   sections is merged onto a minimal base and fed to ``Config`` to catch schema
@@ -18,8 +18,8 @@ CI runs this so a snippet that stops being copy-paste runnable fails the build:
 
 A second entry point extracts the lone ```python``` block verbatim, for
 release-validation.yml's build job to run against a clean, extras-free wheel
-install (P0-2's "execute the exact published snippet as a required release
-test") -- this dev-environment check alone can't stand in for that, since it
+install (the exact published snippet is executed as a required release
+test) -- this dev-environment check alone can't stand in for that, since it
 runs against the editable source checkout, not an installed distribution:
 
     python docs/check_readme_snippets.py --extract-python OUTPUT_PATH

@@ -241,7 +241,7 @@ def _fail(json_output: bool, message: str, code: ExitCode) -> NoReturn:
     machine-readable command and every failure class --
     ``{"error": <message>, "kind": <"runtime"|"preflight"|"not_found">,
     "exit_code": <int>}`` -- never Rich text on stderr a --json caller has no
-    reason to read (P0-3). Human mode: Rich-formatted text on stderr.
+    reason to read. Human mode: Rich-formatted text on stderr.
     """
     if json_output:
         typer.echo(json.dumps({"error": message, "kind": code.kind, "exit_code": int(code)}))
@@ -253,7 +253,7 @@ def _fail(json_output: bool, message: str, code: ExitCode) -> NoReturn:
 def _guard_legacy_dot_workspace(*, json_output: bool = False) -> None:
     """Refuse to silently switch a pre-existing "." workspace to the new default.
 
-    Before P3-5, the zero-config default workdir was ".". A directory that
+    Previously, the zero-config default workdir was ".". A directory that
     already has a `sorethumb.db` marker at "." is a workspace created under
     that old default; falling through to the new `_DEFAULT_WORKDIR` here
     would not touch or delete anything (non-destructive by construction --
@@ -307,7 +307,7 @@ def _load_config(
     An explicit value always overrides TOML; when not given, TOML's own
     value (or the hardcoded default) applies untouched.
 
-    *json_output* (P0-3): callers from a JSON-capable command pass their own
+    *json_output*: callers from a JSON-capable command pass their own
     --json flag through here so a config error becomes a single JSON
     document on stdout instead of Rich text on stderr, matching every other
     error path in that command. Callers without a JSON mode leave it False.
@@ -844,7 +844,7 @@ def run(
         json_output=json_output,
     )
 
-    # P0-3: never prompt (or print a notice that would pollute stdout) in
+    # Never prompt (or print a notice that would pollute stdout) in
     # --json mode -- a --json caller gets exactly the run's JSON result on
     # stdout, nothing else, and the config is simply left unsaved rather than
     # asked about, same as answering "no" would do.
@@ -1873,7 +1873,7 @@ def workspace_reset(
         try:
             typed = input("> ").strip()
         except EOFError:
-            # P0-3: closed stdin must terminate cleanly, not crash with a
+            # Closed stdin must terminate cleanly, not crash with a
             # traceback -- same outcome as typing the wrong path: abort.
             err_console.print("[red]No input available (stdin closed). Aborting.[/red]")
             raise typer.Exit(int(ExitCode.RUNTIME)) from None

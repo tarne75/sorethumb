@@ -1,4 +1,4 @@
-"""Run-identity and resume semantics (P0-1, Phase 3): run_id is deterministic
+"""Run-identity and resume semantics run_id is deterministic
 for identical inputs, a resumed run skips already-complete groups, and a
 group that fails (no detector produced scores, a fit() exception, a
 score_samples() exception) is persisted as failed -- never complete -- and

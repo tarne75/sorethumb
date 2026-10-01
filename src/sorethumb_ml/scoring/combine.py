@@ -70,7 +70,7 @@ union:
     (or its natural boundary when contamination="auto"). A row is anomalous
     when ANY detector flags it. Permissive; maximises recall.
 
-Continuous ranking (P0-8)
+Continuous ranking
 --------------------------
 ``combined_score`` -- used to order flagged rows severity-first and as the
 score ROC-AUC/AP are computed against -- is a *separate* computation from the
@@ -389,7 +389,7 @@ class ScoreEnsemble:
             contamination, is_auto = self._resolve_contamination(flag_matrix)
             if is_auto:
                 # contamination="auto" is a heuristic estimate, not a hard
-                # constraint -- left unchanged by P2-3, which only tightens
+                # constraint -- left unchanged by the exact-k handling, which only tightens
                 # *explicit* numeric contamination (see module docstring).
                 threshold = float(np.quantile(combined, 1.0 - contamination))
                 anomaly_flag = combined >= threshold
@@ -517,7 +517,7 @@ class ScoreEnsemble:
             return score_matrix @ weights  # weighted average, shape (n,)
 
         if self._combination == "intersection":
-            # median, not min() (P0-8): robust to a single anti-correlated
+            # median, not min(): robust to a single anti-correlated
             # member out of three -- min() let one bad member's low score
             # dominate the ranking for every row, tanking it below random on
             # some scenarios even though the other members ranked well.

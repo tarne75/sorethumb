@@ -1,5 +1,5 @@
 """Pipeline-benchmark accuracy floors: the harness's "reject a default
-configuration" gate (P3-2). Every guarded (scenario, ablation) cell must clear
+configuration" gate. Every guarded (scenario, ablation) cell must clear
 a committed ROC-AUC floor on the network-free synthetic scenarios.
 
 Marked ``benchmark``, so it is deselected by default and run explicitly::
@@ -7,11 +7,11 @@ Marked ``benchmark``, so it is deselected by default and run explicitly::
     pytest -m benchmark
 
 Floors were set from an observed run (2026-09-20, ``local``/``varying_density``
-default-ablation floors added 2026-09-27 after P0-8) with margin below the
+default-ablation floors added 2026-09-27 after the median-ranking fix) with margin below the
 measured value. Ratchet a floor UP when a change reliably improves it; do not
 lower one without a documented reason in this file.
 
-``local``/``varying_density`` under the default ablation (P0-8, 2026-09-27)
+``local``/``varying_density`` under the default ablation
 -----------------------------------------------------------------------------
 Previously undocumented-as-floors here: the *default* ablation
 (``combination="intersection"``) scored **worse than random** on these two
@@ -30,7 +30,7 @@ flag_precision/flag_recall observed even post-fix; see
 ``PipelineBenchmarkRow.flag_precision``/``flag_recall`` computed against the
 real ``anomaly_flag``, not the ranking) -- a separate, genuine limitation of
 requiring unanimous agreement on data these detectors individually misjudge,
-not something this phase changed or was asked to fix. See
+not something the ranking fix changed or was meant to fix. See
 docs/approximations.md for the full writeup.
 
 ``contextual`` is not floor-tested as "beats random" under any ablation: every
@@ -42,7 +42,7 @@ context" structure from an ordinary categorical feature column. Rather than
 assert something the data shows is false, this is checked only for a
 catastrophic regression (a real inversion/bug), not for beating random.
 
-``swamping`` (P2-1, 2026-09-29): redesigned as a matched clean/contaminated
+``swamping``: redesigned as a matched clean/contaminated
 fit pair, both scored against the same designated at-risk-normal holdout --
 see ``evaluate.scenarios`` module docstring. This population is single-class
 by construction, so ROC-AUC/AP are undefined (NaN); it is guarded separately
@@ -71,15 +71,15 @@ pytestmark = pytest.mark.benchmark
 
 # (scenario, ablation) -> ROC-AUC floor. Observed values on the 2026-09-20
 # reference run are in the trailing comments; local/varying_density default
-# floors observed 2026-09-27 (post P0-8's median-ranking fix).
+# floors observed 2026-09-27 (after the median-ranking fix).
 _FLOORS: dict[tuple[str, str], float] = {
     ("point", "default"): 0.85,  # observed 0.97
     ("clustered", "default"): 0.85,  # observed 0.98 (default ensemble excludes lof)
     ("masking", "default"): 0.45,  # observed 0.57 -- masking is deliberately hard
     ("local", "combination_union"): 0.65,  # observed 0.84
     ("varying_density", "combination_union"): 0.65,  # observed 0.86
-    ("local", "default"): 0.55,  # observed 0.71 -- was 0.04 (worse than random) before P0-8
-    ("varying_density", "default"): 0.55,  # observed 0.68 -- was 0.24 before P0-8
+    ("local", "default"): 0.55,  # observed 0.71 -- was 0.04 (worse than random) before the median-ranking fix
+    ("varying_density", "default"): 0.55,  # observed 0.68 -- was 0.24 before the median-ranking fix
 }
 
 # Sanity-only, not "beats random": contextual anomalies genuinely sit at
@@ -144,7 +144,7 @@ def test_cell_not_catastrophically_broken(
 
 
 # ---------------------------------------------------------------------------
-# Swamping (P2-1): guarded separately from _FLOORS -- see module docstring.
+# Swamping: guarded separately from _FLOORS -- see module docstring.
 # ROC-AUC is undefined (NaN) on this scenario's single-class at-risk holdout
 # by design, so flag_false_positive_rate is what's actually asserted here.
 # ---------------------------------------------------------------------------

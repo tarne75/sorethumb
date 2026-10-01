@@ -721,7 +721,7 @@ def test_apply_pca_roundtrip():
 
 
 # ---------------------------------------------------------------------------
-# Non-finite guards (P0-5): fail clearly, never substitute a value
+# Non-finite guards: fail clearly, never substitute a value
 # ---------------------------------------------------------------------------
 
 
@@ -1055,7 +1055,7 @@ def test_memory_budget_exceeded_raises():
 
 
 # ---------------------------------------------------------------------------
-# _peak_matrix_multiplier / _check_memory_budget (P1-1): the preflight
+# _peak_matrix_multiplier / _check_memory_budget: the preflight
 # estimate must reflect how many copies of the matrix can be alive at once,
 # not just one -- see src/sorethumb_ml/features/build.py's docstrings.
 # ---------------------------------------------------------------------------
@@ -1080,7 +1080,7 @@ def test_peak_matrix_multiplier_dtype_float64_is_2x_even_with_explain():
 
 
 def test_check_memory_budget_expanded_estimate_catches_what_bare_matrix_would_miss():
-    """The exact regression this phase fixes: a budget the *expanded*
+    """The exact regression this guards: a budget the *expanded*
     estimate correctly flags but a bare single-matrix estimate would have
     let through. n_rows x n_cols x 4 bytes alone fits comfortably under the
     budget; x4 (explain enabled, the default) does not."""

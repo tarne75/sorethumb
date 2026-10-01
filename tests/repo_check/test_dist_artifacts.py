@@ -1,4 +1,4 @@
-"""Validate the built sdist/wheel in ``dist/`` (P2-2).
+"""Validate the built sdist/wheel in ``dist/``.
 
 Run after ``uv build`` -- locally, or in CI's ``release-validation.yml``
 ``build`` job. Every test here skips gracefully when ``dist/`` hasn't been

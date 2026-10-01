@@ -15,7 +15,7 @@ name: Publish
 # run pauses and waits for an explicit approval click before anything
 # reaches PyPI.
 #
-# P0-9: publication is gated on the exact tagged commit -- not main's latest,
+# Publication is gated on the exact tagged commit -- not main's latest,
 # not a past ci.yml run -- passing the complete release-validation suite
 # (release-validation.yml), and on that commit actually being reachable from
 # the protected `main` branch (verify-tag-on-main). Every third-party action
@@ -53,7 +53,7 @@ jobs:
           fi
           echo "OK: ${{ github.sha }} is reachable from origin/main."
 
-  # P0-9: the release-state commit must really have happened. Fails the tag if
+  # The release-state commit must really have happened. Fails the tag if
   # the CHANGELOG date is in the future or is not the tag date (the UTC date
   # this run started, i.e. when the tag was pushed), if the version in
   # pyproject.toml / CHANGELOG.md / the footer links disagrees with the tag, or

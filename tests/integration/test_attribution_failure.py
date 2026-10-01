@@ -1,4 +1,4 @@
-"""An attribution backend that raises is reported, not silently dropped (P1-2)."""
+"""An attribution backend that raises is reported, not silently dropped."""
 
 from __future__ import annotations
 

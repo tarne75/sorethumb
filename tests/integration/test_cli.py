@@ -125,7 +125,7 @@ def test_run_creates_results_parquet(workspace):
 
 
 def test_run_zero_config_creates_single_workspace_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """P3-5: with no sorethumb.toml, `sorethumb run <file>` must create every
+    """With no sorethumb.toml, `sorethumb run <file>` must create every
     artefact (db, models, results, reports, logs) under one dedicated
     `./sorethumb-workspace/` directory in the invocation directory -- never
     scattered beside the source data (which may live somewhere else
@@ -157,8 +157,8 @@ def test_run_zero_config_creates_single_workspace_directory(tmp_path: Path, monk
 def test_run_zero_config_refuses_when_legacy_dot_workspace_exists(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """P3-5: a sorethumb.db directly at '.' is a workspace created under the
-    pre-P3-5 default (workdir="."). Silently falling through to the new
+    """A sorethumb.db directly at '.' is a workspace created under the
+    previous default (workdir="."). Silently falling through to the new
     './sorethumb-workspace/' default would just stop seeing its runs, with
     no error -- refuse instead, non-destructively, until the caller chooses
     explicitly (either --workdir . to keep using it, or migrate it)."""
@@ -219,7 +219,7 @@ def test_run_dry_run_registers_dataset_and_run_but_fits_nothing(workspace):
 def test_run_exits_nonzero_and_reports_status_when_report_generation_fails(
     workspace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P2-8: a report-rendering exception used to be invisible from the CLI
+    """A report-rendering exception used to be invisible from the CLI
     -- exit code 0, nothing printed about it, report_status not even a
     field. Detection/scoring succeeding must still surface a failed report
     explicitly, in both the text summary and --json, and as a non-zero exit."""
@@ -251,7 +251,7 @@ def test_run_with_groups(workspace_grouped):
 
 
 def test_run_limit_groups_caps_deterministically(workspace_grouped):
-    """P2-7: --limit-groups used to be parsed and silently ignored. Must
+    """--limit-groups used to be parsed and silently ignored. Must
     actually cap the group count, and do so deterministically (sorted by
     label) so the same limit always keeps the same groups."""
     _, toml_path, workdir = workspace_grouped  # group labels "G0", "G1"
@@ -268,7 +268,7 @@ def test_run_limit_groups_caps_deterministically(workspace_grouped):
 
 
 # ---------------------------------------------------------------------------
-# P1-4: group selectors that match nothing must fail loudly, not silently
+# Group selectors that match nothing must fail loudly, not silently
 # complete a zero-group no-op
 # ---------------------------------------------------------------------------
 
@@ -325,7 +325,7 @@ def test_run_json_output_reports_group_selection_error(workspace_grouped):
 
 
 # ---------------------------------------------------------------------------
-# --strict overrides an explicit TOML value; not passing it respects TOML (P2-7)
+# --strict overrides an explicit TOML value; not passing it respects TOML
 # ---------------------------------------------------------------------------
 
 
@@ -380,7 +380,7 @@ def test_run_no_strict_or_no_strict_flag_respects_toml_true(workspace):
 
 
 # ---------------------------------------------------------------------------
-# sorethumb run --detectors must not rewrite sorethumb.toml (P0-6)
+# sorethumb run --detectors must not rewrite sorethumb.toml
 # ---------------------------------------------------------------------------
 
 
@@ -547,7 +547,7 @@ def test_report_unknown_run_id_errors(workspace):
 
 
 def test_report_rerender_uses_current_config_report_formats(workspace):
-    """P2-7: report.formats is the one deliberate exception to 'report
+    """Report.formats is the one deliberate exception to 'report
     re-renders from the run's historical state' -- it is purely cosmetic
     (which output files get written), so a change to the *current* config
     must take effect on re-render, as the command's own help text promises."""
@@ -771,7 +771,7 @@ def test_backfill_no_time_column_exits_cleanly(workspace):
 def test_backfill_collects_every_result_and_exits_nonzero_on_any_failure(
     timeseries_workspace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P2-7: backfill used to discard every period's RunResult and always
+    """Backfill used to discard every period's RunResult and always
     print "Backfill complete." with exit code 0, even if every period
     failed. One period is made to fail (its RunResult carries a failed
     group); the other two must still be processed (not stopped early), and
@@ -846,7 +846,7 @@ def _raising_backfill(monkeypatch: pytest.MonkeyPatch, bad_label: str, exc: Exce
 def test_backfill_continues_past_a_period_that_raises_and_summarises_it_separately(
     timeseries_workspace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P1-4: a project error raised for one period (not a failed group) used to abort the whole
+    """A project error raised for one period (not a failed group) used to abort the whole
     backfill with a traceback, leaving later periods unprocessed and no summary."""
     from sorethumb_ml.errors import SourceError
 
@@ -949,7 +949,7 @@ def test_workspace_reset_requires_confirmation(workspace):
 
 
 def test_workspace_reset_rejects_a_directory_that_is_not_a_workspace(tmp_path: Path):
-    """P0-2: a directory with no sorethumb.db marker (never a real
+    """A directory with no sorethumb.db marker (never a real
     Workspace) must be refused, not silently accepted and destroyed,
     however it ended up as the resolved workdir."""
     not_a_workspace = tmp_path / "not-a-workspace"
@@ -970,7 +970,7 @@ def test_workspace_reset_rejects_a_directory_that_is_not_a_workspace(tmp_path: P
 def test_workspace_reset_deletion_failure_is_reported_not_swallowed(
     workspace, monkeypatch: pytest.MonkeyPatch
 ):
-    """P0-2: `shutil.rmtree(..., ignore_errors=True)` used to make a
+    """`shutil.rmtree(..., ignore_errors=True)` used to make a
     partial/failed deletion look like a clean success (exit 0). A real
     deletion failure must now propagate as a non-zero exit."""
     _, toml_path, workdir = workspace
@@ -990,7 +990,7 @@ def test_workspace_reset_deletion_failure_is_reported_not_swallowed(
 def test_workspace_reset_resolves_a_symlinked_workdir_before_deleting(
     tmp_path: Path,
 ) -> None:
-    """P0-2: `_guard_reset_target` and the deletion itself must act on the
+    """`_guard_reset_target` and the deletion itself must act on the
     *resolved* target, not the symlink -- a workdir configured as a symlink
     to a real workspace must still delete the real directory (proving the
     resolve-before-guard path-resolution edge case works), and must not

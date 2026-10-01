@@ -1,6 +1,6 @@
 name: Publish (TestPyPI rehearsal)
 
-# Disposable rehearsal of the exact production publish path (P2-5) against
+# Disposable rehearsal of the exact production publish path against
 # TestPyPI instead of PyPI -- proves the reusable validation suite, the
 # build-once/no-rebuild artifact hand-off, the environment-approval gate,
 # and the actual upload mechanics all work end to end before ever trusting

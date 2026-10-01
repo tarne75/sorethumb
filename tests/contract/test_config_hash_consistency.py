@@ -3,7 +3,7 @@
 meant by every "config_hash" column/field across the store and the public
 API -- the `run` table row, `totals`, `period_execution`, and `RunResult`.
 
-Before P0-6, `Store.insert_run` independently hashed the full (redacted)
+Previously, `Store.insert_run` independently hashed the full (redacted)
 `config_json` string and stored *that* under the `run.config_hash` column,
 while `totals`/`period_execution`/`RunResult`/`run_id` itself all used
 `Config.config_hash()` (which deliberately excludes purely cosmetic or

@@ -1,4 +1,4 @@
-"""Subprocess peak-memory tests for the P1-1 preflight budget check and the
+"""Subprocess peak-memory tests for the preflight budget check and the
 matrix-lifetime fix it backs (dead ``full_space`` reference removed,
 per-group float64 upcast made conditional on ``explain.enabled`` -- see
 ``sorethumb_ml._pipeline._group_feature_matrix`` and
@@ -22,7 +22,7 @@ at these row counts and would make this a memory test of the CSV reader,
 not of the feature-matrix lifetime this suite actually guards).
 
 ``explain.enabled=False`` throughout: this isolates the fit/score matrix
-path P1-1 actually changed. With explain enabled (the default), TreeSHAP
+path the memory fix actually changed. With explain enabled (the default), TreeSHAP
 attributes every row of the *full* matrix, uncapped -- correct for accuracy,
 but it makes a large run far too slow for a memory test (the existing
 ``evaluate/pipeline_benchmark.py`` harness disables explain for the same
@@ -138,13 +138,13 @@ def test_multi_group_run_completes_with_sane_peak_memory(tmp_path_factory) -> No
     bug -- plus parquet decode and interpreter/import overhead), so this is
     deliberately loose.
 
-    The *precise*, deterministic regression guard for the specific P1-1 bug
+    The *precise*, deterministic regression guard for the specific bug
     this dataset shape is designed to exercise (fit_features' full-dataset
     FeatureSpace staying reachable for the whole group loop) is
     tests/integration/test_feature_matrix_lifetime.py, which asserts via a
     weakref rather than an absolute memory number -- confirmed (by
     temporarily reintroducing the old code) to actually fail without the
-    P1-1 fix, which this RSS-based sanity check alone was too noisy to do
+    fix, which this RSS-based sanity check alone was too noisy to do
     reliably.
     """
     path = tmp_path_factory.mktemp("mg") / "groups.parquet"
@@ -211,16 +211,16 @@ def reject_parquet(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 def test_budget_rejects_before_completing_a_run(reject_parquet: Path, tmp_path: Path) -> None:
-    """A budget the *expanded* (P1-1) estimate correctly flags -- but the old,
+    """A budget the *expanded* estimate correctly flags -- but the old,
     single-matrix-only estimate would have missed -- must be rejected via
     MemoryBudgetError, not silently allowed through to a full fit.
 
     Chosen budget (256, run.max_memory_mb's pydantic-enforced floor -- the
     smallest a real config can ever set) sits strictly between the old and
     new estimates: below _peak_matrix_multiplier's x2 projection (explain
-    disabled here), above the bare single-matrix size the pre-P1-1 check
+    disabled here), above the bare single-matrix size the previous check
     alone computed -- so this specifically exercises the expanded estimate
-    (a pre-P1-1 build of this exact test would have seen "completed", not
+    (a build without the fix would have seen "completed", not
     "rejected", at this budget).
     """
     budget = 256

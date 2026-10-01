@@ -247,7 +247,7 @@ def test_ecod_hbos_get_exact_native_attributions(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# P1-2: a detector the ensemble dropped (zero weight) must never supply the
+# A detector the ensemble dropped (zero weight) must never supply the
 # displayed explanation, even when it is the only detector whose attribution
 # method would otherwise have succeeded.
 # ---------------------------------------------------------------------------
@@ -260,10 +260,10 @@ def test_dropped_detector_as_sole_would_be_producer_yields_no_attribution(
     members; one_class_svm is forced anti-correlated (dropped by the guard,
     weight 0) and is the *only* one whose attribution method would succeed
     (the other two are forced to fail, simulating exactly the scenario the
-    prompt describes: active detectors failing attribution). The pre-P1-2
+    prompt describes: active detectors failing attribution). The earlier
     bug returned one_class_svm's gradient attribution anyway (attribution_kind
     ends up "heuristic" with real, but meaningless, reason values) --
-    confirmed by temporarily removing the P1-2 skip and observing this exact
+    confirmed by temporarily removing the zero-weight skip and observing this exact
     test fail. Post-fix, with no active source, attribution_kind must stay
     "none" (nothing computed) rather than surface the dropped detector's
     reasons under a misleadingly plausible-looking tag.
@@ -315,8 +315,8 @@ def test_mixed_source_attribution_kind_and_reasons_ignore_the_dropped_detector(
     """isolation_forest ("model_specific") and ecod ("exact") both succeed
     normally here -- one_class_svm is forced anti-correlated (dropped,
     weight 0) but its own tag would be "heuristic", the weakest of the three.
-    Pre-P1-2, its leaked-in attribution dragged attribution_kind down to
-    "heuristic" for every row (confirmed by temporarily removing the P1-2
+    Previously, its leaked-in attribution dragged attribution_kind down to
+    "heuristic" for every row (confirmed by temporarily removing the zero-weight
     skip). Post-fix, attribution_kind must reflect only the two active
     members: the weakest of {model_specific, exact} is "model_specific".
     """

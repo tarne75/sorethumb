@@ -117,7 +117,7 @@ def test_kmeans_get_params_includes_cblof_fields():
 
 
 def test_kmeans_get_params_exposes_natural_threshold():
-    """P2-1: the fit-time Tukey fence must be visible in manifest provenance."""
+    """The fit-time Tukey fence must be visible in manifest provenance."""
     det = KMeansDetector(k=3)
     rng = np.random.default_rng(0)
     det.fit(rng.normal(size=(100, 4)), seed=0)
@@ -126,7 +126,7 @@ def test_kmeans_get_params_exposes_natural_threshold():
 
 
 def test_kmeans_natural_flag_is_batch_invariant_alone_chunked_and_whole():
-    """P2-1 regression: natural_flag used to recompute a Tukey fence from
+    """Regression: natural_flag used to recompute a Tukey fence from
     whatever batch it was given, so the same row could flip its flag
     depending on what else was scored alongside it. The fence must now be
     fixed once at fit time and reused, so scoring a row alone, in a chunk, or

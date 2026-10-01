@@ -1,4 +1,4 @@
-"""The CLI's documented exit codes and machine-readable error shape (P1-6).
+"""The CLI's documented exit codes and machine-readable error shape.
 
 0 success | 1 runtime | 2 pre-flight | 3 not found | 4 partial success.
 Every --json command emits the same failure document -- exactly

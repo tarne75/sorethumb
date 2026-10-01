@@ -323,7 +323,7 @@ class TestLedgerHelpers:
 
 
 # ---------------------------------------------------------------------------
-# db.py — Store.record_period_completion / period_is_complete (P0-2)
+# db.py — Store.record_period_completion / period_is_complete
 # ---------------------------------------------------------------------------
 
 
@@ -626,7 +626,7 @@ class TestRollingWindows:
         assert sizes == sorted(sizes)
 
     def test_two_configs_totals_are_not_summed_together(self, ws):
-        """The core P0-2 bug: totals recorded under a different config_hash
+        """The core bug: totals recorded under a different config_hash
         for the same (dataset, group, period) must never be added into this
         config's aggregate."""
         with ws:
@@ -641,7 +641,7 @@ class TestRollingWindows:
 
 
 # ---------------------------------------------------------------------------
-# Full pipeline: period-label overrides and history-ledger recording (P0-2)
+# Full pipeline: period-label overrides and history-ledger recording
 # ---------------------------------------------------------------------------
 
 

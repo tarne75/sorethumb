@@ -277,7 +277,7 @@ def test_explain_kernel_shap_routes_non_tree_detectors(
 def test_explain_passes_flagged_targets_and_a_disjoint_normal_reference(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P1-1: gradient/KernelSHAP get only the flagged rows as targets and, separately, the unflagged rows
+    """Gradient/KernelSHAP get only the flagged rows as targets and, separately, the unflagged rows
     as the reference -- never the targets standing in for their own scale/background."""
     import sorethumb_ml.explain.gradient as gradient
 
@@ -452,7 +452,7 @@ def test_source_cache_false_never_persists_a_fingerprint_dir(
 
 
 # ---------------------------------------------------------------------------
-# source.uri redaction in persisted state (P2-5)
+# source.uri redaction in persisted state
 # ---------------------------------------------------------------------------
 
 

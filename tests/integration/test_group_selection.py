@@ -1,4 +1,4 @@
-"""P1-4: group-selection inputs (only_groups, group_filter_regex,
+"""Group-selection inputs (only_groups, group_filter_regex,
 limit_groups) are validated, and a selector that matches zero of the
 groups actually discovered in the data is a distinct, explicit failure --
 not a silent no-op recorded as a complete run.
@@ -111,7 +111,7 @@ def test_valid_sparse_period_is_not_a_group_selection_error(tmp_path: Path) -> N
     """A period with real data but fewer rows than scoring.min_records (no
     selector involved at all) still attempts exactly one group (status
     "too_few_records") and completes normally -- must never be confused
-    with a selector matching nothing (P1-4)."""
+    with a selector matching nothing."""
     rng = np.random.default_rng(0)
     ts_dense = [datetime(2024, 1, 15, 8, tzinfo=UTC) + timedelta(minutes=i) for i in range(100)]
     ts_sparse = [datetime(2024, 1, 16, 8, tzinfo=UTC) + timedelta(minutes=i) for i in range(2)]
@@ -150,8 +150,8 @@ def test_period_with_truly_zero_rows_raises_a_different_error_than_a_selector_mi
     """A period matching *zero* rows outright hits fit_features' own
     "encoded feature matrix has zero columns" guard (profiling a genuinely
     empty frame classifies every column as droppable) -- a pre-existing,
-    unrelated limitation this phase does not change. The only thing P1-4
-    cares about here: this must never be misreported as -- or silently
+    unrelated limitation these tests do not address. The only thing they
+    care about here: this must never be misreported as -- or silently
     swallowed into -- a group_selection_error; it is a different exception
     entirely, raised well before group discovery even runs."""
     parquet = tmp_path / "data.parquet"

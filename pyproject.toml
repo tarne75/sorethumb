@@ -104,7 +104,7 @@ Issues = "https://github.com/tarne75/sorethumb/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["src/sorethumb_ml"]
 
-# Explicit allowlist (P2-2), not a denylist: without this, hatchling's default
+# Explicit allowlist, not a denylist: without this, hatchling's default
 # sdist falls back to "everything in the project root not excluded by the
 # top-level .gitignore" -- and a file/directory that's git-ignored some other
 # way (a nested .gitignore, like Hypothesis's own .hypothesis/.gitignore, or

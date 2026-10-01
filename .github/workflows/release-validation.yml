@@ -1,13 +1,13 @@
 name: Release validation
 
-# Reusable workflow (P0-9): the one set of checks a commit must pass before
+# Reusable workflow: the one set of checks a commit must pass before
 # it can be published. Called by ci.yml on every push/PR (so it's exercised
 # continuously) and by publish.yml against the exact tagged commit (so
 # publication is gated on that exact SHA passing, not on trusting a past
 # ci.yml run against a possibly-different commit on main). Anything NOT
 # required to gate a release -- the benchmark accuracy floors, informational
 # coverage, the network-hitting docs-snippets/full-nightly lanes -- stays in
-# ci.yml itself, not here. The one exception (P0-7) is `accuracy-smoke`: the
+# ci.yml itself, not here. The one exception is `accuracy-smoke`: the
 # fast, deterministic, network-free synthetic ROC-AUC floors, which every
 # release commit must clear, so a score-direction or ranking regression can't
 # be published even if the scheduled lanes haven't caught it yet.
@@ -60,7 +60,7 @@ jobs:
       - run: uv sync --all-extras --frozen
       - run: uv run pytest -m "unit or contract"
 
-  # Compatibility floor (P1-7). Every other job here installs from the frozen
+  # Compatibility floor. Every other job here installs from the frozen
   # uv.lock, i.e. the *newest* versions that resolve -- so a declared lower bound
   # in pyproject.toml (`polars>=1.3.0`) is never actually exercised, and can be
   # wrong without anything failing. This job resolves each *direct* dependency
@@ -98,7 +98,7 @@ jobs:
         run: .lowest-venv/bin/pytest -m "unit or contract"
 
   # Local integration tests (real workspace, SQLite, CLI process, full
-  # pipeline, report rendering) on both advertised platforms (P2-3: macOS is
+  # pipeline, report rendering) on both advertised platforms (macOS is
   # in pyproject.toml's classifiers and must actually be exercised here, not
   # just assumed from the fast-tests matrix's unit/contract-only coverage).
   # Windows stays unadvertised and untested here -- deliberately deferred,
@@ -149,7 +149,7 @@ jobs:
       - run: uv sync --all-extras --frozen
       - run: uv run pytest -m repo_check
 
-  # Ranking-quality gate (P0-7). The existing fast synthetic accuracy smoke:
+  # Ranking-quality gate. The existing fast synthetic accuracy smoke:
   # network-free (the two synthetic datasets only), seeded, ~4s of test time.
   # It asserts a tolerance-banded ROC-AUC floor per guarded detector (floors sit
   # below the observed values, so noise can't flake it) plus "default ensemble
@@ -173,14 +173,14 @@ jobs:
 
   # Build, twine check, package-data assertion, and clean install smoke for
   # core and every advertised extra -- for BOTH the wheel and the sdist
-  # (P3-3: "clean installs for core and each advertised extra"; P2-2 extended
-  # this to the sdist, which was previously built and twine-checked but never
+  # (clean installs for core and each advertised extra). The sdist is also
+  # covered, which was previously built and twine-checked but never
   # actually installed or inspected). Uploads the built dist/ as an artifact
   # so a caller (publish.yml) can publish the exact artifact that was just
   # validated here, rather than rebuilding a second time.
   build:
     runs-on: ubuntu-latest
-    # P2-2 doubled the install-smoke-test matrix (wheel + sdist, each with
+    # Installing both the wheel and the sdist doubles the install-smoke-test matrix (wheel + sdist, each with
     # core + every extra) -- bumped from 15; pip's download cache is shared
     # across the venvs in this job, so the second (sdist) pass is markedly
     # faster than the first, not a full doubling.
@@ -201,7 +201,7 @@ jobs:
         run: uvx twine check dist/*
       - name: Assert required paths, no unintended files, and matching metadata (wheel + sdist)
         # A wheel-only pipeline can't catch a broken OR over-inclusive sdist
-        # (P2-2): required-path presence (py.typed, SQL migrations, LICENSE,
+        #: required-path presence (py.typed, SQL migrations, LICENSE,
         # README), rejection of repository-only material/dev-tool caches
         # (a past sdist here silently shipped .claude/ and .hypothesis/ --
         # see tests/repo_check/test_dist_artifacts.py's module docstring),
@@ -210,7 +210,7 @@ jobs:
         # here as anyone can locally after `uv build`.
         run: uv run pytest tests/repo_check/test_dist_artifacts.py -v -m repo_check
       - name: Install each artifact (wheel, sdist) into clean venvs; smoke-test core + every advertised extra
-        # Both artifacts get the exact same checks (P2-2) -- a wheel-only
+        # Both artifacts get the exact same checks -- a wheel-only
         # install smoke test can't catch an sdist that's missing something
         # the wheel doesn't need directly (a build-time dependency, a
         # packaging config file) but a real end-user source install would.
@@ -260,7 +260,7 @@ jobs:
               echo "::endgroup::"
             done
           done
-      - name: Run the published quickstart snippet against the clean, extras-free wheel install (P0-2)
+      - name: Run the published quickstart snippet against the clean, extras-free wheel install
         # The README's flagship snippet must actually work end-to-end against
         # exactly what `pip install sorethumb-ml` gives a user -- no extras,
         # no editable/source checkout. Extracted from README.md at run time

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cut a sorethumb release: run every local check this project has (the same
 # ones release-validation.yml runs, plus the version/changelog consistency
-# work from P0-10), then create and push the vX.Y.Z tag via `gh release
+# checks), then create and push the vX.Y.Z tag via `gh release
 # create` -- which is what actually triggers .github/workflows/publish.yml.
 #
 # Deliberately the ONLY way this repo creates a release tag. It never runs
@@ -28,8 +28,8 @@
 #     already be clean and already match origin/main exactly.
 #
 # Before ever running this for a real release, consider rehearsing the
-# publish path against TestPyPI first (.github/workflows/publish-testpypi.yml,
-# P2-5) -- and see docs/releasing.md for the rollback/yank procedure if a
+# publish path against TestPyPI first (.github/workflows/publish-testpypi.yml)
+# -- and see docs/releasing.md for the rollback/yank procedure if a
 # published release ever needs pulling.
 set -euo pipefail
 
@@ -103,7 +103,7 @@ fi
 _ok "$TAG does not already exist, locally or on origin"
 
 # ---------------------------------------------------------------------------
-# 2. Release-state documentation (P2-4). README.md's "Not yet on PyPI" line
+# 2. Release-state documentation. README.md's "Not yet on PyPI" line
 #    is accurate right up until the first real tag -- flipping it any
 #    earlier would tell readers `pip install sorethumb-ml` works when it
 #    doesn't (PyPI has no such project yet, confirmed by a 404 against
@@ -114,11 +114,11 @@ _ok "$TAG does not already exist, locally or on origin"
 #      - CHANGELOG.md: rename [Unreleased] to "## [X.Y.Z] - <tag date>" (the
 #        UTC date you will push the tag, never a future date), add a fresh
 #        empty [Unreleased], and point the [Unreleased]/[X.Y.Z] footer links
-#        at vX.Y.Z (P0-9).
+#        at vX.Y.Z.
 #      - SECURITY.md: rewrite "has not yet had its first tagged release" in
-#        "Supported Versions" to state the released version (P0-9).
+#        "Supported Versions" to state the released version.
 #      - README.md: replace the "Status: pre-release" banner and the
-#        "not yet published to PyPI" sentence (P0-9) as well as the below.
+#        "not yet published to PyPI" sentence as well as the below.
 #      - README.md: replace the "Not yet on PyPI. Install from a clone:"
 #        paragraph with the real `pip install sorethumb-ml` command as the
 #        primary path; keep "install from a clone" as a labelled
@@ -130,14 +130,14 @@ _ok "$TAG does not already exist, locally or on origin"
 #        an old PyPI release's bundled long_description never silently
 #        displays documentation that has since changed on main.
 #      - CONTRIBUTING.md: its two existing `pip install sorethumb-ml`
-#        mentions are already correctly named (P0-1) and need no further
+#        mentions are already correctly named and need no further
 #        text change -- they become simply true the moment this tag exists.
 #      - The `pip install 'sorethumb-ml[...]'` hints already embedded in
 #        cli.py/gradient.py/shap_tree.py/benchmark.py's own strings likewise
 #        need no change -- same reasoning.
 # ---------------------------------------------------------------------------
 
-_step "Checking release-state documentation (P0-9: scripts/check_release_state.py)"
+_step "Checking release-state documentation (scripts/check_release_state.py)"
 
 # One checker, shared with publish.yml (which re-runs it against the tagged
 # commit): pyproject version == $VERSION; CHANGELOG's newest section is
@@ -167,12 +167,12 @@ fi
 _ok "CI run for this commit succeeded on GitHub"
 
 # ---------------------------------------------------------------------------
-# 4. Version and changelog consistency -- the P0-10 concerns, checked
+# 4. Version and changelog consistency -- the version and changelog concerns, checked
 #    locally before anything is tagged rather than only in publish.yml.
 # ---------------------------------------------------------------------------
 
 # pyproject version / CHANGELOG section checks now live in section 2's shared
-# checker (P0-9). The release notes are just that section's body.
+# checker. The release notes are just that section's body.
 CHANGELOG_BODY="$(awk -v ver="[$VERSION]" '
   /^## \[/ { if (found) exit; if (index($0, ver) == 1 + length("## ")) { found=1; next } }
   found && /^\[[^]]+\]: / { next }  # the file-footer link references are not release notes

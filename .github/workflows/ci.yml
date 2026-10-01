@@ -15,7 +15,7 @@ on:
 # (bec219d24cd3e171d82865faccec33120bb574f4 == the v10.1.0 tag), not a
 # floating major-version tag, for reproducibility. `uses:` can't reference `env:`/expressions, so
 # the SHA is repeated per job rather than centralised. Every other
-# third-party action is pinned to an exact commit the same way (P0-9).
+# third-party action is pinned to an exact commit the same way.
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -37,7 +37,7 @@ jobs:
   # one seed) so it stays fast enough to require on every PR; the full
   # accuracy-floor suite and real-dataset checks run on schedule (see
   # `full-nightly` below). The same test also runs inside
-  # release-validation.yml's `accuracy-smoke` job (P0-7), which is what gates
+  # release-validation.yml's `accuracy-smoke` job, which is what gates
   # publication of the exact tagged commit; this standalone job is kept so the
   # existing required-check name keeps resolving. Once branch protection is
   # pointed at `validate / accuracy-smoke`, this duplicate can be removed.
@@ -93,7 +93,7 @@ jobs:
   # Required PR lane: executes every fenced code block in README.md against
   # the editable source checkout (bash commands checked against the live CLI,
   # toml fragments against the Config schema, the Python quickstart actually
-  # run). No longer network-gated (P0-2): the quickstart used to download the
+  # run). No longer network-gated: the quickstart used to download the
   # KDDCup99 10% subset via scikit-learn; it now generates its own small
   # synthetic dataset in-process, so this can run on every push instead of
   # schedule/workflow_dispatch only. release-validation.yml's build job runs

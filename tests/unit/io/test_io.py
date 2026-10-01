@@ -210,7 +210,7 @@ def test_read_tsv_explicit_separator_not_overridden(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# P1-6: documented `read_options["infer_schema_length"]` override (was passed
+# Documented `read_options["infer_schema_length"]` override (was passed
 # to polars twice -- once hard-coded, once via **opts -- raising TypeError)
 # ---------------------------------------------------------------------------
 
@@ -626,7 +626,7 @@ def test_resolve_source_file_uri_decodes_percent_escapes(tmp_path: Path) -> None
 
 
 # ---------------------------------------------------------------------------
-# Extension detection: gzip-compound extensions (P2-5)
+# Extension detection: gzip-compound extensions
 # ---------------------------------------------------------------------------
 
 
@@ -659,7 +659,7 @@ def test_extension_from_url_explicit_format_overrides_url() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Basic auth header construction (P2-5)
+# Basic auth header construction
 # ---------------------------------------------------------------------------
 
 
@@ -709,7 +709,7 @@ def test_build_auth_headers_empty_env_var_raises(monkeypatch: pytest.MonkeyPatch
 
 def test_build_auth_headers_whitespace_only_env_var_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """A whitespace-only credential (e.g. a stray env var set to a single
-    newline) is not a usable token -- treat it the same as unset (P0-5)."""
+    newline) is not a usable token -- treat it the same as unset."""
     from sorethumb_ml.config import SourceConfig
     from sorethumb_ml.io.source import _build_auth_headers
 
@@ -722,7 +722,7 @@ def test_build_auth_headers_whitespace_only_env_var_raises(monkeypatch: pytest.M
 def test_build_auth_headers_strips_surrounding_whitespace(monkeypatch: pytest.MonkeyPatch) -> None:
     """A token read from an env var populated via `export X=$(cat file)` or
     a CI secrets manager commonly carries a trailing newline; sent verbatim
-    that produces a header with a stray newline in it (P0-5)."""
+    that produces a header with a stray newline in it."""
     from sorethumb_ml.config import SourceConfig
     from sorethumb_ml.io.source import _build_auth_headers
 
@@ -734,7 +734,7 @@ def test_build_auth_headers_strips_surrounding_whitespace(monkeypatch: pytest.Mo
 def test_auth_header_flows_from_env_var_to_actual_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Transport-boundary check (P0-5): an env var set for bearer auth must
+    """Transport-boundary check: an env var set for bearer auth must
     produce the real Authorization header on the actual outbound request --
     not merely in _build_auth_headers' return value in isolation, which is
     all the pre-existing tests checked."""
@@ -759,7 +759,7 @@ def test_auth_header_flows_from_env_var_to_actual_request(
 
 
 # ---------------------------------------------------------------------------
-# Redaction (P2-5)
+# Redaction
 # ---------------------------------------------------------------------------
 
 
@@ -795,7 +795,7 @@ def test_redact_source_uri_case_insensitive_query_key() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Download hardening: redirects, size limits, concurrency (P2-5)
+# Download hardening: redirects, size limits, concurrency
 # ---------------------------------------------------------------------------
 
 
@@ -887,7 +887,7 @@ def test_download_refuses_too_many_redirects(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Authorization is origin-scoped across redirects (P0-3)
+# Authorization is origin-scoped across redirects
 # ---------------------------------------------------------------------------
 
 _SECRET_TOKEN = "super-secret-do-not-leak-xyz"
@@ -897,7 +897,7 @@ def test_download_preserves_authorization_on_same_origin_redirect(tmp_path: Path
     """A same-origin redirect (identical scheme/host/port, path change only)
     must still carry the Authorization header -- this is exactly the
     ordinary case (e.g. a CDN redirecting one path to another on itself)
-    the P0-3 origin check must not break."""
+    the origin check must not break."""
     import httpx
 
     from sorethumb_ml.io.source import _download_to
@@ -1281,7 +1281,7 @@ def test_malformed_content_length_log_redacts_the_url(
 
 
 # ---------------------------------------------------------------------------
-# Validator-aware HTTP caching (P1-7): a "cache hit" must actually skip the
+# Validator-aware HTTP caching: a "cache hit" must actually skip the
 # network transfer, not just the final rename after a full download.
 # ---------------------------------------------------------------------------
 
@@ -1388,7 +1388,7 @@ def test_download_to_conditional_headers_survive_a_redirect(tmp_path: Path) -> N
 
 
 def test_resolve_http_caches_etag_then_reuses_via_304_without_writing_new_content(tmp_path: Path) -> None:
-    """The core P1-7 fix, end to end through resolve_source: the second
+    """The core caching fix, end to end through resolve_source: the second
     request for the same URL must be answered with a 304 the server can only
     send because it recognised our conditional header, and no new download
     output should be written for that second call."""
@@ -1506,7 +1506,7 @@ def test_resolve_http_cache_false_never_sends_conditional_headers(tmp_path: Path
 
 
 def test_resolve_http_cache_key_is_the_configured_url_not_the_redirect_target(tmp_path: Path) -> None:
-    """P1-7 "redirect identity": the recorded validators must be keyed on
+    """Redirect identity: the recorded validators must be keyed on
     the URL the caller configured, not on wherever a redirect happens to
     land -- so a second call still gets a conditional request/304 reuse even
     if the redirect target the origin points to changes between calls (e.g.

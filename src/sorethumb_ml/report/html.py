@@ -53,7 +53,7 @@ class RunMeta:
     # What "unique" meant for columns.id_column when this run's identity
     # contract was validated ("dataset" or "group" -- see
     # _pipeline._resolve_id_identity_scope) -- None if no id_column is
-    # configured (P1-3).
+    # configured.
     id_identity_scope: str | None = None
 
 

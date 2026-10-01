@@ -1,4 +1,4 @@
-"""Unit tests for P0-3: dense ranking must stay in lockstep with anomaly_flag.
+"""Unit tests: dense ranking must stay in lockstep with anomaly_flag.
 
 ``_flagged_idx_by_score_desc`` is the single source of truth _finalize_group
 uses for both attribution ordering and the persisted ``rank`` column. See
@@ -36,7 +36,7 @@ def test_no_flagged_rows_gives_empty_and_all_zero_ranks():
 
 
 def test_rank_is_positive_iff_flagged_when_score_and_flag_disagree():
-    """The adversarial case P0-3 exists for: the globally highest-scoring
+    """The adversarial case this exists for: the globally highest-scoring
     rows are NOT the flagged ones (as happens for intersection/union, where
     anomaly_flag is a per-detector vote independent of composite_score).
     """
@@ -95,7 +95,7 @@ def test_all_rows_flagged_ranks_every_row():
 
 
 # ---------------------------------------------------------------------------
-# P1-9: stable descending order, earliest source row wins a tie
+# Stable descending order, earliest source row wins a tie
 # ---------------------------------------------------------------------------
 
 

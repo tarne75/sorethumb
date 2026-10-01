@@ -1,4 +1,4 @@
-"""Missing-value normalisation: float NaN is a missing value, same as null (P0-5).
+"""Missing-value normalisation: float NaN is a missing value, same as null.
 
 Polars distinguishes ``null`` (missing) from ``NaN`` (a float value that sorts
 above everything and propagates through arithmetic). Profiling statistics,

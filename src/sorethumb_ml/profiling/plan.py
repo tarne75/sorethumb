@@ -252,7 +252,7 @@ def build_feature_plan(df: pl.DataFrame, config: Config) -> FeaturePlan:
     """
     protected = _build_protected(config.columns)
 
-    # NaN is a missing value (P0-5): normalise before profiling so null
+    # NaN is a missing value: normalise before profiling so null
     # ratios, missing indicators and median imputation all see it.
     df = float_nan_to_null(df)
 

@@ -1,6 +1,6 @@
 """Benchmark-harness tests that fit real detectors via ``run_benchmark``.
 
-Moved out of ``tests/unit/test_evaluate.py`` (P1-1): unlike the rest of that
+Moved out of ``tests/unit/test_evaluate.py``: unlike the rest of that
 module, these exercise actual detector fitting on synthetic datasets, so they
 do not belong in the fast/deterministic unit lane. Deselected by default; run
 explicitly::

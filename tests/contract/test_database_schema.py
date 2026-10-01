@@ -163,7 +163,7 @@ def test_migration_006_adds_period_execution_table(tmp_path):
     } <= cols
 
 
-# --- query plans and required indexes (P2-3) ---------------------------------------------
+# --- query plans and required indexes ---------------------------------------------
 
 # index name -> (table, ordered columns). Dropping or reshaping one of these makes a
 # Store query scan a table that grows with the workspace's history.
@@ -375,7 +375,7 @@ def test_a_workspace_at_the_previous_schema_gains_the_new_indexes_on_open(tmp_pa
 
 
 def test_execute_ddl_rejects_alter_table_identifier_starting_with_digit(tmp_path):
-    """P3-6: _execute_ddl's table/column names now route through
+    """_execute_ddl's table/column names now route through
     validate_identifier (store/identifiers.py) before being spliced into a
     PRAGMA string. _ALTER_ADD_COLUMN_RE's own \\w+ groups already exclude
     SQL syntax characters, but \\w+ still matches a leading digit, which
@@ -602,7 +602,7 @@ def test_store_run_group_upsert_no_duplicate_rows(tmp_path):
 
 
 def test_run_group_warnings_json_round_trips(tmp_path):
-    """P2-4: group-level warnings (e.g. ZeroAnomalyWarning) must be
+    """Group-level warnings (e.g. ZeroAnomalyWarning) must be
     persisted, not only returned in the in-memory RunResult -- otherwise
     render_report_for_run, which always renders from persisted state, could
     never show them."""
@@ -714,7 +714,7 @@ def test_write_results_leaves_existing_file_on_failure(tmp_path, monkeypatch):
     ids=["missing_row_id", "null_row_id", "duplicate_row_id"],
 )
 def test_write_results_rejects_an_unsafe_results_frame(tmp_path, df, match):
-    """P2-6: row_id is the only column every downstream reader relies on to
+    """Row_id is the only column every downstream reader relies on to
     join a result row back to its source; write_results must fail closed
     before writing (and registering) a Parquet file it would be dangerous to
     trust."""

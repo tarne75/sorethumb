@@ -1,7 +1,7 @@
 """Unit tests for M9: evaluate/metrics.py and evaluate/benchmark.py.
 
 Detector-fitting/benchmark-harness tests that call ``run_benchmark`` live in
-``tests/benchmark/test_benchmark_harness.py`` (moved out in P1-1) since they
+``tests/benchmark/test_benchmark_harness.py`` (moved out earlier) since they
 are not fast/deterministic in the way the rest of this module is.
 """
 
@@ -174,7 +174,7 @@ def test_float32_inputs_accepted():
 
 
 # ---------------------------------------------------------------------------
-# Input validation (P2-9): fail closed rather than silently corrupt a metric
+# Input validation: fail closed rather than silently corrupt a metric
 # or crash deep inside sklearn with a confusing error.
 # ---------------------------------------------------------------------------
 
@@ -228,7 +228,7 @@ def test_evaluate_scores_rejects_out_of_range_contamination(bad_contamination):
 
 
 # ---------------------------------------------------------------------------
-# evaluate_flags / FlagMetrics (P0-8): metrics of a real, already-decided
+# evaluate_flags / FlagMetrics: metrics of a real, already-decided
 # boolean flag -- as opposed to evaluate_scores' hypothetical top-k cut on a
 # continuous ranking.
 # ---------------------------------------------------------------------------
@@ -304,7 +304,7 @@ def test_evaluate_flags_no_flags_at_all():
 
 
 def test_evaluate_flags_differs_from_evaluate_scores_top_k():
-    """The exact gap P0-8 closes: a top-k cut on the ranking (evaluate_scores)
+    """The exact gap evaluate_flags closes: a top-k cut on the ranking (evaluate_scores)
     is not the same operating point as the real flag decision -- an
     intersection's real flag count can be much smaller than round(n *
     contamination), so its precision/recall are genuinely different
@@ -426,7 +426,7 @@ def test_dataset_entry_has_licence():
 
 
 def test_covtype_loader_restricts_to_class_2_vs_class_4(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """P2-9: the documented ODDS formulation for Covtype is class 2 (normal,
+    """The documented ODDS formulation for Covtype is class 2 (normal,
     majority within this pair) versus class 4 (anomaly, rare) -- every other
     cover type (1, 3, 5, 6, 7) must be dropped from the dataset entirely, not
     silently folded into "normal" by a bare `target == 4` comparison."""
@@ -453,7 +453,7 @@ def test_covtype_loader_restricts_to_class_2_vs_class_4(tmp_path: Path, monkeypa
 
 
 # ---------------------------------------------------------------------------
-# P0-7: honest benchmark evidence — NaN rendering, no peak_rss_mb, metadata
+# Honest benchmark evidence — NaN rendering, no peak_rss_mb, metadata
 # ---------------------------------------------------------------------------
 
 

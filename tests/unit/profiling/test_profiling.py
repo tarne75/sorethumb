@@ -724,7 +724,7 @@ def test_all_synth_flags_plan_complete(tmp_path: object) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 6 — binary retention, rare-null indicator, numeric id exclusion
+# Binary retention, rare-null indicator, numeric id exclusion
 # ---------------------------------------------------------------------------
 
 

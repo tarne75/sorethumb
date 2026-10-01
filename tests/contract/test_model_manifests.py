@@ -3,7 +3,7 @@ estimator, calibrator and manifest independently (no cross-detector
 clobbering), manifests record library versions and per-file SHA-256 digests,
 and load_model fails closed on anything that doesn't match what was recorded
 -- a missing manifest/calibrator, a corrupted file, a swapped manifest, or a
-FeaturePlan digest mismatch (P0-5).
+FeaturePlan digest mismatch.
 """
 
 from __future__ import annotations
@@ -235,7 +235,7 @@ def test_load_model_without_version_block_is_silent(tmp_path):
 
 # ---------------------------------------------------------------------------
 # load_model fails closed: missing manifest/calibrator, corruption, swapped
-# manifest, wrong plan (P0-5)
+# manifest, wrong plan
 # ---------------------------------------------------------------------------
 
 

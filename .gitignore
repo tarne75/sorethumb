@@ -16,8 +16,8 @@ coverage.xml
 htmlcov/
 *.log
 *.joblib
-# Default sorethumb workspace (P3-5) and its artefacts. Anchored: a
-# workspace explicitly created at "." (the pre-P3-5 default, or via
+# Default sorethumb workspace and its artefacts. Anchored: a
+# workspace explicitly created at "." (the previous default, or via
 # `--workdir .`) produces these same top-level names, and unanchored
 # patterns would also match same-named directories anywhere else in the tree.
 /sorethumb-workspace/

@@ -1,4 +1,4 @@
-"""Unit tests for the pipeline-benchmark publication guardrail (P2-1):
+"""Unit tests for the pipeline-benchmark publication guardrail:
 ``expected_cells``/``assert_complete_and_error_free`` must catch a missing or
 errored (scenario, ablation) cell before it ever ships as benchmark evidence.
 

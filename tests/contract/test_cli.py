@@ -135,8 +135,8 @@ def test_init_toml_is_valid_toml(tmp_path: Path):
 
 
 def test_init_workdir_matches_the_workspace_it_creates(tmp_path: Path):
-    """P3-5: init pre-creates a workspace directory (sorethumb-workspace/,
-    not the pre-P3-5 hidden .sorethumb_workspace/) -- the starter toml's
+    """Init pre-creates a workspace directory (sorethumb-workspace/,
+    not the previous hidden .sorethumb_workspace/) -- the starter toml's
     run.workdir must actually point at it, not be left as the generic
     "required — no default" placeholder every other required field gets."""
     result = runner.invoke(app, ["init", str(tmp_path)])
@@ -243,7 +243,7 @@ def test_init_toml_lists_extra_params_commented(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# TOML serialisation (P0-4) -- _write_minimal_toml must always produce
+# TOML serialisation -- _write_minimal_toml must always produce
 # syntactically valid TOML that round-trips into an equivalent Config,
 # no matter what characters or nested structures the source Config holds.
 # ---------------------------------------------------------------------------
@@ -317,8 +317,8 @@ def test_write_minimal_toml_renders_every_builtin_detector(tmp_path: Path):
 
 
 def test_write_minimal_toml_renders_nested_extra_params(tmp_path: Path):
-    """A non-empty nested params.extra_params dict (the exact shape P0-4
-    called out -- json.dumps previously emitted invalid TOML inline-table
+    """A non-empty nested params.extra_params dict (the exact shape that
+    previously -- json.dumps previously emitted invalid TOML inline-table
     syntax for it) must round-trip correctly."""
     from sorethumb_ml.cli import _write_minimal_toml
     from sorethumb_ml.config import Config, DetectorConfig, RunConfig, SourceConfig
@@ -373,7 +373,7 @@ def test_config_check_json_output(workspace):
 
 
 def test_config_check_json_redacts_uri_credentials(tmp_path: Path):
-    """config check --json (P0-5) must never echo back a credential
+    """config check --json must never echo back a credential
     embedded in source.uri -- reuses the same redaction
     _pipeline._redacted_config_json already applies before a run's config
     is persisted to the database, rather than a second, separate rule."""
@@ -397,7 +397,7 @@ workdir = {json.dumps(str(tmp_path / "workdir"))}
 
 
 def test_redact_config_does_not_mutate_environment(monkeypatch: pytest.MonkeyPatch):
-    """P0-5: _redact_config previously mutated os.environ in place (setting
+    """_redact_config previously mutated os.environ in place (setting
     SORETHUMB_TOKEN/SORETHUMB_PASSWORD to the literal string "REDACTED"),
     which would corrupt a real credential for the rest of the process. It
     must now be a pure function."""
@@ -550,7 +550,7 @@ def test_run_summary_frames_flagged_count_as_a_review_shortlist(workspace):
 
 
 def test_run_summary_and_json_surface_warnings_issued():
-    """P2-4: a group-level warning (e.g. ZeroAnomalyWarning) must reach the
+    """A group-level warning (e.g. ZeroAnomalyWarning) must reach the
     user, both in the printed summary and the JSON payload -- previously
     RunResult.warnings_issued was populated but never displayed anywhere.
 
@@ -726,7 +726,7 @@ def test_workspace_prune_dry_run(workspace):
 
 
 def test_workspace_prune_rejects_negative_days(workspace):
-    """P2-6: --days -1 must fail loudly with a clean exit code, not silently
+    """--days -1 must fail loudly with a clean exit code, not silently
     prune every artifact in the workspace."""
     _, toml_path, _ = workspace
     runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
@@ -782,7 +782,7 @@ def _explain_plan_json(toml_path: Path, *args: str) -> dict:
 
 def test_explain_plan_with_run_id_loads_persisted_plan_not_current_data(workspace):
     """A run ID selects the plan the run was fitted with; no run ID plans the
-    current data. After the source data changes the two must differ (P0-4)."""
+    current data. After the source data changes the two must differ."""
     import polars as pl
 
     csv_path, toml_path, workdir = workspace
@@ -904,7 +904,7 @@ def test_cli_only_imports_public_api():
 
 # ---------------------------------------------------------------------------
 # score --from-run help must not imply sandboxing or safe loading of
-# third-party workspaces (P0-8)
+# third-party workspaces
 # ---------------------------------------------------------------------------
 
 
@@ -935,7 +935,7 @@ def test_score_help_does_not_overstate_digest_safety():
 
 # ---------------------------------------------------------------------------
 # JSON mode: no prompts, no stray notices, exactly one JSON document on both
-# success and error paths, and a closed stdin never hangs (P0-3).
+# success and error paths, and a closed stdin never hangs.
 #
 # These spawn a real child process with stdin closed (subprocess.DEVNULL),
 # not CliRunner: CliRunner's fake stdin is an in-memory, in-process stream,
@@ -1004,7 +1004,7 @@ def test_config_check_json_missing_file_emits_single_json_document(tmp_path: Pat
 
 def test_runs_json_missing_workspace_emits_single_json_document(tmp_path: Path):
     """Previously an unhandled StoreError crashed with a traceback instead of
-    the JSON caller's expected single document (P0-3)."""
+    the JSON caller's expected single document."""
     toml_path = tmp_path / "sorethumb.toml"
     _write_toml(toml_path, tmp_path / "unused.csv", tmp_path / "never-created-ws")
     proc = _run_json_subprocess(["runs", "--config", str(toml_path), "--json"])
@@ -1025,7 +1025,7 @@ def test_show_json_run_not_found_emits_single_json_document(workspace):
 
 def test_anomalies_json_zero_anomalies_emits_empty_json_array(workspace):
     """A run with no flagged rows must still emit valid JSON in --json mode
-    (P0-3) -- previously this printed a plain sentence instead, so a --json
+    -- previously this printed a plain sentence instead, so a --json
     caller had to special-case "nothing found" as a JSON parse failure.
 
     Emptying the persisted results directly (rather than engineering genuine

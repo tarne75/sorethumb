@@ -1,4 +1,4 @@
-"""P0-6: benchmark generation is a maintainer script with explicit paths, not a public command.
+"""Benchmark generation is a maintainer script with explicit paths, not a public command.
 
 The old ``sorethumb benchmark`` command edited the README found by walking up
 from the installed package location and wrote ``benchmark_results/`` into the

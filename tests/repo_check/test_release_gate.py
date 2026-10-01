@@ -1,4 +1,4 @@
-"""P0-7: publication must be gated on a ranking-quality test for the exact commit.
+"""Publication must be gated on a ranking-quality test for the exact commit.
 
 ``publish.yml`` and ``publish-testpypi.yml`` both call ``release-validation.yml``
 and only publish if it passed, so a check belongs in the release gate exactly
@@ -71,7 +71,7 @@ def test_publishing_cannot_start_without_the_release_validation_gate(workflow: s
 
 
 # ---------------------------------------------------------------------------
-# P0-9: the release-state commit (CHANGELOG date, SECURITY.md, README wording,
+# The release-state commit (CHANGELOG date, SECURITY.md, README wording,
 # version agreement) is enforced at tag time, locally and in CI.
 # ---------------------------------------------------------------------------
 

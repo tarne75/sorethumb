@@ -140,7 +140,7 @@ def test_kernel_shap_attributions_row_cap():
 
 
 def test_kernel_shap_falls_back_to_gradient_when_shap_not_installed(monkeypatch):
-    """shap lives in the optional `explain` extra (P3-3); explicitly opting
+    """shap lives in the optional `explain` extra; explicitly opting
     into explain.kernel_shap without it installed must still degrade
     gracefully to the plain gradient method, never raise."""
     import sys
@@ -240,7 +240,7 @@ def test_tree_shap_fallback_on_single_node(monkeypatch):
 
 
 def test_tree_shap_falls_back_gracefully_when_shap_not_installed(monkeypatch):
-    """shap lives in the optional `explain` extra (P3-3), not a core
+    """shap lives in the optional `explain` extra, not a core
     dependency -- without it, TreeSHAP must degrade to the gradient method
     with a clear warning, never raise."""
     import sys

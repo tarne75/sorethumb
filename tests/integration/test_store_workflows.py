@@ -184,7 +184,7 @@ def test_workspace_list_prunable(tmp_path):
 
 
 def test_prune_rejects_negative_retention_days(tmp_path):
-    """P2-6: a negative retention_days would match julianday(now) - created_at
+    """A negative retention_days would match julianday(now) - created_at
     > (a negative number), i.e. every artifact regardless of age, including
     ones just written. Must be refused, not silently treated as "prune
     everything"."""
@@ -196,7 +196,7 @@ def test_prune_rejects_negative_retention_days(tmp_path):
 
 
 def test_prune_refuses_a_path_outside_the_workspace_root(tmp_path):
-    """P2-6: the artifact index is a database file, not a signed record. A
+    """The artifact index is a database file, not a signed record. A
     corrupted or hand-edited row pointing outside the workspace root must
     not turn a routine prune into deleting an arbitrary path."""
     outside_path = tmp_path / "outside_the_workspace.parquet"
@@ -396,7 +396,7 @@ def test_concurrent_write_results_does_not_corrupt_the_workspace(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# register_artifact is an UPSERT keyed by artifact_id (P1-5)
+# register_artifact is an UPSERT keyed by artifact_id
 # ---------------------------------------------------------------------------
 
 

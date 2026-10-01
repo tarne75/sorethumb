@@ -4,7 +4,7 @@ natural_flag's result for a given row must not depend on what else is
 scored alongside it in the same call.
 
 kmeans_distance's Tukey-fence boundary is fixed from the training distances
-at fit time (P2-1), so it promises this too and is included below.
+at fit time, so it promises this too and is included below.
 """
 
 from __future__ import annotations

@@ -1,10 +1,11 @@
-"""P2-4: tracked, public files must not cite ignored planning material.
+"""Tracked, public files must not cite ignored planning material.
 
 ``prompts/`` (and ``PLAN.md``) hold maintainer planning notes that are git-ignored,
 never published, and absent from every clone, sdist and wheel. A comment, docstring or
 document that says "see prompts/release-launch-plan.md" sends a reader to a file they
-cannot open, so any rationale worth keeping is written inline instead. This check
-fails if a tracked file reintroduces such a citation.
+cannot open, so any rationale worth keeping is written inline instead. The same goes
+for the item labels used in those notes ("P1-3" and the like). This check fails if a
+tracked file reintroduces such a citation.
 
 It reads the repository's tracked files (``git ls-files``) and skips when run outside a
 git checkout, such as from an unpacked sdist.
@@ -33,6 +34,9 @@ _CITATION = re.compile(
     r"|(?<![\w./-])PLAN\.md\b"
     r"|\b(?:release-launch-plan|pre-release-plan)\.md\b"
     r"|\baction-list-\d{8}\.md\b"
+    # Planning-item labels such as "P1-3": they index the ignored action list, so in a public
+    # file they are an unexplained reference. Say what happened instead.
+    r"|(?<![\w-])P[0-3]-\d+\b"
 )
 
 # Files that legitimately name these paths: the ignore rule itself, the sdist allowlist test
@@ -78,6 +82,19 @@ def test_no_tracked_file_is_itself_planning_material() -> None:
     tracked = _tracked_files()
     offenders = [name for name in tracked if name.startswith("prompts/") or name == "PLAN.md"]
     assert not offenders, f"planning material is tracked: {offenders}"
+
+
+def test_the_citation_pattern_matches_what_it_should() -> None:
+    for text in (
+        "see prompts/plan.md",
+        "fixed (P1-3)",
+        "P0-10 concerns",
+        "before P3-5,",
+        "action-list-20260930.md",
+    ):
+        assert _CITATION.search(text), text
+    for text in ("UTF-8", "HTTP-2", "TLS1-2 ok", "TOP-3", "x-P1-3", "P4-1", "AP1-3"):
+        assert not _CITATION.search(text), text
 
 
 def test_tracked_files_do_not_cite_ignored_planning_material() -> None:

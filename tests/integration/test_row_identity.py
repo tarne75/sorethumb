@@ -1,4 +1,4 @@
-"""Integration tests for P0-4: stable global source-row identity.
+"""Integration tests for stable global source-row identity.
 
 Without a configured ``id_column``, the fallback ``row_id`` used to be a
 plain positional ``arange(len(df_group))`` recomputed independently inside

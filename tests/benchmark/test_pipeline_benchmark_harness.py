@@ -84,7 +84,7 @@ def test_run_pipeline_benchmark_includes_sklearn_baselines():
 
 
 def test_run_pipeline_benchmark_includes_swamping():
-    """P2-1: the matched clean/contaminated pair, both scored against the
+    """The matched clean/contaminated pair, both scored against the
     same at-risk-normal holdout -- see evaluate.scenarios module docstring."""
     from sorethumb_ml.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
 

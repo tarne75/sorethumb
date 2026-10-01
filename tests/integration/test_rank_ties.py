@@ -1,4 +1,4 @@
-"""Equal composite scores are ordered by earliest *source* row, end to end (P1-9).
+"""Equal composite scores are ordered by earliest *source* row, end to end.
 
 The group frame is time-sorted before scoring (descending timestamps in the file make
 position order the exact reverse of source order), and twelve identical anomalous rows

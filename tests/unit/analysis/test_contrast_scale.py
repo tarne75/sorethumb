@@ -1,4 +1,4 @@
-"""Cohort contrast ranks numeric and categorical columns on one bounded scale (P1-3)."""
+"""Cohort contrast ranks numeric and categorical columns on one bounded scale."""
 
 from __future__ import annotations
 

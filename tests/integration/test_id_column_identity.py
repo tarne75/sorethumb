@@ -1,4 +1,4 @@
-"""P1-3: columns.id_column's identity contract is validated over the full
+"""Columns.id_column's identity contract is validated over the full
 source population, before any period/group/anomaly filtering -- not just
 among the rows that happen to be flagged (which could hide a duplicate
 whose two instances land on opposite sides of the flag/normal split).

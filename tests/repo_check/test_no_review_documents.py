@@ -1,4 +1,4 @@
-"""P2-7: review documents stay out of the public repository.
+"""Review documents stay out of the public repository.
 
 Code reviews, audits and pre-release critiques are working material about the project, not
 part of it. ``.gitignore`` keeps them from being committed by accident, and this check keeps

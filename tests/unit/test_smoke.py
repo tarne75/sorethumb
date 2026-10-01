@@ -17,7 +17,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_version_attribute() -> None:
-    """__version__ is derived from installed distribution metadata (P0-10),
+    """__version__ is derived from installed distribution metadata,
     not a second hard-coded copy of pyproject.toml's version that can drift
     from it -- so this asserts equality with that metadata, never a literal
     version string. Looked up by the PyPI distribution name "sorethumb-ml",

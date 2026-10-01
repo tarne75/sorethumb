@@ -1,4 +1,4 @@
-"""Unit tests for report/charts.py's lazy matplotlib import (P3-3)."""
+"""Unit tests for report/charts.py's lazy matplotlib import."""
 
 import importlib
 import sys
@@ -9,7 +9,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_import_charts_module_does_not_require_matplotlib(monkeypatch):
-    """matplotlib lives in the optional `report` extra (P3-3), not a core
+    """matplotlib lives in the optional `report` extra, not a core
     dependency -- importing sorethumb_ml.report.charts must never need it, only
     actually calling render_trend_chart does."""
     monkeypatch.setitem(sys.modules, "matplotlib", None)  # makes `import matplotlib` raise ImportError

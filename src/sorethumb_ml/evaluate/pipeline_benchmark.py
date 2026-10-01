@@ -22,7 +22,7 @@ Design principles
   OS-tracked high-water mark, not a before/after snapshot delta -- measures
   that cell's own peak memory, uncontaminated by every other cell's
   accumulated state in a shared long-lived process. This replaces the
-  ``peak_rss_mb`` field removed in an earlier phase (P0-7) for being exactly
+  ``peak_rss_mb`` field removed earlier for being exactly
   that kind of unreliable before/after psutil delta.
 - ``AblationSpec`` varies one pipeline knob at a time (PCA, scaler, detector
   set) against the same scenario/seeds, so a regression in one knob doesn't

@@ -1,4 +1,4 @@
-"""P1-1: explainers take *target* rows separately from a *reference* population.
+"""Explainers take *target* rows separately from a *reference* population.
 
 Perturbation scales (finite-difference gradients) and the KernelSHAP background
 must come from the reference -- the full or normal population the detector was

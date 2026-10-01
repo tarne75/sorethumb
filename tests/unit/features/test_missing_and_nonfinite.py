@@ -1,4 +1,4 @@
-"""P0-5: missing values are imputed before fitting/scaling; infinities fail clearly.
+"""Missing values are imputed before fitting/scaling; infinities fail clearly.
 
 Contract under test:
 

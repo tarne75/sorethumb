@@ -1,4 +1,4 @@
-"""P1-1 regression guard: the full-dataset FeatureSpace fit_features() returns
+"""Regression guard: the full-dataset FeatureSpace fit_features() returns
 must not be kept reachable once run_detection moves on to per-group
 processing.
 
@@ -30,7 +30,7 @@ def test_full_dataset_feature_space_is_not_kept_alive_after_fit(
 ) -> None:
     """fit_features() is called once, on the full dataset, purely for its
     side effect of mutating *plan* -- its returned FeatureSpace (a
-    whole-dataset-sized matrix) is never used afterwards. Before P1-1 it was
+    whole-dataset-sized matrix) is never used afterwards. It used to be
     bound to a local (``full_space``) captured by the per-group closure and
     so stayed reachable for run_detection's entire per-group loop; a weakref
     to it must now die once run_detection returns (in practice, as soon as
@@ -58,6 +58,6 @@ def test_full_dataset_feature_space_is_not_kept_alive_after_fit(
     gc.collect()
     assert captured[0]() is None, (
         "fit_features' returned FeatureSpace is still reachable after "
-        "run_detection finished -- the dead full_space reference (P1-1) may "
+        "run_detection finished -- the dead full_space reference may "
         "have been reintroduced."
     )

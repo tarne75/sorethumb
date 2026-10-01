@@ -124,7 +124,7 @@ def test_swamping_clean_reference_has_no_labelled_anomalies():
 
 
 def test_swamping_clean_and_contaminated_share_the_identical_normal_population():
-    """P2-1: the matched-pair design's core invariant -- the two training
+    """The matched-pair design's core invariant -- the two training
     sets must differ by exactly the injected contamination, nothing else,
     so any difference in a downstream fit is attributable to the
     contamination alone."""

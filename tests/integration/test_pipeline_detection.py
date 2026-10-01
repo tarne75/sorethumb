@@ -1,5 +1,5 @@
 """Core pipeline correctness: planted anomalies are actually detected, the
-default three-way intersection produces dense positive ranks (P0-3), every
+default three-way intersection produces dense positive ranks, every
 default detector clears random baseline, and fit/apply produce the same
 feature schema hash.
 """

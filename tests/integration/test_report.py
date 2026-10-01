@@ -295,7 +295,7 @@ class TestRenderReport:
         assert "identifier" in content
 
     def test_group_warnings_rendered(self, tmp_path: Path):
-        """A group's persisted warnings (P2-4: e.g. ZeroAnomalyWarning) must
+        """A group's persisted warnings (e.g. ZeroAnomalyWarning) must
         be visible in the report, not just recorded in RunResult."""
         grp = _group(warnings=["Three-way intersection flagged zero rows: ..."])
         path = render_report(_RUN_META, [grp], tmp_path)
@@ -353,7 +353,7 @@ class TestRenderReport:
         assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
 
     # -----------------------------------------------------------------
-    # format selection (P2-8): only the requested formats are written,
+    # format selection: only the requested formats are written,
     # and the HTML never links to a sibling file it didn't write.
     # -----------------------------------------------------------------
 
@@ -538,7 +538,7 @@ def test_render_report_for_run_rebuilds_a_deleted_report(tmp_path: Path) -> None
 def test_run_detection_marks_report_failed_on_renderer_exception(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P2-8: a renderer exception used to vanish into a WARNING-level log
+    """A renderer exception used to vanish into a WARNING-level log
     line, with RunResult.report_path silently None and nothing else --
     "success"-shaped from the caller's point of view. Detection/scoring must
     still be reported as having succeeded; the report failure must be

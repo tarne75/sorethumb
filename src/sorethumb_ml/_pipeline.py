@@ -168,7 +168,7 @@ def _resolve_id_identity_scope(config: Config) -> str | None:
 
 
 def _validate_id_column_identity(df: pl.DataFrame, config: Config) -> str | None:
-    """Validate ``columns.id_column``'s identity contract over the full source population (P1-3).
+    """Validate ``columns.id_column``'s identity contract over the full source population.
 
     Called before any period/group/anomaly filtering narrows the population.
     Returns the resolved scope actually validated (``"dataset"`` or
@@ -176,7 +176,7 @@ def _validate_id_column_identity(df: pl.DataFrame, config: Config) -> str | None
     check). Raises ``SchemaError`` if ``id_column`` is missing, contains a
     null, or is not unique at the resolved scope.
 
-    Checking only after anomaly filtering (or not at all, the pre-P1-3
+    Checking only after anomaly filtering (or not at all, the previous
     state) misses the common case: two rows sharing a duplicate id_column
     value, only one of which is ever flagged. Nothing downstream can then
     tell the flagged row's ``row_id`` apart from its unflagged duplicate's --
@@ -360,14 +360,14 @@ class RunResult:
     # ("dataset" or "group" -- see _validate_id_column_identity/
     # columns.id_scope), or None if no id_column is configured. Persisted so
     # a reader of this run's provenance knows exactly what uniqueness
-    # guarantee its row_id carries (P1-3).
+    # guarantee its row_id carries.
     id_identity_scope: str | None = None
     # Set when only_groups/group_filter_regex matched none of the groups
     # discovered in the data, so nothing was processed -- distinct from a
     # genuinely empty source period (no group_by: one group attempted at
     # n_records=0, status "too_few_records"; group_by: 0 groups discovered
     # in the first place, before any selector is even applied), which stays
-    # a normal, unflagged outcome. None otherwise (P1-4).
+    # a normal, unflagged outcome. None otherwise.
     group_selection_error: str | None = None
 
     # Convenience helpers
@@ -577,7 +577,7 @@ def run_detection(
         If this (together with group_filter_regex) matches none of the groups
         discovered in the data, no group is processed, the run is marked
         failed (not complete), and ``RunResult.group_selection_error`` names
-        the reason (P1-4) -- distinct from a genuinely empty source period,
+        the reason -- distinct from a genuinely empty source period,
         which still attempts one group and is not treated as an error.
     group_filter_regex:
         Regex applied to group labels; only matching groups run.
@@ -588,7 +588,7 @@ def run_detection(
         group_filter_regex. Groups are sorted by label first, so the same
         limit always keeps the same groups regardless of the order the
         source data happened to be discovered in. Raises ConfigError if
-        given and less than 1 (P1-4) -- 0 would silently process no groups,
+        given and less than 1 -- 0 would silently process no groups,
         and Python's slice semantics would make a negative value keep "all
         but the last N" groups instead of capping to N.
     force:
@@ -608,7 +608,7 @@ def run_detection(
     RunResult with per-group outcomes and the report path.
 
     """
-    # P1-4: a pure input-shape check, before any I/O. limit_groups < 1 would
+    # A pure input-shape check, before any I/O. limit_groups < 1 would
     # otherwise reach `groups_info[:limit_groups]` -- Python slice semantics
     # make a *negative* limit silently keep "all but the last N" groups
     # instead of raising or (as every other value does) capping to N, and
@@ -663,7 +663,7 @@ def run_detection(
 
         # A configured id_column's identity contract is validated here, over
         # the full population, before any filtering below could hide a
-        # violation (P1-3) -- see _validate_id_column_identity.
+        # violation -- see _validate_id_column_identity.
         id_identity_scope = _validate_id_column_identity(df_raw, config)
 
         # ── 2. Period resolution + window filter ────────────────────────
@@ -722,7 +722,7 @@ def run_detection(
             # stable across groups -- each group's matrix is a subset of this
             # space. The fitted parameters land on *plan* (mutated in place);
             # the returned FeatureSpace's matrix -- a full-dataset-sized copy
-            # -- is discarded immediately (P1-1): nothing downstream uses it,
+            # -- is discarded immediately: nothing downstream uses it,
             # each group re-derives its own matrix from df_raw + plan via
             # apply_feature_plan(), and keeping it bound to a name would hold
             # it alive for the whole per-group loop below for no reason.
@@ -748,7 +748,7 @@ def run_detection(
         # _run_group already turns into a normal "too_few_records" summary,
         # not zero groups processed). n_natural_groups is captured *before*
         # any selector below so a selector that removes everything can be
-        # told apart from that case (P1-4).
+        # told apart from that case.
         n_natural_groups = len(groups_info)
 
         # Apply user filters (only_groups first, then regex, then a
@@ -820,7 +820,7 @@ def run_detection(
         any_failed = any(g.status == "failed" for g in group_results)
         if group_selection_error is not None:
             # Not "one or more groups failed" -- zero groups even ran. Marking
-            # this "complete" (the pre-P1-4 behaviour, since an empty
+            # this "complete" (the previous behaviour, since an empty
             # group_results makes any_failed False too) would let a typo'd
             # --only-group/--group-filter look like a successful no-op run.
             ws.store.mark_run_failed(run_id, group_selection_error)
@@ -833,10 +833,10 @@ def run_detection(
         # This is what makes `sorethumb backfill` idempotent (a processed
         # period gets a totals row, so it is not re-queued) and gives
         # `sorethumb history` something to aggregate. Skipped on a
-        # group_selection_error (P1-4): group_results is empty, so
+        # group_selection_error: group_results is empty, so
         # _record_period_history would otherwise write a totals-free but
         # complete=1 period record -- the exact "invalid no-op recorded as
-        # done" this phase closes, just in the history ledger instead of the
+        # done" case closed for runs, just in the history ledger instead of the
         # run table.
         if period_label is not None and period_window is not None and group_selection_error is None:
             _record_period_history(
@@ -899,7 +899,7 @@ def _make_score_run_id(
 # against the source run's persisted FeaturePlan, and unpickles already-fitted
 # detectors; neither reads these sections at all). If the caller's config
 # claims different values here than what the source run actually fit with,
-# persisting the caller's config verbatim (the pre-P0-6 behaviour) would
+# persisting the caller's config verbatim (the previous behaviour) would
 # describe a computation that never happened.
 _FIT_TIME_SECTIONS = ("columns", "profiling", "features")
 
@@ -1402,12 +1402,12 @@ def _execute_group(
 
 
 def _group_feature_matrix(group_space: FeatureSpace, config: Config) -> np.ndarray:
-    """Return one group's feature matrix at the dtype fit/score/explain actually need (P1-1).
+    """Return one group's feature matrix at the dtype fit/score/explain actually need.
 
     The plan's configured dtype (``features.dtype``, float32 by default --
     see docs/approximations.md) is already correct for every detector's
     ``fit``/``score_samples``; unconditionally upcasting to float64 (the
-    pre-P1-1 behaviour) doubled this matrix's memory for every group whether
+    previous behaviour) doubled this matrix's memory for every group whether
     or not anything downstream needed the extra precision. Explain is the one
     consumer that does -- TreeSHAP and the ECOD/HBOS exact decomposition need
     the *full* matrix at float64 (see their own docstrings), and OneClassSVM/
@@ -1825,7 +1825,7 @@ _MIN_NORMAL_REFERENCE_ROWS = 10
 
 
 def _attribution_reference(X: np.ndarray, flagged_idx: np.ndarray) -> np.ndarray:
-    """Return the reference population for attribution (P1-1): the group's normal (unflagged) rows.
+    """Return the reference population for attribution: the group's normal (unflagged) rows.
 
     Per-dimension perturbation scales (finite-difference gradients) and the
     KernelSHAP background must describe what the detector considers *normal*,
@@ -1858,7 +1858,7 @@ def _compute_attributions(
     ensemble gave zero weight to (composite mode only -- see the skip at the
     top of the dispatch loop) is excluded before dispatch: it never produces
     a source, never marks a row "covered", and can never end up as the
-    entire displayed explanation or set ``attribution_kind`` (P1-2). Dispatch
+    entire displayed explanation or set ``attribution_kind``. Dispatch
     per detector: IsolationForest → TreeSHAP (``model_specific``), KMeans →
     centroid distance (``heuristic``), ECOD/HBOS → their own exact additive
     decomposition (``exact`` — see ``explain/native.py``), OneClassSVM/LOF →
@@ -1925,7 +1925,7 @@ def _compute_attributions(
     n_rows = len(X)
     n_features = X.shape[1]
     n_flagged = len(flagged_idx)
-    # Targets vs reference (P1-1): explainers get only the flagged rows to
+    # Targets vs reference: explainers get only the flagged rows to
     # explain, and, separately, the normal population to scale/background against.
     X_flagged = X[flagged_idx]
     reference = _attribution_reference(X, flagged_idx)
@@ -1935,7 +1935,7 @@ def _compute_attributions(
     covered = np.zeros(n_flagged, dtype=bool)  # True where >=1 source has a real value
 
     for det_name, det in det_instances.items():
-        # P1-2: a detector the ensemble gave zero weight to (dropped by the
+        # A detector the ensemble gave zero weight to (dropped by the
         # bad-member guard, or independently zeroed by weighting="agreement"
         # -- see scoring/combine.py) contributed nothing to composite_score
         # and must contribute nothing to the explanation either. Skipping it

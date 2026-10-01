@@ -1,4 +1,4 @@
-"""P1-8: the documented workspace rules match the CLI constant and behaviour.
+"""The documented workspace rules match the CLI constant and behaviour.
 
 The default workspace directory is a single constant (``cli._DEFAULT_WORKDIR``) but is
 quoted in the README, the CLI reference, the config reference and SECURITY.md. A past

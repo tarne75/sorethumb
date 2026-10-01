@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject a release tag whose repository state contradicts the release (P0-9).
+"""Reject a release tag whose repository state contradicts the release.
 
 Run for the version about to be tagged, against the exact commit being tagged.
 It exists because a release is more than a version bump: the changelog date,

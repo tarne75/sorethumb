@@ -258,7 +258,7 @@ either way (`tests/benchmark/test_pipeline_accuracy_floors.py`'s own prior
 floor-test comment flagged this: "training contamination cost less than
 expected").
 
-P2-1 replaced this with a real controlled experiment: `swamping_clean_reference`
+This was replaced with a real controlled experiment: `swamping_clean_reference`
 and `swamping_train_reference` share the *identical* normal population (same
 seed -> same draw, differing only by the injected contamination), both
 scored against `swamping_at_risk_holdout` -- genuinely normal points
@@ -319,7 +319,7 @@ low as ~0.04) on the `local` and `varying_density` scenarios (see
 gap between clusters or a mixed-density regime (individually measured
 ROC-AUC as low as 0.002), and `min()` let that one detector's bad ranking
 dominate the ensemble's, even though `isolation_forest` alone scores 0.90+ on
-the same data. Fixed (P0-8): the ranking now uses the per-row *median* across
+the same data. Fixed: the ranking now uses the per-row *median* across
 detectors, which cannot be dominated by a single anti-correlated member out
 of three — ROC-AUC on these scenarios is now ~0.68–0.71, comfortably above
 random, and both are floor-tested under the default ablation (see

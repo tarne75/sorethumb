@@ -2,7 +2,7 @@
 and the shipped default detector ensemble.
 
 Pure field-default/assignment echoes were deliberately not ported here from
-the old coverage-tier files (P1-3): docs/generate_config_docs.py already
+the old coverage-tier files: docs/generate_config_docs.py already
 derives docs/configuration.md from the same Pydantic Field defaults and
 Literal enum members, and its drift check (tests/unit/test_docs_checks.py)
 already catches a silently-changed default or narrowed/widened Literal --

@@ -1,4 +1,4 @@
-"""P2-2: an atomic write is only durable once the *directory entry* is, so the
+"""An atomic write is only durable once the *directory entry* is, so the
 parent directory is fsynced after the rename -- where the platform supports it --
 and skipped cleanly where it does not. Temporary-file cleanup on exceptions is
 retained and tested alongside.

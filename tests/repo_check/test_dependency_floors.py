@@ -1,4 +1,4 @@
-"""P1-7: the declared dependency floors are actually exercised by the release gate.
+"""The declared dependency floors are actually exercised by the release gate.
 
 Every other release-validation job installs from ``uv.lock`` (the newest resolvable
 versions), so a lower bound in ``pyproject.toml`` can be wrong without anything

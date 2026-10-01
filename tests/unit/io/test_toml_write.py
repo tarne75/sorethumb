@@ -1,4 +1,4 @@
-"""Unit tests for the TOML literal serialiser (P0-4)."""
+"""Unit tests for the TOML literal serialiser."""
 
 from __future__ import annotations
 

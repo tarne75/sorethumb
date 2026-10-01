@@ -175,7 +175,7 @@ def test_calibrator_from_dict_ignores_legacy_mode_key_and_migrates():
 
 
 # ---------------------------------------------------------------------------
-# Calibrator: exact tie-aware empirical mid-rank CDF (P2-2)
+# Calibrator: exact tie-aware empirical mid-rank CDF
 # ---------------------------------------------------------------------------
 
 
@@ -387,7 +387,7 @@ def test_composite_is_weighted_average():
 
 
 def test_intersection_ranking_is_median_not_min():
-    """P0-8: the continuous ranking for combination="intersection" is the
+    """The continuous ranking for combination="intersection" is the
     per-row median across detectors, not min() -- min() let a single
     anti-correlated member's score dominate the whole ensemble's ranking
     (the flag decision, an AND of natural_flag votes, is unaffected either
@@ -409,7 +409,7 @@ def test_intersection_ranking_is_median_not_min():
 
 
 def test_intersection_ranking_median_is_robust_to_one_anti_correlated_member():
-    """The exact failure mode P0-8 fixes: with three detectors, two of them
+    """The exact failure mode the median fixes: with three detectors, two of them
     genuinely rank anomalies high and one is anti-correlated (ranks them
     low). min() would let the bad member's low score dominate the ranking
     for every row, including true anomalies; median() cannot be dominated by
@@ -457,7 +457,7 @@ def test_union_is_max():
 
 
 # ---------------------------------------------------------------------------
-# ScoreEnsemble: exact-k numeric contamination under heavy ties (P2-3)
+# ScoreEnsemble: exact-k numeric contamination under heavy ties
 # ---------------------------------------------------------------------------
 
 
@@ -554,7 +554,7 @@ def test_union_exact_k_with_heavy_ties_per_detector():
 
 
 def test_three_way_intersection_requires_all_three_votes():
-    """P0-3: a genuine three-way intersection must be the AND of all three
+    """A genuine three-way intersection must be the AND of all three
     detectors' votes, strictly smaller than every two-way intersection of its
     members -- proving all three actually matter, not just two of them
     happening to agree while a third is along for the ride.
@@ -601,7 +601,7 @@ def test_three_way_intersection_requires_all_three_votes():
 
 
 # ---------------------------------------------------------------------------
-# ScoreEnsemble: ZeroAnomalyWarning on an empty intersection (P2-4)
+# ScoreEnsemble: ZeroAnomalyWarning on an empty intersection
 # ---------------------------------------------------------------------------
 
 
@@ -683,7 +683,7 @@ def test_manual_weights_normalised():
 
 
 def test_manual_weights_all_zero_rejected_at_construction():
-    """P2-3: a non-positive-sum manual_weights dict must fail loudly at
+    """A non-positive-sum manual_weights dict must fail loudly at
     construction, not silently fall back to equal weights at combine time."""
     with pytest.raises(ValueError, match="positive total"):
         ScoreEnsemble(weighting="manual", contamination=0.1, manual_weights={"det_a": 0.0, "det_b": 0.0})
@@ -806,7 +806,7 @@ def test_guard_drops_member_anticorrelated_with_the_median_in_composite(caplog):
 
 @pytest.mark.parametrize("combination", ["intersection", "union"])
 def test_guard_keeps_every_vote_for_set_combinations(combination):
-    """P0-3: dropping a member from a vote silently changes the vote count --
+    """Dropping a member from a vote silently changes the vote count --
     a configured three-way intersection/union must stay three-way even when
     one detector ranks anti-correlated with the others. The guard must warn,
     not drop.
