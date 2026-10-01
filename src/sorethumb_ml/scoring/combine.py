@@ -153,18 +153,39 @@ def _rho(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.corrcoef(a, b)[0, 1])
 
 
-def _exact_k_flags(scores: np.ndarray, contamination: float) -> np.ndarray:
+def descending_order(scores: np.ndarray, source_row: np.ndarray | None = None) -> np.ndarray:
+    """Positions that order *scores* from highest to lowest, ties broken by earliest source row.
+
+    A stable descending sort whose tie-break is explicit rather than an accident
+    of the sort algorithm: ``np.argsort(s)[::-1]`` (the previous ranking sort) is
+    neither stable nor deterministic across equal scores, and even a stable sort
+    only breaks ties by *array position*, which is not source order once a group
+    has been time-sorted. ``source_row`` is each position's row index in the
+    original source (the pipeline's ``INTERNAL_ROW_ID_COLUMN`` stamp); when omitted
+    the position itself is used, correct for any caller that has not reordered
+    its rows. ``np.lexsort`` takes the last key as primary, so this sorts by
+    ``-score`` then ``source_row``, both ascending.
+    """
+    scores = np.asarray(scores)
+    tiebreak = np.arange(len(scores)) if source_row is None else np.asarray(source_row)
+    if len(tiebreak) != len(scores):
+        msg = f"source_row has {len(tiebreak)} entries but there are {len(scores)} scores"
+        raise ValueError(msg)
+    order: np.ndarray = np.lexsort((tiebreak, -scores))
+    return order
+
+
+def _exact_k_flags(
+    scores: np.ndarray, contamination: float, source_row: np.ndarray | None = None
+) -> np.ndarray:
     """Flag exactly ``k = round(n * contamination)`` rows -- the highest-scoring ones.
 
-    Ties are broken deterministically by score, then by source row order
-    (an earlier row wins a tie) -- a plain ``score >= quantile(1 - c)``
+    Ties are broken deterministically by score, then by earliest source row
+    (see :func:`descending_order`) -- a plain ``score >= quantile(1 - c)``
     threshold flags every tied row at the boundary, which can over- or
     under-shoot the requested fraction whenever the reference has repeated
     values (small groups and heavily-ties detectors like ECOD/HBOS hit this
-    routinely). ``np.argsort(..., kind="stable")`` on ``-scores`` sorts
-    descending by score while a stable sort's own guarantee -- equal keys
-    keep their original relative order -- gives the row-order tie-break for
-    free, with no extra key needed.
+    routinely).
     """
     n = len(scores)
     k = round(n * contamination)
@@ -172,7 +193,7 @@ def _exact_k_flags(scores: np.ndarray, contamination: float) -> np.ndarray:
     flags = np.zeros(n, dtype=bool)
     if k == 0:
         return flags
-    order = np.argsort(-scores, kind="stable")
+    order = descending_order(scores, source_row)
     flags[order[:k]] = True
     return flags
 
@@ -241,6 +262,7 @@ class ScoreEnsemble:
         self,
         scores: dict[str, np.ndarray],
         natural_flags: dict[str, np.ndarray],
+        source_row: np.ndarray | None = None,
     ) -> dict[str, Any]:
         """Combine per-detector scores into a final score and flag array.
 
@@ -250,6 +272,11 @@ class ScoreEnsemble:
             Mapping from detector name → calibrated score array (higher = more anomalous).
         natural_flags:
             Mapping from detector name → boolean flag array (True = anomalous).
+        source_row:
+            Optional source-row index of each position, used only to break ties
+            in an exact-k flag selection (the earliest source row wins). Defaults
+            to the position, which is only the source order if the caller has not
+            reordered the rows.
 
         Returns
         -------
@@ -322,7 +349,9 @@ class ScoreEnsemble:
             # Per-detector thresholding then set operation.
             # Each detector independently flags its top-contamination fraction
             # (or its natural boundary when auto), then flags are AND/OR-ed.
-            per_flags, contamination, is_auto = self._set_combine_flags(score_matrix, natural_flags, names)
+            per_flags, contamination, is_auto = self._set_combine_flags(
+                score_matrix, natural_flags, names, source_row
+            )
             anomaly_flag = (
                 per_flags.all(axis=1) if self._combination == "intersection" else per_flags.any(axis=1)
             )
@@ -369,7 +398,7 @@ class ScoreEnsemble:
                 # rows rather than a quantile threshold, which over- or
                 # under-flags whenever the combined score has ties at the
                 # boundary (see _exact_k_flags).
-                anomaly_flag = _exact_k_flags(combined, contamination)
+                anomaly_flag = _exact_k_flags(combined, contamination, source_row)
                 threshold = float(combined[anomaly_flag].min()) if anomaly_flag.any() else float("nan")
             contamination_used = contamination
             logger.info(
@@ -503,6 +532,7 @@ class ScoreEnsemble:
         score_matrix: np.ndarray,
         natural_flags: dict[str, np.ndarray],
         names: list[str],
+        source_row: np.ndarray | None = None,
     ) -> tuple[np.ndarray, float, bool]:
         """Compute per-detector boolean flags for intersection/union modes.
 
@@ -521,13 +551,13 @@ class ScoreEnsemble:
             return flags, rate, True
 
         # Explicit contamination: exact-k select each detector independently
-        # (ties broken by score then source row order; see _exact_k_flags),
+        # (ties broken by score then earliest source row; see _exact_k_flags),
         # rather than a per-detector quantile threshold that over- or
         # under-flags whenever that detector's scores have ties at the
         # boundary.
         c = float(self._contamination)
         for i in range(k):
-            flags[:, i] = _exact_k_flags(score_matrix[:, i], c)
+            flags[:, i] = _exact_k_flags(score_matrix[:, i], c, source_row)
         return flags, c, False
 
     def _resolve_contamination(self, flag_matrix: np.ndarray) -> tuple[float, bool]:

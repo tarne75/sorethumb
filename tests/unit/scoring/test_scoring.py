@@ -471,6 +471,33 @@ def test_exact_k_flags_breaks_ties_by_earliest_row_order():
     assert flags.tolist() == [True, True, False, False, False, False, False]
 
 
+def test_exact_k_flags_breaks_ties_by_earliest_source_row_not_position():
+    from sorethumb_ml.scoring.combine import _exact_k_flags
+
+    scores = np.array([5.0, 5.0, 5.0, 4.0])
+    source_row = np.array([30, 10, 20, 0])  # position 1 is the earliest source row, then 2
+    flags = _exact_k_flags(scores, 2 / 4, source_row)
+    assert flags.tolist() == [False, True, True, False]
+
+
+@pytest.mark.parametrize("combination", ["composite", "intersection", "union"])
+def test_combine_tie_break_uses_source_row_in_every_combination_mode(combination):
+    # Four identical rows tie at the top; contamination selects exactly one of them.
+    a = np.array([0.9, 0.9, 0.9, 0.9, 0.1, 0.1, 0.1, 0.1])
+    b = a.copy()
+    flags = {"a": a > 0.5, "b": b > 0.5}
+    source_row = np.array([7, 3, 5, 1, 0, 2, 4, 6])
+    ens = ScoreEnsemble(combination=combination, contamination=1 / 8)
+    result = ens.combine({"a": a, "b": b}, flags, source_row=source_row)
+    assert np.where(result["anomaly_flag"])[0].tolist() == [3]  # source row 1, the earliest of the tied four
+
+
+def test_combine_without_source_row_keeps_positional_tie_break():
+    a = np.array([0.9, 0.9, 0.9, 0.1])
+    result = ScoreEnsemble(combination="composite", contamination=1 / 4).combine({"a": a}, {"a": a > 0.5})
+    assert np.where(result["anomaly_flag"])[0].tolist() == [0]
+
+
 def test_exact_k_flags_flags_whole_tie_group_when_k_matches_its_size():
     from sorethumb_ml.scoring.combine import _exact_k_flags
 

@@ -92,3 +92,69 @@ def test_all_rows_flagged_ranks_every_row():
     assert sorted(rank.tolist()) == list(range(1, n + 1))
     # rank 1 is the single highest-scoring row.
     assert rank[int(np.argmax(composite_score))] == 1
+
+
+# ---------------------------------------------------------------------------
+# P1-9: stable descending order, earliest source row wins a tie
+# ---------------------------------------------------------------------------
+
+
+def test_descending_order_breaks_ties_by_earliest_row_not_by_sort_accident():
+    from sorethumb_ml.scoring.combine import descending_order
+
+    scores = np.array([0.5, 0.9, 0.5, 0.5, 0.1, 0.9])
+    # 0.9 twice (1, 5), then 0.5 three times (0, 2, 3), then 0.1 (4) -- earliest first within a tie.
+    assert descending_order(scores).tolist() == [1, 5, 0, 2, 3, 4]
+    # The previous implementation, np.argsort(s)[::-1], reversed every tie group.
+    assert np.argsort(scores)[::-1].tolist() != [1, 5, 0, 2, 3, 4]
+
+
+def test_descending_order_uses_source_row_not_position_when_given():
+    from sorethumb_ml.scoring.combine import descending_order
+
+    scores = np.full(5, 0.7)
+    source_row = np.array([40, 30, 20, 10, 50])  # e.g. a time-sorted group: position != source order
+    assert descending_order(scores, source_row).tolist() == [3, 2, 1, 0, 4]
+
+
+def test_descending_order_rejects_a_misaligned_tiebreak():
+    from sorethumb_ml.scoring.combine import descending_order
+
+    with pytest.raises(ValueError, match="source_row"):
+        descending_order(np.ones(3), np.arange(2))
+
+
+def test_flagged_order_and_rank_follow_source_row_among_equal_scores():
+    composite_score = np.array([0.5, 0.5, 0.5, 0.5, 0.2])
+    anomaly_flag = np.array([True, True, True, True, False])
+    source_row = np.array([13, 11, 10, 12, 99])
+
+    flagged = _flagged_idx_by_score_desc(anomaly_flag, composite_score, source_row)
+    assert flagged.tolist() == [2, 1, 3, 0]  # source rows 10, 11, 12, 13
+
+    rank = np.zeros(5, dtype=int)
+    rank[flagged] = np.arange(1, 5)
+    assert rank.tolist() == [4, 2, 1, 3, 0]
+
+
+def test_flagged_order_without_a_source_row_is_position_order_among_ties():
+    flagged = _flagged_idx_by_score_desc(np.ones(4, dtype=bool), np.full(4, 0.3))
+    assert flagged.tolist() == [0, 1, 2, 3]
+
+
+def test_higher_scores_still_beat_earlier_rows():
+    flagged = _flagged_idx_by_score_desc(np.ones(4, dtype=bool), np.array([0.1, 0.4, 0.4, 0.9]), np.arange(4))
+    assert flagged.tolist() == [3, 1, 2, 0]
+
+
+def test_order_is_independent_of_how_the_rows_are_arranged():
+    """Shuffling the rows (carrying their source ids along) must not change which source row ranks where."""
+    rng = np.random.default_rng(0)
+    score = np.repeat([0.9, 0.5, 0.1], 20)  # heavy ties
+    source = np.arange(60)
+    flag = np.ones(60, dtype=bool)
+    expected = source[_flagged_idx_by_score_desc(flag, score, source)]
+    for _ in range(5):
+        perm = rng.permutation(60)
+        got_positions = _flagged_idx_by_score_desc(flag, score[perm], source[perm])
+        assert source[perm][got_positions].tolist() == expected.tolist()

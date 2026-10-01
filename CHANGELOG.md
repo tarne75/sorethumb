@@ -6,6 +6,10 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Ranking and flag selection now use a stable descending sort with the earliest source row as the tie-break, so rank order and `explain.max_rows` selection are deterministic when rows share a composite score. Previously a reversed unstable argsort reversed tie groups, and the exact-k tie-break used array position, which is not source order once a group is time-sorted.
+
 ## [0.1.0] - 2026-09-21
 
 First public release. There is no prior published version to diff against,

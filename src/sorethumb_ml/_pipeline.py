@@ -59,7 +59,7 @@ from sorethumb_ml.io.source import redact_source_uri, resolve_source
 from sorethumb_ml.profiling.plan import FeaturePlan, build_feature_plan
 from sorethumb_ml.report.html import GroupSection, RunMeta, render_report
 from sorethumb_ml.scoring.calibrate import Calibrator
-from sorethumb_ml.scoring.combine import ScoreEnsemble
+from sorethumb_ml.scoring.combine import ScoreEnsemble, descending_order
 from sorethumb_ml.store.models import (
     load_model,
     load_plan,
@@ -1646,8 +1646,15 @@ def _score_forward_group(
     )
 
 
-def _flagged_idx_by_score_desc(anomaly_flag: np.ndarray, composite_score: np.ndarray) -> np.ndarray:
+def _flagged_idx_by_score_desc(
+    anomaly_flag: np.ndarray, composite_score: np.ndarray, source_row: np.ndarray | None = None
+) -> np.ndarray:
     """Row positions where ``anomaly_flag`` is True, ordered by ``composite_score`` descending.
+
+    Rows with equal scores are ordered by earliest *source* row (``source_row``,
+    the per-position source index; position itself when omitted), via a stable
+    sort -- so ``rank`` and which rows ``explain.max_rows`` keeps never depend on
+    sort-algorithm accident or on a group's time-sorted row order.
 
     ``composite_score`` is not necessarily the statistic that determined
     ``anomaly_flag``: for ``combination="intersection"``/``"union"`` the flag
@@ -1660,8 +1667,8 @@ def _flagged_idx_by_score_desc(anomaly_flag: np.ndarray, composite_score: np.nda
     """
     flagged_idx: np.ndarray = np.where(anomaly_flag)[0]
     if len(flagged_idx) > 0:
-        order: np.ndarray = np.argsort(composite_score[flagged_idx])[::-1]
-        flagged_idx = flagged_idx[order]
+        tiebreak = None if source_row is None else np.asarray(source_row)[flagged_idx]
+        flagged_idx = flagged_idx[descending_order(composite_score[flagged_idx], tiebreak)]
     return flagged_idx
 
 
@@ -1698,7 +1705,7 @@ def _finalize_group(
         contamination=config.scoring.contamination,
         manual_weights=config.scoring.weights or None,
     )
-    result_dict = ensemble.combine(calibrated_map, natural_flags_map)
+    result_dict = ensemble.combine(calibrated_map, natural_flags_map, source_row=group_space.row_ids)
     composite_score: np.ndarray = result_dict["combined_score"]
     anomaly_flag: np.ndarray = result_dict["anomaly_flag"]
     weights_used: dict[str, float] = result_dict["weights"]
@@ -1710,7 +1717,7 @@ def _finalize_group(
     # means a truncated run still explains the rows that matter most, and the
     # ones it had to skip are the least anomalous of the flagged set. Also the
     # single source of truth for `rank` below.
-    flagged_idx = _flagged_idx_by_score_desc(anomaly_flag, composite_score)
+    flagged_idx = _flagged_idx_by_score_desc(anomaly_flag, composite_score, group_space.row_ids)
     n_anomalies = len(flagged_idx)
     anomaly_rate = n_anomalies / n_rows if n_rows > 0 else None
 
