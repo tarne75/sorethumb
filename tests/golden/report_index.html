@@ -21,7 +21,6 @@ tr:nth-child(even) { background: #fafafa; }
               font-size: 0.8rem; margin: 0.5rem 0 1rem; }
 .provenance pre { margin: 0; white-space: pre-wrap; }
 .dropped-col { color: #888; font-size: 0.78rem; }
-.chart-img { max-width: 100%; margin: 0.5rem 0; }
 .csv-link { font-size: 0.82rem; }
 </style>
 </head>
@@ -33,10 +32,9 @@ tr:nth-child(even) { background: #fafafa; }
   }
 }</pre></details></div>
 <div>
-<h2>Group: US <span style="font-size:0.75rem;color:#888">(abc123def456abcd)</span></h2><div class="tabs"><button class="tab-btn active" data-group="0" data-tab="records" onclick="showTab(0, 'records')">Records</button><button class="tab-btn" data-group="0" data-tab="chart" onclick="showTab(0, 'chart')">Chart</button><button class="tab-btn" data-group="0" data-tab="contrast" onclick="showTab(0, 'contrast')">Contrast</button><button class="tab-btn" data-group="0" data-tab="plan" onclick="showTab(0, 'plan')">Feature plan</button></div>
+<h2>Group: US <span style="font-size:0.75rem;color:#888">(abc123def456abcd)</span></h2><div class="tabs"><button class="tab-btn active" data-group="0" data-tab="records" onclick="showTab(0, 'records')">Records</button><button class="tab-btn" data-group="0" data-tab="contrast" onclick="showTab(0, 'contrast')">Contrast</button><button class="tab-btn" data-group="0" data-tab="plan" onclick="showTab(0, 'plan')">Feature plan</button></div>
 </div>
 <div class="tab-panel active" data-group="0" data-tab="records"><p class="csv-link"><a href="./abc123def456abcd.csv">Download CSV</a> (moving this HTML without its sibling CSVs breaks this link)</p><table><thead><tr><th>row_id</th><th>score</th><th>rank</th><th>reason_1</th><th>attribution_kind</th></tr></thead><tbody><tr><td>0</td><td>0.95</td><td>1</td><td>high_value</td><td>model_specific</td></tr><tr><td>1</td><td>0.88</td><td>2</td><td>low_value</td><td>heuristic</td></tr><tr><td>2</td><td>0.75</td><td>3</td><td>outlier</td><td>heuristic</td></tr></tbody></table></div>
-<div class="tab-panel" data-group="0" data-tab="chart"><p>No chart available.</p></div>
 <div class="tab-panel" data-group="0" data-tab="contrast"><p>No contrast data.</p></div>
 <div class="tab-panel" data-group="0" data-tab="plan"><p>No columns were dropped.</p></div>
 <script>

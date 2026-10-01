@@ -29,9 +29,10 @@ from sorethumb_ml._atomic import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
-# Shown under every trend chart. Each period is fitted and self-calibrated on its own, so the
-# chart is a relative diagnostic; reading it as an absolute level would be a misreading.
-_TREND_CHART_NOTE = (
+# Shown under every rolling-window trend table. Each period is fitted and self-calibrated on
+# its own, so the trend is a relative diagnostic; reading it as an absolute level would be a
+# misreading.
+_TREND_NOTE = (
     "Each period is fitted and self-calibrated independently, so this trend shows relative "
     "movement, not an absolute anomaly level. For one fixed scale, score later data against an "
     "accepted reference run with <code>sorethumb score --from-run</code>."
@@ -74,7 +75,6 @@ class GroupSection:
     records: pl.DataFrame
     plan_dropped: list[dict[str, str]] = field(default_factory=list)
     contrast: pl.DataFrame | None = None
-    chart_png_b64: str | None = None
     window_results: list[Any] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -184,7 +184,6 @@ tr:nth-child(even) { background: #fafafa; }
               font-size: 0.8rem; margin: 0.5rem 0 1rem; }
 .provenance pre { margin: 0; white-space: pre-wrap; }
 .dropped-col { color: #888; font-size: 0.78rem; }
-.chart-img { max-width: 100%; margin: 0.5rem 0; }
 .csv-link { font-size: 0.82rem; }
 """
 
@@ -273,8 +272,6 @@ def _tab_nav(groups: list[GroupSection]) -> str:
             f'<div class="tabs">'
             f'<button class="tab-btn active" data-group="{i}" data-tab="records" '
             f"onclick=\"showTab({i}, 'records')\">Records</button>"
-            f'<button class="tab-btn" data-group="{i}" data-tab="chart" '
-            f"onclick=\"showTab({i}, 'chart')\">Chart</button>"
             f'<button class="tab-btn" data-group="{i}" data-tab="contrast" '
             f"onclick=\"showTab({i}, 'contrast')\">Contrast</button>"
             f'<button class="tab-btn" data-group="{i}" data-tab="plan" '
@@ -304,19 +301,8 @@ def _group_section(grp: GroupSection, idx: int, *, csv_written: bool) -> str:
 
     # Windows table
     if grp.window_results:
-        parts[-1] = parts[-1].replace("</div>", _windows_table(grp.window_results) + "</div>")
-
-    # Chart tab
-    chart_html = ""
-    if grp.chart_png_b64:
-        chart_html = (
-            f'<img class="chart-img" src="data:image/png;base64,{html.escape(grp.chart_png_b64)}" alt="Trend chart">'
-            f"<p><small>{_TREND_CHART_NOTE}</small></p>"
-        )
-    parts.append(
-        f'<div class="tab-panel" data-group="{idx}" data-tab="chart">'
-        f"{chart_html or '<p>No chart available.</p>'}</div>"
-    )
+        windows_html = _windows_table(grp.window_results) + f"<p><small>{_TREND_NOTE}</small></p>"
+        parts[-1] = parts[-1].replace("</div>", windows_html + "</div>")
 
     # Contrast tab
     contrast_html = (

@@ -146,7 +146,7 @@ so trivial changes do not invalidate cached artefacts.
 | --- | --- | --- | --- |
 | `report.formats` | list[str] | ['html', 'csv'] | Report formats to generate. Supported: html, csv, json. |
 | `report.open_after` | bool | false | Open the HTML report in the default browser after generation. |
-| `report.rolling_windows` | list[int] | [1, 7, 14, 28] | Rolling window sizes (in periods) shown in trend charts. |
+| `report.rolling_windows` | list[int] | [1, 7, 14, 28] | Rolling window sizes (in periods) shown by `sorethumb history`. |
 
 ## Detector `extra_params`
 

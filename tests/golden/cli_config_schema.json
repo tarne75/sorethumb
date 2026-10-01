@@ -414,7 +414,7 @@
           "type": "boolean"
         },
         "rolling_windows": {
-          "description": "Rolling window sizes (in periods) shown in trend charts.",
+          "description": "Rolling window sizes (in periods) shown by `sorethumb history`.",
           "items": {
             "type": "integer"
           },

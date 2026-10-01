@@ -1,10 +1,9 @@
-"""Integration tests for M7 report rendering: charts, CSV, HTML report,
+"""Integration tests for M7 report rendering: CSV, HTML report,
 contrast analysis, and end-to-end report regeneration through the pipeline.
 """
 
 from __future__ import annotations
 
-import base64
 import html as html_mod
 import json
 from pathlib import Path
@@ -15,7 +14,7 @@ import pytest
 
 from sorethumb_ml._pipeline import run_detection
 from sorethumb_ml.analysis.contrast import compute_contrast
-from sorethumb_ml.report.charts import render_trend_chart
+from sorethumb_ml.history.windows import WindowResult
 from sorethumb_ml.report.csv import write_group_csv
 from sorethumb_ml.report.html import GroupSection, RunMeta, render_report
 from tests.factories.configs import make_config
@@ -58,67 +57,6 @@ def _group(key: str = "abc123def456abcd", label: str = "US", **kw: object) -> Gr
         records=_RECORDS_DF,
         **kw,  # type: ignore[arg-type]
     )
-
-
-# ---------------------------------------------------------------------------
-# charts.py
-# ---------------------------------------------------------------------------
-
-
-class TestRenderTrendChart:
-    def test_returns_valid_base64_png(self):
-        png_b64 = render_trend_chart(
-            period_labels=["2026-09-01", "2026-09-02", "2026-09-03"],
-            group_anomaly_counts={"gk1": [5, 3, 7]},
-            period_population=[1000, 1000, 1000],
-            windows=[1, 7],
-            reference_label="2026-09-03",
-        )
-        raw = base64.b64decode(png_b64)
-        # PNG magic bytes
-        assert raw[:8] == b"\x89PNG\r\n\x1a\n"
-
-    def test_empty_groups_does_not_raise(self):
-        png_b64 = render_trend_chart(
-            period_labels=["2026-09-01"],
-            group_anomaly_counts={},
-            period_population=[500],
-            windows=[1],
-            reference_label="2026-09-01",
-        )
-        assert len(png_b64) > 0
-
-    def test_cal_break_labels_accepted(self):
-        png_b64 = render_trend_chart(
-            period_labels=["2026-09-01", "2026-09-02"],
-            group_anomaly_counts={"gk": [1, 2]},
-            period_population=[100, 100],
-            windows=[1],
-            reference_label="2026-09-02",
-            cal_break_labels={"2026-09-02"},
-        )
-        assert len(png_b64) > 0
-
-    def test_non_business_labels_accepted(self):
-        png_b64 = render_trend_chart(
-            period_labels=["2026-09-05", "2026-09-06"],
-            group_anomaly_counts={},
-            period_population=[0, 0],
-            windows=[1],
-            reference_label="2026-09-06",
-            non_business_labels={"2026-09-05", "2026-09-06"},
-        )
-        assert len(png_b64) > 0
-
-    def test_multiple_groups_rendered(self):
-        png_b64 = render_trend_chart(
-            period_labels=["2026-09-01", "2026-09-02"],
-            group_anomaly_counts={"gk1": [2, 3], "gk2": [1, 4], "gk3": [0, 1]},
-            period_population=[200, 200],
-            windows=[1, 2],
-            reference_label="2026-09-02",
-        )
-        assert len(base64.b64decode(png_b64)) > 1000
 
 
 # ---------------------------------------------------------------------------
@@ -272,28 +210,34 @@ class TestRenderReport:
         for grp in groups:
             assert grp.group_key in content
 
-    def test_chart_png_embedded(self, tmp_path: Path):
-        from sorethumb_ml.report.charts import render_trend_chart
+    def test_has_no_chart_tab(self, tmp_path: Path):
+        """The trend-chart tab was removed for 0.1.0: it could only ever say "No chart available"."""
+        content = render_report(_RUN_META, [_group()], tmp_path).read_text(encoding="utf-8")
+        assert 'data-tab="chart"' not in content
+        assert "No chart available" not in content
 
-        png_b64 = render_trend_chart(
-            period_labels=["2026-09-01"],
-            group_anomaly_counts={},
-            period_population=[100],
-            windows=[1],
-            reference_label="2026-09-01",
+    def test_rolling_window_trend_is_labelled_a_relative_diagnostic(self, tmp_path: Path):
+        window = WindowResult(
+            window_size=7,
+            period_label="2026-09-07",
+            current_anomaly_count=3,
+            current_population=700,
+            current_rate=3 / 700,
+            prior_anomaly_count=2,
+            prior_population=700,
+            prior_rate=2 / 700,
+            absolute_change=1 / 700,
+            pct_change=0.5,
+            low_volume=False,
+            calibration_break=False,
         )
-        grp = _group(chart_png_b64=png_b64)
-        path = render_report(_RUN_META, [grp], tmp_path)
-        content = path.read_text(encoding="utf-8")
-        assert "data:image/png;base64," in content
-
-    def test_trend_chart_is_labelled_a_relative_diagnostic(self, tmp_path: Path):
-        grp = _group(chart_png_b64="AAAA")
-        content = render_report(_RUN_META, [grp], tmp_path).read_text(encoding="utf-8")
+        content = render_report(_RUN_META, [_group(window_results=[window])], tmp_path).read_text(
+            encoding="utf-8"
+        )
         assert "relative movement, not an absolute anomaly level" in content
         assert "score --from-run" in content
 
-    def test_no_trend_note_when_there_is_no_chart(self, tmp_path: Path):
+    def test_no_trend_note_without_a_trend(self, tmp_path: Path):
         content = render_report(_RUN_META, [_group()], tmp_path).read_text(encoding="utf-8")
         assert "relative movement" not in content
 

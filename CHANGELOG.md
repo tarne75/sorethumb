@@ -8,7 +8,7 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- README "Is it the right tool?" section: a ranked shortlist for human review, not a sole control where a miss is unacceptable; labelled validation and domain review before relying on error rates; a fixed reference run for absolute comparison over time; and only trusted workspaces. HTML report trend charts now carry a note that independent-period trends are relative, not an absolute level.
+- README "Is it the right tool?" section: a ranked shortlist for human review, not a sole control where a miss is unacceptable; labelled validation and domain review before relying on error rates; a fixed reference run for absolute comparison over time; and only trusted workspaces. The HTML report's rolling-window trend table carries a note that independent-period trends are relative, not an absolute level.
 - `docs/stability.md`: the pre-1.0 API and stability policy. The top-level `sorethumb_ml` export set is now pinned by an exact-equality contract test, which also rejects public names that are importable but not exported.
 
 ### Changed
@@ -16,6 +16,10 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - README: installation, a core-only example and a short "What it does not do" list now come first, and the full benchmark matrices moved to `docs/benchmarks.md`, leaving a compact summary and a link. `scripts/run_benchmark.py --readme` is unchanged but now targets `docs/benchmarks.md`, where the result markers live.
 - `run --json` reports rows flagged for review as `n_flagged` (top level and per group) and no longer emits the redundant `n_anomalies` alias; the name describes a review shortlist rather than a prevalence estimate. Not breaking: nothing has been released.
 - Removed the never-raised `CalibrationModeWarning` and `NonFiniteWarning` classes from `sorethumb_ml.errors`, and the unused `KMeansDetector.last_labels` / `last_contributions` state (an extra N×d array held after every scoring call). Not breaking: nothing has been released.
+
+### Removed
+
+- The `report` extra (matplotlib) and the HTML report's "Chart" tab. The trend-chart helper was never wired into the report, so the tab always said "No chart available." and installing the extra changed nothing. Rolling-window trends remain available from `sorethumb history`. Not breaking: nothing has been released.
 
 ### Fixed
 

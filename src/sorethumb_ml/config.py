@@ -558,7 +558,7 @@ class ReportConfig(BaseModel):
     )
     rolling_windows: list[int] = Field(
         default_factory=lambda: [1, 7, 14, 28],
-        description="Rolling window sizes (in periods) shown in trend charts.",
+        description="Rolling window sizes (in periods) shown by `sorethumb history`.",
     )
 
 

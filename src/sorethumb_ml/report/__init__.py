@@ -1,1 +1,1 @@
-"""Reporting layer: trend charts, self-contained HTML, and sibling CSV files."""
+"""Reporting layer: self-contained HTML and sibling CSV files."""

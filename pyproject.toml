@@ -69,12 +69,6 @@ explain = [
     # old to support the newer Python versions this project supports.
     "numba>=0.67.0",
 ]
-# HTML report trend charts (report/charts.py). Not required for report
-# rendering itself (report/html.py has no matplotlib dependency) -- only for
-# render_trend_chart, which is not yet wired into the default report.
-report = [
-    "matplotlib>=3.8.0",
-]
 # The evaluation/benchmark harnesses (evaluate/benchmark.py's real-dataset
 # suite, evaluate/pipeline_benchmark.py's sklearn-baseline comparison rows).
 benchmark = [
@@ -187,8 +181,6 @@ max-complexity = 25
 "docs/**" = ["INP001"]
 # db.py builds IN-clause placeholders dynamically using '?' * len(list) — safe parameterised SQL
 "src/sorethumb_ml/store/db.py" = ["S608"]
-# charts.py calls matplotlib.use("Agg") before pyplot import — canonical pattern; renaming to mpl is unconventional
-"src/sorethumb_ml/report/charts.py" = ["ICN001"]
 # _pipeline.py: run_detection and _run_group are intentionally long orchestrators (82 and 72 stmts respectively)
 "src/sorethumb_ml/_pipeline.py" = ["PLR0915"]
 # cli.py: _generate_starter_toml contains nested helpers that inflate the statement count
@@ -214,7 +206,6 @@ module = [
     "joblib.*",
     "sklearn.*",
     "scipy.*",
-    "matplotlib.*",
     "numba.*",
     "datasets.*",
 ]

@@ -654,9 +654,9 @@ workdir = "./workspace"
 open_after = true
 ```
 
-### Custom trend-chart windows
+### Custom rolling windows
 
-Show 3-day, 7-day, and 30-day rolling windows in the HTML trend charts.
+Show 3-day, 7-day, and 30-day rolling windows in `sorethumb history`.
 
 ```toml
 [source]

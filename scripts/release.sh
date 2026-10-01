@@ -240,14 +240,12 @@ import sorethumb_ml
 from sorethumb_ml import Config, SourceConfig, run_detection
 import sorethumb_ml.explain.shap_tree
 import sorethumb_ml.explain.gradient
-import sorethumb_ml.report.charts
 print('core import OK', sorethumb_ml.__version__)
 "
 
-for extra in explain report benchmark dev; do
+for extra in explain benchmark dev; do
   case "$extra" in
     explain)   smoke_import="import shap, numba" ;;
-    report)    smoke_import="import matplotlib" ;;
     benchmark) smoke_import="import datasets, pandas" ;;
     dev)       smoke_import="import pytest, hypothesis, ruff, mypy" ;;
   esac

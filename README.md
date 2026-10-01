@@ -59,7 +59,6 @@ the CSV/HTML reports need. Optional extras add to it:
 - `pip install ".[explain]"` adds the SHAP package for TreeSHAP and KernelSHAP
   attributions. Without it those explanations fall back to a finite-difference
   method and say so with a warning.
-- `pip install ".[report]"` adds matplotlib for the trend-chart helper.
 - `pip install ".[benchmark]"` adds what the benchmark harness needs.
 
 ---
