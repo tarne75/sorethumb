@@ -205,7 +205,10 @@ the missing-indicator rule applies (`profiling.null_ratio_flag`, default `0.0`,
 so any missing value), a `<col>__is_missing` feature records which rows were
 imputed -- which means an isolated missing value in an otherwise complete
 column is itself a rare feature value, and that row can rank as somewhat
-unusual by design.
+unusual by design. The `0.0` default is deliberate: whether a value is
+missing is information an anomaly detector should see, and a higher threshold
+would hide it for columns with only a few nulls. If rarely-null columns add
+indicator noise for your data, raise `profiling.null_ratio_flag`.
 
 `+Inf` and `-Inf` are not imputed or clipped: no transformation preserves what
 an infinity means. An infinity in any column that feeds the feature matrix

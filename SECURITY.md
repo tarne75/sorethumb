@@ -100,8 +100,10 @@ for the exact procedure.
 Please do not report security vulnerabilities through public GitHub issues.
 
 Email the maintainer, Tarne Westcott, directly at hello@t4-digital.uk (the
-project's security contact) with the subject line "sorethumb security vulnerability". You will receive a response within
-72 hours acknowledging receipt.
+project's security contact) with the subject line "sorethumb security
+vulnerability". This is a small project maintained on a best-effort basis: I
+will try to acknowledge a report promptly and to fix confirmed issues as soon
+as I reasonably can, but I cannot promise a response time.
 
 Please include: a description of the vulnerability, steps to reproduce,
 potential impact, and any suggested fix.
