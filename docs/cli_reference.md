@@ -64,11 +64,39 @@ directory itself.
 
 ## Exit codes
 
-| Code | Meaning |
-|------|---------|
-| `0` | Success. |
-| `1` | One or more groups failed (returned by `run`, `score`, `backfill`). |
-| `2` | Configuration or argument error; no work was attempted. |
+Every command uses the same five codes. They are part of the CLI's stable
+interface (pre-1.0 policy: a change to any of them is called out in the
+CHANGELOG).
+
+| Code | `kind` / `outcome` | Meaning |
+|------|--------------------|---------|
+| `0` | `ok` | Success. |
+| `1` | `runtime` | Work was attempted and failed: a store or database error, a detector failure, every group failing, an error while rendering a requested report on its own, or a declined/aborted destructive command. |
+| `2` | `preflight` | Rejected before any work: bad arguments, a missing or invalid config file, a source or schema that cannot be read (including a source file that does not exist), a plan that cannot be built, or a group selector (`--only-group`/`--group-filter`) that matches no group. |
+| `3` | `not_found` | A run, workspace or persisted file that the command was asked to use does not exist (unknown run ID, no workspace at the configured path, a run with no persisted plan, `score --from-run` against a missing run). |
+| `4` | `partial` | Results were produced but something is missing: some groups failed while at least one succeeded, `backfill` periods failed while others completed, or every group succeeded but the requested report could not be rendered. The completed work is valid and kept. |
+
+Classification is by the type of the raised project error (each
+`SorethumbError` subclass carries a `failure_kind`; a third-party subclass that
+does not set one is `runtime`). `typer`'s own argument-parsing errors also exit `2`.
+
+### Machine-readable failures
+
+Every command with a `--json` flag emits **exactly one JSON document on stdout**
+for every outcome, and never Rich text on stderr in that mode. A failure with no
+result to report has the same three-key shape for all of them and for every
+failure class:
+
+```json
+{"error": "Run not found: run_abc", "kind": "not_found", "exit_code": 3}
+```
+
+`kind` is `preflight`, `not_found` or `runtime`, and `exit_code` always equals the
+process exit code. `run --json` and `score --json` that did complete (possibly
+partially) print their normal result document instead, which carries `exit_code`
+and `outcome` (`ok`, `partial`, `runtime` or `preflight`) alongside the usual
+fields, so a caller can branch on one field whether the run finished cleanly or
+not.
 
 ---
 
@@ -142,7 +170,7 @@ Groups that are already marked complete in the ledger are skipped unless
 
 If `--only-group`/`--group-filter` matches none of the groups actually
 discovered in the data, the run processes zero groups and fails outright
-(exit code 2; `--json` output's `"group_selection_error"` names the reason)
+(exit code 2; `--json` output's `"group_selection_error"` names the reason, and its `"outcome"` is `preflight`)
 rather than silently completing a no-op — no group/period history marker is
 written either, so a later `sorethumb backfill` still sees the gap. This is
 distinct from a genuinely empty source period (a period with no matching
@@ -459,7 +487,7 @@ The default output shows a Rich table of detectors plus key settings
 (source URI, workdir, seed, scoring). `--json` returns the full stored config.
 `--output` reconstructs a minimal `sorethumb.toml` you can edit and re-run.
 
-Exit code `1` if the run ID is not found in the workspace.
+Exit code `3` if the run ID is not found in the workspace.
 
 **Arguments:**
 

@@ -19,6 +19,7 @@ import logging.handlers
 import re
 from collections.abc import Callable
 from datetime import UTC
+from enum import IntEnum
 from pathlib import Path
 from typing import Annotated, Any, NoReturn
 
@@ -166,7 +167,7 @@ def _parse_detectors_flag(value: str) -> list[dict[str, Any]]:
     parts = [p.strip() for p in value.split(",") if p.strip()]
     if not parts:
         err_console.print("[red]--detectors: empty list — provide at least one detector alias.[/red]")
-        raise typer.Exit(2)
+        raise typer.Exit(int(ExitCode.PREFLIGHT))
 
     result: list[dict[str, Any]] = []
     for alias in parts:
@@ -174,7 +175,7 @@ def _parse_detectors_flag(value: str) -> list[dict[str, Any]]:
         if name is None:
             valid = ", ".join(sorted(_DETECTOR_ALIASES))
             err_console.print(f"[red]Unknown detector alias:[/red] {alias!r}\nValid aliases: {valid}")
-            raise typer.Exit(2)
+            raise typer.Exit(int(ExitCode.PREFLIGHT))
         det_cls = registry.get(name)
         cap: int | None = det_cls.default_train_row_cap if det_cls else None
         result.append({"name": name, "train_row_cap": cap})
@@ -187,19 +188,58 @@ def _parse_detectors_flag(value: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _fail(json_output: bool, message: str, code: int) -> NoReturn:
-    """Report *message* as the command's failure and exit *code* (P0-3).
+class ExitCode(IntEnum):
+    """The CLI's documented, stable exit codes (see docs/cli_reference.md#exit-codes).
 
-    JSON mode: a single ``{"error": message}`` document on stdout -- a
-    --json caller must get exactly one parseable document on the error path
-    just as much as the success path, never Rich text on stderr it has no
-    reason to read. Human mode: unchanged, Rich-formatted text on stderr.
+    0 success; 1 runtime failure (work was attempted and failed); 2 pre-flight
+    failure (usage, configuration, schema or source rejected before any work);
+    3 not found (a requested run, workspace or persisted file does not exist);
+    4 partial success (results were produced, but some groups, periods or the
+    requested report failed).
+    """
+
+    OK = 0
+    RUNTIME = 1
+    PREFLIGHT = 2
+    NOT_FOUND = 3
+    PARTIAL = 4
+
+    @property
+    def kind(self) -> str:
+        """Lower-case name used as the ``kind`` field of JSON error documents."""
+        return self.name.lower()
+
+
+_FAILURE_KIND_TO_EXIT: dict[str, ExitCode] = {
+    "runtime": ExitCode.RUNTIME,
+    "preflight": ExitCode.PREFLIGHT,
+    "not_found": ExitCode.NOT_FOUND,
+}
+
+
+def _classify_error(exc: SorethumbError) -> ExitCode:
+    """Map a project error to its exit code via the exception's ``failure_kind``.
+
+    Unknown kinds (a third-party subclass that sets something odd) fall back to
+    the runtime code rather than inventing a new one.
+    """
+    return _FAILURE_KIND_TO_EXIT.get(getattr(exc, "failure_kind", "runtime"), ExitCode.RUNTIME)
+
+
+def _fail(json_output: bool, message: str, code: ExitCode) -> NoReturn:
+    """Report *message* as the command's failure and exit with *code*.
+
+    JSON mode: a single document on stdout with the same shape for every
+    machine-readable command and every failure class --
+    ``{"error": <message>, "kind": <"runtime"|"preflight"|"not_found">,
+    "exit_code": <int>}`` -- never Rich text on stderr a --json caller has no
+    reason to read (P0-3). Human mode: Rich-formatted text on stderr.
     """
     if json_output:
-        typer.echo(json.dumps({"error": message}))
+        typer.echo(json.dumps({"error": message, "kind": code.kind, "exit_code": int(code)}))
     else:
         err_console.print(f"[red]{message}[/red]")
-    raise typer.Exit(code)
+    raise typer.Exit(int(code))
 
 
 def _guard_legacy_dot_workspace(*, json_output: bool = False) -> None:
@@ -225,7 +265,7 @@ def _guard_legacy_dot_workspace(*, json_output: bool = False) -> None:
             f'this workspace by passing --workdir . (or setting run.workdir = "." in '
             f"sorethumb.toml), or migrate to the new default by moving its contents "
             f"into ./{_DEFAULT_WORKDIR}/ yourself and re-running without --workdir.",
-            2,
+            ExitCode.PREFLIGHT,
         )
 
 
@@ -277,7 +317,7 @@ def _load_config(
             _fail(
                 json_output,
                 f"Config file not found: {config_path}. Run `sorethumb init` to create one.",
-                2,
+                ExitCode.PREFLIGHT,
             )
         raw = {}
     else:
@@ -317,7 +357,7 @@ def _load_config(
         cfg = Config.model_validate(raw)
     except ValidationError as exc:
         lines = [f"{' → '.join(str(p) for p in err['loc'])}: {err['msg']}" for err in exc.errors()]
-        _fail(json_output, "Configuration errors: " + "; ".join(lines), 2)
+        _fail(json_output, "Configuration errors: " + "; ".join(lines), ExitCode.PREFLIGHT)
 
     _add_file_handler(Path(cfg.run.workdir), cfg.run.log_level)
     return cfg
@@ -799,7 +839,7 @@ def run(
         try:
             re.compile(group_filter)
         except re.error as exc:
-            _fail(json_output, f"Invalid --group-filter regex: {exc}", 2)
+            _fail(json_output, f"Invalid --group-filter regex: {exc}", ExitCode.PREFLIGHT)
 
     if not json_output:
         console.print(f"[bold]sorethumb run[/bold]  workspace={cfg.run.workdir}")
@@ -825,15 +865,15 @@ def run(
             period_label_override=period,
         )
     except SorethumbError as exc:
-        _fail(json_output, f"run failed: {exc}", 2)
+        _fail(json_output, f"run failed: {exc}", _classify_error(exc))
 
     if json_output:
         typer.echo(json.dumps(_run_result_to_dict(result), default=str))
-        raise typer.Exit(_exit_code_for(result))
+        raise typer.Exit(int(_exit_code_for(result)))
 
     _print_run_summary(result)
 
-    raise typer.Exit(_exit_code_for(result))
+    raise typer.Exit(int(_exit_code_for(result)))
 
 
 # ---------------------------------------------------------------------------
@@ -878,16 +918,16 @@ def score(
     try:
         result: RunResult = score_forward(cfg, from_run, strict=cfg.run.strict, no_report=no_report)
     except SorethumbError as exc:
-        _fail(json_output, f"score --from-run failed: {exc}", 2)
+        _fail(json_output, f"score --from-run failed: {exc}", _classify_error(exc))
 
     if json_output:
         typer.echo(json.dumps(_run_result_to_dict(result), default=str))
-        raise typer.Exit(_exit_code_for(result))
+        raise typer.Exit(int(_exit_code_for(result)))
 
     _print_run_summary(result)
     if any(g.drifted for g in result.groups):
         console.print("[yellow]note:[/yellow] one or more groups showed schema/version drift.")
-    raise typer.Exit(_exit_code_for(result))
+    raise typer.Exit(int(_exit_code_for(result)))
 
 
 # ---------------------------------------------------------------------------
@@ -921,24 +961,25 @@ def report(
     cfg = _load_config(config, workdir=workdir, log_level=log_level)
     ws_path = Path(cfg.run.workdir)
 
-    with Workspace.open(ws_path) as ws:
+    try:
+        ws_cm = Workspace.open(ws_path)
+    except SorethumbError as exc:
+        _fail(False, str(exc), _classify_error(exc))
+    with ws_cm as ws:
         if run_id is None:
             runs = ws.store.list_runs(limit=1)
             if not runs:
-                err_console.print("[red]No runs found in workspace.[/red]")
-                raise typer.Exit(1)
+                _fail(False, "No runs found in workspace.", ExitCode.NOT_FOUND)
             run_id = str(runs[0]["run_id"])
 
         if ws.store.get_run(run_id) is None:
-            err_console.print(f"[red]Run not found:[/red] {run_id}")
-            raise typer.Exit(1)
+            _fail(False, f"Run not found: {run_id}", ExitCode.NOT_FOUND)
 
         n_groups = len(ws.store.all_run_groups(run_id))
         console.print(f"Re-rendering report for [cyan]{run_id}[/cyan] ({n_groups} groups)…")
         path = render_report_for_run(ws, run_id, formats=cfg.report.formats)
         if path is None:
-            err_console.print(f"[red]Could not render report for {run_id}.[/red] See the log for details.")
-            raise typer.Exit(1)
+            _fail(False, f"Could not render report for {run_id}. See the log for details.", ExitCode.RUNTIME)
         console.print(f"[green]Report written:[/green] {path}")
 
 
@@ -1064,7 +1105,8 @@ def backfill(
                 err_console.print(f"  {period_lbl}: failed group(s): {', '.join(names)}")
             for period_lbl, message in raised:
                 err_console.print(f"  {period_lbl}: raised {message}")
-            raise typer.Exit(1)
+            produced_results = n_ok > 0 or any(r.n_succeeded for _, r in failed_groups)
+            raise typer.Exit(int(ExitCode.PARTIAL if produced_results else ExitCode.RUNTIME))
 
         console.print("[green]Backfill complete.[/green]")
 
@@ -1174,7 +1216,7 @@ def list_runs_cmd(
         with Workspace.open(ws_path) as ws:
             runs = ws.store.list_runs(limit=limit)
     except SorethumbError as exc:
-        _fail(json_output, str(exc), 1)
+        _fail(json_output, str(exc), _classify_error(exc))
 
     if json_output:
         typer.echo(json.dumps(runs, default=str))
@@ -1228,11 +1270,11 @@ def show(
         with Workspace.open(ws_path) as ws:
             run_row = ws.store.get_run(run_id)
             if run_row is None:
-                _fail(json_output, f"Run not found: {run_id}", 1)
+                _fail(json_output, f"Run not found: {run_id}", ExitCode.NOT_FOUND)
 
             groups = ws.store.all_run_groups(run_id)
     except SorethumbError as exc:
-        _fail(json_output, str(exc), 1)
+        _fail(json_output, str(exc), _classify_error(exc))
 
     if group:
         groups = [g for g in groups if g.get("group_key") == group]
@@ -1303,12 +1345,12 @@ def anomalies(
             if run_id is None:
                 recent = ws.store.list_runs(limit=1)
                 if not recent:
-                    _fail(json_output, "No runs found in this workspace.", 1)
+                    _fail(json_output, "No runs found in this workspace.", ExitCode.NOT_FOUND)
                 run_id = str(recent[0]["run_id"])
 
             groups = ws.store.all_run_groups(run_id)
             if not groups:
-                _fail(json_output, f"Run not found or has no groups: {run_id}", 1)
+                _fail(json_output, f"Run not found or has no groups: {run_id}", ExitCode.NOT_FOUND)
 
             frames: list[pl.DataFrame] = []
             for g in groups:
@@ -1318,7 +1360,7 @@ def anomalies(
                     if len(df) > 0:
                         frames.append(df.with_columns(pl.lit(str(g.get("group_label", ""))).alias("_group")))
     except SorethumbError as exc:
-        _fail(json_output, str(exc), 1)
+        _fail(json_output, str(exc), _classify_error(exc))
 
     if not frames:
         if json_output:
@@ -1403,10 +1445,10 @@ def explain_plan(
         try:
             with Workspace.open(ws_path) as ws:
                 if ws.store.get_run(run_id) is None:
-                    _fail(json_output, f"Run not found: {run_id}", 1)
+                    _fail(json_output, f"Run not found: {run_id}", ExitCode.NOT_FOUND)
                 plan = load_plan(ws, run_id)
         except SorethumbError as exc:
-            _fail(json_output, str(exc), 1)
+            _fail(json_output, str(exc), _classify_error(exc))
     else:
         cache_dir = ws_path / "cache" / "datasets"
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -1414,7 +1456,7 @@ def explain_plan(
             df = load_dataset(cfg.source, cache_dir=cache_dir)
             plan = build_feature_plan(df, cfg)
         except SorethumbError as exc:
-            _fail(json_output, str(exc), 2)
+            _fail(json_output, str(exc), _classify_error(exc))
 
     if json_output:
         typer.echo(plan.to_json())
@@ -1539,10 +1581,10 @@ def config_show(
         with Workspace.open(ws_path) as ws:
             run_row = ws.store.get_run(run_id)
     except SorethumbError as exc:
-        _fail(json_output, str(exc), 1)
+        _fail(json_output, str(exc), _classify_error(exc))
 
     if run_row is None:
-        _fail(json_output, f"Run not found: {run_id}", 1)
+        _fail(json_output, f"Run not found: {run_id}", ExitCode.NOT_FOUND)
 
     config_json: str = run_row.get("config_json") or "{}"
 
@@ -1609,7 +1651,7 @@ def workspace_ls(
         with Workspace.open(ws_path) as ws:
             runs = ws.store.list_runs(limit=50)
     except SorethumbError as exc:
-        _fail(json_output, str(exc), 1)
+        _fail(json_output, str(exc), _classify_error(exc))
 
     if json_output:
         typer.echo(json.dumps({"runs": runs}, default=str))
@@ -1680,8 +1722,7 @@ def workspace_prune(
         with Workspace.open(ws_path) as ws:
             removed = ws.prune(days, dry_run=dry_run)
     except SorethumbError as exc:
-        err_console.print(f"[red]workspace prune failed:[/red] {exc}")
-        raise typer.Exit(2) from exc
+        _fail(False, f"workspace prune failed: {exc}", _classify_error(exc))
 
     prefix = "Would remove" if dry_run else "Removed"
     for item in removed:
@@ -1768,7 +1809,7 @@ def _guard_reset_target(ws_path: Path) -> None:
         err_console.print(f"[red]Refusing to reset {ws_path}:[/red]")
         for reason in reasons:
             err_console.print(f"  - {reason}")
-        raise typer.Exit(2)
+        raise typer.Exit(int(ExitCode.PREFLIGHT))
 
 
 @workspace_app.command(name="reset")
@@ -1802,8 +1843,7 @@ def workspace_reset(
         with Workspace.open(ws_path):
             pass
     except SorethumbError as exc:
-        err_console.print(f"[red]Refusing to reset {ws_path}: not a sorethumb workspace ({exc})[/red]")
-        raise typer.Exit(2) from exc
+        _fail(False, f"Refusing to reset {ws_path}: not a sorethumb workspace ({exc})", _classify_error(exc))
 
     console.print(f"[red bold]This will destroy:[/red bold] {ws_path}")
     if not yes:
@@ -1814,10 +1854,10 @@ def workspace_reset(
             # P0-3: closed stdin must terminate cleanly, not crash with a
             # traceback -- same outcome as typing the wrong path: abort.
             err_console.print("[red]No input available (stdin closed). Aborting.[/red]")
-            raise typer.Exit(1) from None
+            raise typer.Exit(int(ExitCode.RUNTIME)) from None
         if typed != str(ws_path):
             err_console.print("[red]Path did not match. Aborting.[/red]")
-            raise typer.Exit(1)
+            raise typer.Exit(int(ExitCode.RUNTIME))
 
     import shutil  # noqa: PLC0415
 
@@ -1825,7 +1865,7 @@ def workspace_reset(
         shutil.rmtree(ws_path)
     except OSError as exc:
         err_console.print(f"[red]Failed to fully delete {ws_path}:[/red] {exc}")
-        raise typer.Exit(1) from exc
+        raise typer.Exit(int(ExitCode.RUNTIME)) from exc
 
     console.print(f"[green]Workspace destroyed:[/green] {ws_path}")
 
@@ -1835,19 +1875,27 @@ def workspace_reset(
 # ---------------------------------------------------------------------------
 
 
-def _exit_code_for(result: RunResult) -> int:
-    """1 if any group failed, a requested report failed to render, or a group selector matched nothing.
+def _exit_code_for(result: RunResult) -> ExitCode:
+    """Classify a finished run into one of the documented exit codes.
 
-    0 otherwise. A report failure never means the detection/scoring results are wrong --
-    but the user explicitly asked for a report and didn't get one, and a
-    silent success-shaped exit code would hide that. A group_selection_error
-    (P1-4) means the run processed *zero* groups because --only-group/
-    --group-filter matched none of them -- n_failed alone can't catch this,
-    since an empty groups list makes it (and n_succeeded/n_skipped) 0 too,
-    which would otherwise print and exit exactly like "nothing to do, all
-    fine" rather than "your selector likely has a typo".
+    - ``PREFLIGHT`` (2): a group selector (--only-group/--group-filter) matched
+      nothing, so zero groups were processed -- almost certainly a typo, and
+      distinct from "nothing to do, all fine" (an empty groups list makes
+      ``n_failed`` 0 too).
+    - ``PARTIAL`` (4): results exist but something is missing: some groups failed
+      while at least one succeeded, or every group succeeded and the explicitly
+      requested report failed to render (the detection results are still right,
+      but a success-shaped exit would hide the missing report).
+    - ``RUNTIME`` (1): groups were attempted and none succeeded.
+    - ``OK`` (0) otherwise.
     """
-    return 1 if (result.n_failed or result.report_status == "failed" or result.group_selection_error) else 0
+    if result.group_selection_error:
+        return ExitCode.PREFLIGHT
+    if result.n_failed:
+        return ExitCode.PARTIAL if result.n_succeeded else ExitCode.RUNTIME
+    if result.report_status == "failed":
+        return ExitCode.PARTIAL
+    return ExitCode.OK
 
 
 def _print_run_summary(result: RunResult) -> None:
@@ -1922,7 +1970,10 @@ def _print_run_summary(result: RunResult) -> None:
 
 
 def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
+    code = _exit_code_for(result)
     return {
+        "exit_code": int(code),
+        "outcome": code.kind,
         "run_id": result.run_id,
         "dataset_uri": result.dataset_uri,
         "dataset_fp": result.dataset_fp,

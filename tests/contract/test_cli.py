@@ -396,11 +396,11 @@ def test_config_show_output_writes_toml(workspace, tmp_path):
     assert "source" in raw
 
 
-def test_config_show_unknown_run_exits_1(workspace):
+def test_config_show_unknown_run_exits_not_found(workspace):
     _, toml_path, workdir = workspace
     runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
     result = runner.invoke(app, ["config", "show", "nonexistent_run_id", "--config", str(toml_path)])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
 
 
 # ---------------------------------------------------------------------------
@@ -569,11 +569,11 @@ def test_show_prints_run_detail(workspace):
     assert run_id in result.stdout
 
 
-def test_show_unknown_run_exits_1(workspace):
+def test_show_unknown_run_exits_not_found(workspace):
     _, toml_path, workdir = workspace
     runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
     result = runner.invoke(app, ["show", "run_nonexistent", "--config", str(toml_path)])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
 
 
 # ---------------------------------------------------------------------------
@@ -698,11 +698,11 @@ def test_explain_plan_unknown_run_id_is_not_found(workspace):
     _, toml_path, workdir = workspace
     _run_and_get_run_id(toml_path, workdir)
     result = runner.invoke(app, ["explain-plan", "no-such-run", "--config", str(toml_path), "--json"])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "Run not found: no-such-run" in json.loads(result.stdout)["error"]
 
     human = runner.invoke(app, ["explain-plan", "no-such-run", "--config", str(toml_path)])
-    assert human.exit_code == 1
+    assert human.exit_code == 3
 
 
 def test_explain_plan_run_without_persisted_plan_is_clear_error(workspace):
@@ -713,7 +713,7 @@ def test_explain_plan_run_without_persisted_plan_is_clear_error(workspace):
     with Workspace.open(workdir) as ws:
         (ws.run_dir(run_id) / "plan.json").unlink()
     result = runner.invoke(app, ["explain-plan", run_id, "--config", str(toml_path), "--json"])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "No persisted FeaturePlan" in json.loads(result.stdout)["error"]
 
 
@@ -888,7 +888,7 @@ def test_runs_json_missing_workspace_emits_single_json_document(tmp_path: Path):
     toml_path = tmp_path / "sorethumb.toml"
     _write_toml(toml_path, tmp_path / "unused.csv", tmp_path / "never-created-ws")
     proc = _run_json_subprocess(["runs", "--config", str(toml_path), "--json"])
-    assert proc.returncode == 1
+    assert proc.returncode == 3
     data = json.loads(proc.stdout)
     assert "error" in data
 
@@ -897,7 +897,7 @@ def test_show_json_run_not_found_emits_single_json_document(workspace):
     _, toml_path, _ = workspace
     runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
     proc = _run_json_subprocess(["show", "does-not-exist", "--config", str(toml_path), "--json"])
-    assert proc.returncode == 1
+    assert proc.returncode == 3
     data = json.loads(proc.stdout)
     assert "error" in data
     assert "does-not-exist" in data["error"]
@@ -936,7 +936,7 @@ def test_anomalies_json_run_not_found_emits_single_json_document(workspace):
     _, toml_path, workdir = workspace
     runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
     proc = _run_json_subprocess(["anomalies", "does-not-exist", "--config", str(toml_path), "--json"])
-    assert proc.returncode == 1
+    assert proc.returncode == 3
     data = json.loads(proc.stdout)
     assert "error" in data
 
@@ -945,6 +945,6 @@ def test_config_show_json_run_not_found_emits_single_json_document(workspace):
     _, toml_path, _ = workspace
     runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
     proc = _run_json_subprocess(["config", "show", "does-not-exist", "--config", str(toml_path), "--json"])
-    assert proc.returncode == 1
+    assert proc.returncode == 3
     data = json.loads(proc.stdout)
     assert "error" in data

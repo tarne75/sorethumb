@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 from typing import Self
 
-from sorethumb_ml.errors import StoreError
+from sorethumb_ml.errors import NotFoundError, StoreError
 from sorethumb_ml.store.db import Store
 
 logger = logging.getLogger(__name__)
@@ -85,18 +85,18 @@ class Workspace:
 
     @classmethod
     def open(cls, path: str | Path) -> Workspace:
-        """Open an existing workspace. Raises StoreError if *path* is not a workspace."""
+        """Open an existing workspace. Raises NotFoundError (a StoreError) if *path* is not a workspace."""
         root = Path(path).resolve()
         if not root.is_dir():
             msg = f"Workspace path does not exist or is not a directory: {root}"
-            raise StoreError(msg)
+            raise NotFoundError(msg)
         db_path = root / _MARKER_DB
         if not db_path.is_file():
             msg = (
                 f"{root} exists but is not a sorethumb workspace "
                 f"(no {_MARKER_DB}). Run 'sorethumb init {root}' first."
             )
-            raise StoreError(msg)
+            raise NotFoundError(msg)
         store = Store(db_path)
         return cls(root, store)
 
@@ -213,7 +213,9 @@ class Workspace:
     @staticmethod
     def _check_retention_days(retention_days: int) -> None:
         if retention_days < 0:
-            raise StoreError(
+            err = StoreError(
                 f"retention_days must be >= 0, got {retention_days}. A negative value would "
                 "match every artifact regardless of age, including ones just written."
             )
+            err.failure_kind = "preflight"  # a rejected argument, before anything is touched
+            raise err

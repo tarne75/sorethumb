@@ -233,11 +233,11 @@ def test_run_exits_nonzero_and_reports_status_when_report_generation_fails(
     _, toml_path, _ = workspace
     result = runner.invoke(app, ["run", "--config", str(toml_path)])
     output = result.stdout + (result.stderr or "")
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     assert "Report generation failed" in output
 
     json_result = runner.invoke(app, ["run", "--config", str(toml_path), "--force", "--json"])
-    assert json_result.exit_code == 1
+    assert json_result.exit_code == 4
     payload = json.loads(json_result.stdout)
     assert payload["report_status"] == "failed"
     assert payload["report_path"] is None
@@ -501,7 +501,7 @@ def test_score_from_missing_run_fails(workspace):
     result = runner.invoke(
         app, ["score", "--from-run", "run_nope", "--config", str(toml_path), "--no-report"]
     )
-    assert result.exit_code == 2
+    assert result.exit_code == 3, result.output
 
 
 # ---------------------------------------------------------------------------
@@ -542,7 +542,7 @@ def test_report_unknown_run_id_errors(workspace):
     _, toml_path, workdir = workspace
     runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
     result = runner.invoke(app, ["report", "run_nope", "--config", str(toml_path)])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "Run not found" in result.stdout + (result.stderr or "")
 
 
@@ -821,7 +821,7 @@ def test_backfill_collects_every_result_and_exits_nonzero_on_any_failure(
     output = result.stdout + (result.stderr or "")
 
     assert set(seen_labels) == set(labels), "every pending period must still be processed, not stopped early"
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     assert failing_label in output
     assert "failed" in output.lower()
     assert "Backfill complete." not in output
@@ -858,7 +858,7 @@ def test_backfill_continues_past_a_period_that_raises_and_summarises_it_separate
     output = result.stdout + (result.stderr or "")
 
     assert result.exception is None or isinstance(result.exception, SystemExit)
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     assert set(seen) == set(labels), "later periods must still be processed"
     # The two healthy periods really ran to completion; the raising one left no totals.
     assert _totals_period_labels(toml_path, workdir, labels) == set(labels) - {bad}
@@ -916,7 +916,7 @@ def test_backfill_summary_lists_raised_periods_and_failed_groups_separately(
     result = runner.invoke(app, ["backfill", "--config", str(toml_path)])
     output = result.stdout + (result.stderr or "")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     assert "2 failed period(s) of 3 (1 succeeded)" in output
     assert f"{raising}: raised StoreError: injected store failure" in output
     assert f"{group_failing}: failed group(s): grp-x" in output

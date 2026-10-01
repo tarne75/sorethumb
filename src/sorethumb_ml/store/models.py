@@ -40,6 +40,7 @@ from sorethumb_ml.errors import (
     ModelSchemaDriftWarning,
     ModelVersionMismatchError,
     ModelVersionMismatchWarning,
+    NotFoundError,
     StoreError,
 )
 from sorethumb_ml.scoring.calibrate import Calibrator
@@ -103,7 +104,7 @@ def save_plan(workspace: Workspace, run_id: str, plan_json: str) -> str:
 def load_plan(workspace: Workspace, run_id: str) -> Any:
     """Load the fitted FeaturePlan persisted for *run_id*.
 
-    Raises StoreError if the run predates plan persistence or the file is gone.
+    Raises NotFoundError (a StoreError) if the run predates plan persistence or the file is gone.
     """
     from sorethumb_ml.profiling.plan import FeaturePlan  # noqa: PLC0415
 
@@ -113,7 +114,7 @@ def load_plan(workspace: Workspace, run_id: str) -> Any:
             f"No persisted FeaturePlan for run {run_id!r} at {path}. "
             "The run may predate plan persistence; re-run it to enable score-forward."
         )
-        raise StoreError(msg)
+        raise NotFoundError(msg)
     return FeaturePlan.from_json(path.read_text(encoding="utf-8"))
 
 

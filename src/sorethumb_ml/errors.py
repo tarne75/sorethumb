@@ -7,23 +7,41 @@ that a failed strict-mode run names the exact config field that controls it.
 
 
 class SorethumbError(Exception):
-    """Base exception. All library errors are subclasses."""
+    """Base exception. All library errors are subclasses.
+
+    ``failure_kind`` classifies the failure for the CLI's documented exit codes:
+    ``"runtime"`` (the default: work was attempted and failed), ``"preflight"``
+    (the inputs were rejected before any work: configuration, schema, source,
+    plan) or ``"not_found"`` (a requested run, workspace or persisted file does
+    not exist). Subclasses override it; third-party subclasses inherit
+    ``"runtime"``.
+    """
+
+    failure_kind: str = "runtime"
 
 
 class ConfigError(SorethumbError):
     """Raised for invalid or missing configuration values."""
 
+    failure_kind = "preflight"
+
 
 class SourceError(SorethumbError):
     """Raised when a data source cannot be resolved or fetched."""
+
+    failure_kind = "preflight"
 
 
 class SchemaError(SorethumbError):
     """Raised when a dataset's schema is unreadable or ambiguous."""
 
+    failure_kind = "preflight"
+
 
 class PlanError(SorethumbError):
     """Raised when a FeaturePlan is invalid or cannot be applied."""
+
+    failure_kind = "preflight"
 
 
 class DetectorError(SorethumbError):
@@ -38,12 +56,24 @@ class StoreError(SorethumbError):
     """Raised for workspace or database access failures."""
 
 
+class NotFoundError(StoreError):
+    """A requested run, workspace or persisted file does not exist.
+
+    A :class:`StoreError` subclass, so existing ``except StoreError`` handlers
+    keep working; the CLI reports it with the dedicated not-found exit code.
+    """
+
+    failure_kind = "not_found"
+
+
 class MemoryBudgetError(SorethumbError):
     """Raised when the projected feature-matrix size exceeds run.max_memory_mb.
 
     A pre-flight check in features.build, before any model is fitted — not a live
     RSS ceiling.
     """
+
+    failure_kind = "preflight"
 
 
 class ModelSchemaDriftError(SorethumbError):

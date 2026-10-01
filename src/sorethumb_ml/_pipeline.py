@@ -34,6 +34,7 @@ from sorethumb_ml.detectors import registry
 from sorethumb_ml.errors import (
     AttributionBackendWarning,
     ConfigError,
+    NotFoundError,
     ReportGenerationWarning,
     SampleTruncatedWarning,
     SchemaError,
@@ -1004,7 +1005,7 @@ def score_forward(
     ws_path = Path(config.run.workdir)
     if not (ws_path.exists() and (ws_path / "sorethumb.db").exists()):
         msg = f"No workspace at {ws_path}; cannot score against run {source_run_id!r}."
-        raise StoreError(msg)
+        raise NotFoundError(msg)
 
     issued_warnings: list[str] = []
 
@@ -1014,7 +1015,7 @@ def score_forward(
         source_run = ws.store.get_run(source_run_id)
         if source_run is None:
             msg = f"Source run {source_run_id!r} not found in workspace {ws_path}."
-            raise StoreError(msg)
+            raise NotFoundError(msg)
         if source_run["status"] != "complete":
             msg = (
                 f"Source run {source_run_id!r} has status {source_run['status']!r}; "
