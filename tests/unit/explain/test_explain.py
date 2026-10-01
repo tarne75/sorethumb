@@ -81,20 +81,20 @@ def _fit_hbos(n: int = 200, d: int = 4, seed: int = 0):
 
 def test_gradient_shape():
     det, X = _fit_if()
-    attrs, tag = gradient_attributions(det, X)
+    attrs, tag = gradient_attributions(det, X, reference=X)
     assert attrs.shape == X.shape
     assert tag == "heuristic"
 
 
 def test_gradient_dtype():
     det, X = _fit_if()
-    attrs, _ = gradient_attributions(det, X)
+    attrs, _ = gradient_attributions(det, X, reference=X)
     assert attrs.dtype == np.float64
 
 
 def test_gradient_max_rows_cap():
     det, X = _fit_if(n=200)
-    attrs, _ = gradient_attributions(det, X, max_rows=50)
+    attrs, _ = gradient_attributions(det, X, reference=X, max_rows=50)
     assert attrs.shape[0] == 50
 
 
@@ -103,7 +103,7 @@ def test_gradient_nonzero_for_clear_outlier():
     # IsolationForest path-lengths saturate for extreme outliers, making gradient zero.
     det, X = _fit_ocsvm(n=200)
     outlier = np.array([[5.0, 5.0, 5.0, 5.0]])
-    attrs, _ = gradient_attributions(det, outlier, max_rows=10)
+    attrs, _ = gradient_attributions(det, outlier, reference=X, max_rows=10)
     assert not np.allclose(attrs, 0.0), "outlier should have nonzero gradient"
 
 
@@ -112,7 +112,7 @@ def test_gradient_consistent_sign_convention():
     det, X = _fit_if(n=200, seed=42)
     # Take the mean of the data and evaluate gradient
     mean_pt = X.mean(axis=0, keepdims=True)
-    attrs, _ = gradient_attributions(det, mean_pt, max_rows=10)
+    attrs, _ = gradient_attributions(det, mean_pt, reference=X, max_rows=10)
     # Not testing sign here (depends on direction) — just that it runs and has right shape
     assert attrs.shape == (1, 4)
 
@@ -126,7 +126,7 @@ def test_kernel_shap_attributions_shape():
     from sorethumb_ml.explain.gradient import kernel_shap_attributions
 
     det, X = _fit_if(n=30, d=4, seed=0)
-    attrs, tag = kernel_shap_attributions(det, X, background_k=5, max_rows=5000)
+    attrs, tag = kernel_shap_attributions(det, X, reference=X, background_k=5, max_rows=5000)
     assert attrs.shape == X.shape
     assert tag == "heuristic"
 
@@ -135,7 +135,7 @@ def test_kernel_shap_attributions_row_cap():
     from sorethumb_ml.explain.gradient import kernel_shap_attributions
 
     det, X = _fit_if(n=30, d=3, seed=0)
-    attrs, _ = kernel_shap_attributions(det, X, background_k=3, max_rows=10)
+    attrs, _ = kernel_shap_attributions(det, X, reference=X, background_k=3, max_rows=10)
     assert attrs.shape[0] == 10
 
 
@@ -152,7 +152,7 @@ def test_kernel_shap_falls_back_to_gradient_when_shap_not_installed(monkeypatch)
 
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        attrs, tag = kernel_shap_attributions(det, X, background_k=5, max_rows=5000)
+        attrs, tag = kernel_shap_attributions(det, X, reference=X, background_k=5, max_rows=5000)
 
     assert tag == "heuristic"
     assert attrs.shape == X.shape
@@ -202,14 +202,14 @@ def test_centroid_dtype():
 
 def test_tree_shap_shape():
     det, X = _fit_if(n=200)
-    attrs, tag = tree_shap_attributions(det, X[:20])
+    attrs, tag = tree_shap_attributions(det, X[:20], reference=X)
     assert attrs.shape == (20, 4)
     assert tag == "model_specific"
 
 
 def test_tree_shap_dtype():
     det, X = _fit_if()
-    attrs, _ = tree_shap_attributions(det, X[:10])
+    attrs, _ = tree_shap_attributions(det, X[:10], reference=X)
     assert attrs.dtype == np.float64
 
 
@@ -232,7 +232,7 @@ def test_tree_shap_fallback_on_single_node(monkeypatch):
 
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        attrs, tag = tree_shap_attributions(det, X[:10], group_name="test_group")
+        attrs, tag = tree_shap_attributions(det, X[:10], group_name="test_group", reference=X)
 
     assert tag == "heuristic"
     assert any(issubclass(x.category, FallbackAttributionWarning) for x in w)
@@ -250,7 +250,7 @@ def test_tree_shap_falls_back_gracefully_when_shap_not_installed(monkeypatch):
 
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        attrs, tag = tree_shap_attributions(det, X[:10], group_name="test_group")
+        attrs, tag = tree_shap_attributions(det, X[:10], group_name="test_group", reference=X)
 
     assert tag == "heuristic"
     assert attrs.shape == (10, 4)
@@ -264,7 +264,7 @@ def test_tree_shap_outliers_get_higher_attributions():
     det, X = _fit_if(n=200)
     X_out = X.copy()
     X_out[:5] += 20.0  # clear outliers in first 5 rows
-    attrs, tag = tree_shap_attributions(det, X_out)
+    attrs, tag = tree_shap_attributions(det, X_out, reference=X)
     outlier_mean_attr = attrs[:5].sum(axis=1).mean()
     normal_mean_attr = attrs[5:].sum(axis=1).mean()
     assert outlier_mean_attr > normal_mean_attr, "outliers should have higher total attribution"

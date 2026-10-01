@@ -90,6 +90,7 @@ during pre-release hardening rather than changes from an earlier release.
 Pre-release hardening surfaced and fixed real issues across the codebase
 before anything shipped:
 
+- **Attribution scale and background come from a normal reference**: the gradient and KernelSHAP explainers now take target rows separately from a required `reference` matrix. Perturbation step sizes and the KernelSHAP background were previously derived from the flagged rows themselves, so an explanation changed with the other rows flagged in the same run and a lone flagged row had a zero-variance fallback step. The pipeline passes the unflagged rows as the reference (the whole population when fewer than 10 are unflagged) and computes attributions only for flagged rows.
 - **Missing and non-finite values**: float `NaN` is now treated as missing
   (imputed like a null) instead of leaking into scaling, and the feature
   matrix no longer replaces anything non-finite with `0.0` after scaling --

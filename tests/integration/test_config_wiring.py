@@ -274,6 +274,34 @@ def test_explain_kernel_shap_routes_non_tree_detectors(
     assert seen.index("gradient") < seen.index("kernel")
 
 
+def test_explain_passes_flagged_targets_and_a_disjoint_normal_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1-1: gradient/KernelSHAP get only the flagged rows as targets and, separately, the unflagged rows
+    as the reference -- never the targets standing in for their own scale/background."""
+    import sorethumb_ml.explain.gradient as gradient
+
+    calls: list[tuple[np.ndarray, np.ndarray]] = []
+
+    def _spy(_det, x, *, reference, **_k):
+        calls.append((np.asarray(x), np.asarray(reference)))
+        return np.zeros((x.shape[0], x.shape[1]), dtype=np.float64), "heuristic"
+
+    monkeypatch.setattr(gradient, "gradient_attributions", _spy)
+    csv = _write_csv(tmp_path / "d.csv")
+    run_detection(
+        _cfg(csv, tmp_path / "ws", detectors=[DetectorConfig(name="one_class_svm")]),
+        no_report=True,
+    )
+
+    assert calls, "the gradient explainer was never reached"
+    targets, reference = calls[0]
+    assert 0 < len(targets) < len(reference)
+    target_rows = {tuple(r) for r in targets}
+    assert not any(tuple(r) in target_rows for r in reference), "reference must not contain flagged rows"
+    assert len(targets) + len(reference) == 120  # every row is exactly one or the other
+
+
 # ---------------------------------------------------------------------------
 # explain.permutation_importance
 # ---------------------------------------------------------------------------

@@ -41,6 +41,8 @@ def tree_shap_attributions(
     detector: IsolationForestDetector,
     X: np.ndarray,
     group_name: str = "",
+    *,
+    reference: np.ndarray,
 ) -> tuple[np.ndarray, str]:
     """Compute per-row TreeSHAP attributions for an IsolationForest.
 
@@ -49,9 +51,15 @@ def tree_shap_attributions(
     detector:
         A fitted IsolationForestDetector.
     X:
-        Float64 feature matrix, shape (n_rows, n_features).
+        Float64 *target* rows to explain, shape (n_rows, n_features).
     group_name:
         Used in warning messages when the fallback is triggered.
+    reference:
+        Float64 full or normal population in the same feature space. TreeSHAP
+        itself reads the fitted trees and does not use it; it is required because
+        the gradient fallback below does (it scales its perturbation from the
+        reference, not from the target rows), so a fallback can never silently
+        degrade to scaling by the targets.
 
     Returns
     -------
@@ -97,5 +105,5 @@ def tree_shap_attributions(
     # Fallback: import here to avoid circular dependency at module load time
     from sorethumb_ml.explain.gradient import gradient_attributions  # noqa: PLC0415
 
-    attrs, _ = gradient_attributions(detector, X)
+    attrs, _ = gradient_attributions(detector, X, reference=reference)
     return attrs, "heuristic"

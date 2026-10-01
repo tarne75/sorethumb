@@ -1811,6 +1811,30 @@ def _finalize_group(
     )
 
 
+# Fewer unflagged rows than this and the "normal population" is too small to give
+# perturbation scales or a SHAP background worth trusting; the full population
+# (flagged rows included) is used instead.
+_MIN_NORMAL_REFERENCE_ROWS = 10
+
+
+def _attribution_reference(X: np.ndarray, flagged_idx: np.ndarray) -> np.ndarray:
+    """Return the reference population for attribution (P1-1): the group's normal (unflagged) rows.
+
+    Per-dimension perturbation scales (finite-difference gradients) and the
+    KernelSHAP background must describe what the detector considers *normal*,
+    never the handful of flagged target rows being explained -- their own spread
+    is tiny and contaminated by the anomalies themselves, and depends on which
+    other rows happen to be flagged. Falls back to the full population when
+    fewer than ``_MIN_NORMAL_REFERENCE_ROWS`` rows are unflagged (a group where
+    almost everything is flagged has no meaningful "normal" subset).
+    """
+    unflagged = np.ones(len(X), dtype=bool)
+    unflagged[flagged_idx] = False
+    if int(unflagged.sum()) < _MIN_NORMAL_REFERENCE_ROWS:
+        return X
+    return X[unflagged]
+
+
 def _compute_attributions(
     config: Config,
     det_instances: dict[str, Any],
@@ -1893,7 +1917,10 @@ def _compute_attributions(
     n_rows = len(X)
     n_features = X.shape[1]
     n_flagged = len(flagged_idx)
+    # Targets vs reference (P1-1): explainers get only the flagged rows to
+    # explain, and, separately, the normal population to scale/background against.
     X_flagged = X[flagged_idx]
+    reference = _attribution_reference(X, flagged_idx)
 
     sources: list[tuple[np.ndarray, str]] = []
     source_weights: list[float] = []
@@ -1926,18 +1953,15 @@ def _compute_attributions(
             continue
         try:
             if isinstance(det, IsolationForestDetector):
-                # Full matrix needed; SHAP attributes all rows — never capped.
-                full_attr, tag = tree_shap_attributions(det, X, group_name=det_name)
-                attr = full_attr[flagged_idx]
+                # Flagged rows only (each row's SHAP values are independent of
+                # the others); never capped.
+                attr, tag = tree_shap_attributions(det, X_flagged, group_name=det_name, reference=reference)
             elif isinstance(det, KMeansDetector):
-                full_attr, tag = centroid_attributions(det, X)  # also uncapped
-                attr = full_attr[flagged_idx]
+                attr, tag = centroid_attributions(det, X_flagged)  # also uncapped
             elif isinstance(det, ECODDetector):
-                full_attr, tag = ecod_attributions(det, X)  # exact, uncapped
-                attr = full_attr[flagged_idx]
+                attr, tag = ecod_attributions(det, X_flagged)  # exact, uncapped
             elif isinstance(det, HBOSDetector):
-                full_attr, tag = hbos_attributions(det, X)  # exact, uncapped
-                attr = full_attr[flagged_idx]
+                attr, tag = hbos_attributions(det, X_flagged)  # exact, uncapped
             elif isinstance(det, (OneClassSVMDetector, LOFDetector)):
                 # Finite-difference gradients, restricted to detectors whose
                 # score responds continuously to a small perturbation (see the
@@ -1946,9 +1970,11 @@ def _compute_attributions(
                 # back shorter than X_flagged.
                 max_rows = config.explain.max_rows
                 if config.explain.kernel_shap:
-                    attr, tag = kernel_shap_attributions(det, X_flagged, max_rows=max_rows)
+                    attr, tag = kernel_shap_attributions(
+                        det, X_flagged, reference=reference, max_rows=max_rows
+                    )
                 else:
-                    attr, tag = gradient_attributions(det, X_flagged, max_rows=max_rows)
+                    attr, tag = gradient_attributions(det, X_flagged, reference=reference, max_rows=max_rows)
             else:
                 # An attribution method for this detector type hasn't been
                 # vetted for smoothness. Finite-difference on a step-function

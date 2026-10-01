@@ -100,6 +100,20 @@ not attributed) rather than defaulting to gradient — silently guessing at a
 score's smoothness is exactly the failure mode this restriction exists to
 prevent.
 
+## Attribution reference population — targets are explained against normal rows
+
+Gradient and KernelSHAP attributions take the rows to explain (`X`, only the flagged
+rows in `_pipeline.py::_compute_attributions`) separately from a required `reference`
+matrix in the same feature space. The finite-difference step for each feature is
+`step_factor` times the *reference* standard deviation, and the KernelSHAP background is
+`shap.kmeans` of the *reference* — never of the targets. The pipeline's reference is the
+unflagged rows; if fewer than 10 rows are unflagged it falls back to the whole
+population. Deriving scale from the flagged rows themselves would make an explanation
+depend on which other rows happened to be flagged alongside it, and a lone flagged row
+would have zero standard deviation. A reference over 10,000 rows is subsampled
+deterministically (seed 0) for the KernelSHAP background. The reference is still the
+output of an unsupervised flag decision, so it is only *mostly* normal (see below).
+
 ## Contaminated fitting — no clean reference set
 
 Every detector's `.fit()` call (`_pipeline.py`, the per-group fitting loop) is given
