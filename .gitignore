@@ -43,3 +43,6 @@ PLAN.md
 *[Rr][Ee][Vv][Ii][Ee][Ww]*.md
 *[Rr][Ee][Vv][Ii][Ee][Ww]*.docx
 *[Rr][Ee][Vv][Ii][Ee][Ww]*.pdf
+
+# Delete-pending placeholders an SMB/CIFS share leaves while a deleted file is still open
+.smbdelete*

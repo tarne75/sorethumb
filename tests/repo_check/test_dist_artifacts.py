@@ -61,7 +61,7 @@ _FORBIDDEN_SDIST_PREFIXES = (
     ".mypy_cache/",
     "htmlcov/",
 )
-_FORBIDDEN_NAME_SUBSTRINGS = ("__pycache__", ".pyc", ".DS_Store", ".coverage")
+_FORBIDDEN_NAME_SUBSTRINGS = ("__pycache__", ".pyc", ".DS_Store", ".coverage", ".smbdelete")
 
 _METADATA_FIELDS_MUST_MATCH = (
     "Name",
