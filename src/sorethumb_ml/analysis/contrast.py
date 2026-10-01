@@ -3,6 +3,14 @@
 Per-record explanations answer "why is this row odd". Contrast answers "how does the
 flagged set differ from the unflagged set". It is diagnostic output computed after
 flagging; a failure here must never fail a run — all exceptions are caught and logged.
+
+``contrast_score`` is on one bounded scale for every column kind, so numeric and
+categorical columns can be ranked in the same table: the largest difference in
+probability mass the two cohorts assign to any one event, in ``[0, 1]``. For a
+numeric column that is the two-sample Kolmogorov-Smirnov statistic (events are
+half-lines); for a categorical column it is the total variation distance (events
+are sets of categories). 0 means identical distributions, 1 means disjoint
+support, and neither depends on how many rows either cohort has.
 """
 
 from __future__ import annotations
@@ -10,7 +18,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import numpy as np
 import polars as pl
 
 logger = logging.getLogger(__name__)
@@ -28,7 +35,8 @@ def compute_contrast(
     """Compare flagged vs unflagged cohorts column by column.
 
     Returns a Polars frame sorted by descending contrast score with columns:
-    feature, kind (numeric|categorical), stat_name, stat_value, contrast_score.
+    feature, kind (numeric|categorical), stat_name, stat_value, contrast_score
+    (``stat_value`` equals ``contrast_score``; ``stat_name`` says which statistic it is).
 
     Failures on individual columns are caught and skipped so a single bad column
     never aborts the contrast computation.
@@ -88,18 +96,14 @@ def _numeric_contrast(
     if len(a) < _MIN_SAMPLES or len(b) < _MIN_SAMPLES:
         return None
 
-    cohens_d = _cohens_d(a, b)
     ks_stat, _ = ks_2samp(a, b)
-
-    # Combined score: abs Cohen's d boosted by KS (both range ~0→∞ and 0→1)
-    contrast_score = abs(cohens_d) + ks_stat
 
     return {
         "feature": col,
         "kind": "numeric",
-        "stat_name": "cohens_d",
-        "stat_value": float(cohens_d),
-        "contrast_score": float(contrast_score),
+        "stat_name": "ks_statistic",
+        "stat_value": float(ks_stat),
+        "contrast_score": float(ks_stat),
     }
 
 
@@ -120,25 +124,15 @@ def _categorical_contrast(
     freq_a = {v: c / total_a for v, c in a.value_counts().iter_rows()}
     freq_b = {v: c / total_b for v, c in b.value_counts().iter_rows()}
 
-    max_lift = 0.0
-    for cat, pa in freq_a.items():
-        pb = freq_b.get(cat, 0.0)
-        lift = pa / pb if pb > 0 else pa * total_b  # treat as infinite lift, bound by count
-        max_lift = max(max_lift, lift)
+    # Total variation distance: half the L1 distance between the two category
+    # distributions. A category present in only one cohort contributes its full
+    # frequency; nothing is divided by a possibly-zero count.
+    tvd = 0.5 * sum(abs(freq_a.get(cat, 0.0) - freq_b.get(cat, 0.0)) for cat in freq_a.keys() | freq_b.keys())
 
     return {
         "feature": col,
         "kind": "categorical",
-        "stat_name": "max_lift",
-        "stat_value": float(max_lift),
-        "contrast_score": float(max_lift),
+        "stat_name": "total_variation",
+        "stat_value": float(tvd),
+        "contrast_score": float(tvd),
     }
-
-
-def _cohens_d(a: np.ndarray, b: np.ndarray) -> float:
-    n_a, n_b = len(a), len(b)
-    pooled_var = ((n_a - 1) * a.var(ddof=1) + (n_b - 1) * b.var(ddof=1)) / (n_a + n_b - 2)
-    pooled_std = float(np.sqrt(pooled_var)) if pooled_var > 0 else 0.0
-    if pooled_std == 0.0:
-        return 0.0
-    return float((a.mean() - b.mean()) / pooled_std)
