@@ -23,6 +23,21 @@ from tests.factories.workspaces import open_workspace as _open_ws
 
 pytestmark = pytest.mark.contract
 
+
+def _bundled_versions() -> list[int]:
+    """Versions of the shipped migration files, read from the package itself, so a new
+    migration does not require editing every test that asserts "all migrations applied"."""
+    from importlib.resources import files
+
+    return sorted(
+        int(entry.name[:3])
+        for entry in files("sorethumb_ml.store.migrations").iterdir()
+        if entry.name.endswith(".sql") and entry.name[:3].isdigit()
+    )
+
+
+_BUNDLED_VERSIONS = _bundled_versions()
+
 # ---------------------------------------------------------------------------
 # Workspace.init / open
 # ---------------------------------------------------------------------------
@@ -115,7 +130,7 @@ def test_all_bundled_migrations_apply_cleanly(tmp_path):
     """Every shipped migration file applies without error and is recorded."""
     with Store(tmp_path / "m.db") as store:
         versions = {r[0] for r in store._conn.execute("SELECT version FROM schema_migration")}
-    assert versions == {1, 2, 3, 4, 5, 6, 7}
+    assert versions == set(_BUNDLED_VERSIONS)
 
 
 def test_migration_003_adds_artifact_run_id_column(tmp_path):
@@ -146,6 +161,217 @@ def test_migration_006_adds_period_execution_table(tmp_path):
         "failed_count",
         "complete",
     } <= cols
+
+
+# --- query plans and required indexes (P2-3) ---------------------------------------------
+
+# index name -> (table, ordered columns). Dropping or reshaping one of these makes a
+# Store query scan a table that grows with the workspace's history.
+_REQUIRED_INDEXES: dict[str, tuple[str, tuple[str, ...]]] = {
+    "idx_model_run_group": ("model", ("run_id", "group_key")),
+    "idx_run_started_at": ("run", ("started_at",)),
+    "idx_run_status_started_at": ("run", ("status", "started_at")),
+    "idx_run_source": ("run", ("source_run_id",)),
+    "idx_artifact_run_id": ("artifact", ("run_id",)),
+    "idx_dataset_snapshot_fp": ("dataset_snapshot", ("snapshot_fp",)),
+    "idx_totals_period": ("totals", ("dataset_fp", "period_label", "config_hash", "group_key")),
+    "idx_period_execution_last_complete": (
+        "period_execution",
+        ("dataset_fp", "config_hash", "complete", "period_label"),
+    ),
+}
+
+
+def _index_columns(conn, name: str) -> tuple[str, ...]:
+    return tuple(
+        r["name"] for r in sorted(conn.execute(f"PRAGMA index_info({name})"), key=lambda r: r["seqno"])
+    )
+
+
+def test_required_indexes_exist_with_the_expected_columns(tmp_path):
+    with Store(tmp_path / "m.db") as store:
+        conn = store._conn
+        found = {
+            r["name"]: r["tbl_name"]
+            for r in conn.execute("SELECT name, tbl_name FROM sqlite_master WHERE type='index'")
+        }
+        for name, (table, columns) in _REQUIRED_INDEXES.items():
+            assert found.get(name) == table, f"missing index {name} on {table}"
+            assert _index_columns(conn, name) == columns, f"index {name} has the wrong columns"
+        assert "idx_period_execution_dataset" not in found  # superseded by ..._last_complete
+
+
+# (query, parameter count, table that must not be full-scanned). Only queries on tables that
+# grow with history are listed; the artifact prune's regenerable branch is a documented,
+# deliberate scan (see migration 008).
+_PLANNED_QUERIES: dict[str, tuple[str, int, str, str | None]] = {
+    "models_for_run_group": (
+        "SELECT * FROM model WHERE run_id=? AND group_key=?",
+        2,
+        "model",
+        "idx_model_run_group",
+    ),
+    "runs_list": (
+        "SELECT * FROM run ORDER BY started_at DESC LIMIT ?",
+        1,
+        "run",
+        "idx_run_started_at",
+    ),
+    "run_by_id": (
+        "SELECT * FROM run WHERE run_id=?",
+        1,
+        "run",
+        None,
+    ),
+    "run_group_for_run": (
+        "SELECT * FROM run_group WHERE run_id=?",
+        1,
+        "run_group",
+        None,
+    ),
+    "run_group_one": (
+        "SELECT status FROM run_group WHERE run_id=? AND group_key=?",
+        2,
+        "run_group",
+        None,
+    ),
+    "failed_runs_for_prune": (
+        "SELECT * FROM run WHERE status='failed' AND julianday('now') - julianday(started_at) > ?",
+        1,
+        "run",
+        "idx_run_status_started_at",
+    ),
+    "artifacts_of_failed_runs": (
+        "SELECT a.* FROM artifact a JOIN run r ON a.run_id = r.run_id WHERE r.run_id = ?",
+        1,
+        "artifact",
+        None,
+    ),
+    "artifact_path_conflict": (
+        "SELECT artifact_id FROM artifact WHERE path=? AND artifact_id != ?",
+        2,
+        "artifact",
+        None,
+    ),
+    "period_complete": (
+        "SELECT complete FROM period_execution WHERE dataset_fp=? AND period_label=? AND config_hash=?",
+        3,
+        "period_execution",
+        None,
+    ),
+    "last_complete_period": (
+        "SELECT MAX(period_label) FROM period_execution WHERE dataset_fp=? AND config_hash=? AND complete=1",
+        2,
+        "period_execution",
+        "idx_period_execution_last_complete",
+    ),
+    "completed_group_keys": (
+        "SELECT DISTINCT group_key FROM totals WHERE dataset_fp=? AND period_label=? AND config_hash=?",
+        3,
+        "totals",
+        "idx_totals_period",
+    ),
+    "totals_for_periods": (
+        "SELECT * FROM totals WHERE dataset_fp=? AND config_hash=? AND period_label IN (?, ?)",
+        4,
+        "totals",
+        "idx_totals_period",
+    ),
+    "other_config_hashes": (
+        "SELECT DISTINCT config_hash FROM totals WHERE dataset_fp=? AND period_label IN (?, ?) AND config_hash != ?",
+        4,
+        "totals",
+        "idx_totals_period",
+    ),
+    "delete_totals_for_period": (
+        "DELETE FROM totals WHERE dataset_fp=? AND period_label=? AND config_hash=?",
+        3,
+        "totals",
+        "idx_totals_period",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_PLANNED_QUERIES))
+def test_store_queries_do_not_scan_growing_tables(tmp_path, name):
+    sql, n_params, table, required_index = _PLANNED_QUERIES[name]
+    with Store(tmp_path / "m.db") as store:
+        plan = [r["detail"] for r in store._conn.execute("EXPLAIN QUERY PLAN " + sql, ["x"] * n_params)]
+    # "SCAN t USING INDEX ..." is an ordered index walk; a bare "SCAN t" reads the whole table.
+    scans = [d for d in plan if d.split()[:2] == ["SCAN", table] and "USING" not in d]
+    assert not scans, f"{name} full-scans {table}: {plan}"
+    if required_index is not None:
+        assert any(required_index in d for d in plan), f"{name} should use {required_index}: {plan}"
+    # The runs listing sorts by an indexed column, so no sort step either.
+    if name == "runs_list":
+        assert not any("TEMP B-TREE" in d for d in plan), plan
+
+
+def test_the_stores_real_read_and_delete_statements_have_no_unexpected_full_scans(tmp_path):
+    """The table above copies SQL; this one captures what the Store methods actually run
+    (sqlite's trace callback), so a new or changed query is checked without editing a list."""
+    captured: list[str] = []
+    with Store(tmp_path / "m.db") as store:
+        store._conn.set_trace_callback(captured.append)
+        store.dataset_snapshots("fp")
+        store.list_runs(10)
+        store.get_run("r")
+        store.run_status("r")
+        store.group_status("r", "g")
+        store.get_run_group("r", "g")
+        store.completed_groups("r")
+        store.all_run_groups("r")
+        store.models_for_run_group("r", "g")
+        store.calibrator_for_model("m")
+        store.artifacts_for_prune(30)
+        store.period_is_complete("fp", "p", "c")
+        store.last_complete_period_label("fp", "c")
+        store.completed_group_keys("fp", "p", "c")
+        store.totals_for_periods("fp", ["p1", "p2"], "c", ["g1"])
+        store.totals_for_periods("fp", ["p1", "p2"], "c")
+        store.other_config_hashes_for_periods("fp", ["p1", "p2"], "c")
+        store.delete_totals_for_period("fp", "p", "c")
+        store._conn.set_trace_callback(None)
+
+        statements = [
+            q
+            for q in captured
+            if q.lstrip().upper().startswith(("SELECT", "DELETE")) and "EXPLAIN" not in q.upper()
+        ]
+        assert len(statements) >= 15, statements  # the capture itself works
+        # The artifact prune's regenerable branch is a documented, deliberate scan (migration 008)
+        # and is the only bare table scan allowed.
+        allowed = {"SCAN a"}
+        offenders = []
+        for sql in statements:
+            for row in store._conn.execute("EXPLAIN QUERY PLAN " + sql):
+                detail = row["detail"]
+                if detail.startswith("SCAN ") and "USING" not in detail and detail not in allowed:
+                    offenders.append((sql, detail))
+    assert not offenders, offenders
+
+
+def test_a_workspace_at_the_previous_schema_gains_the_new_indexes_on_open(tmp_path):
+    """The indexes arrive through a numbered migration, not by editing an applied one: a
+    workspace already at migration 007 picks them up (and keeps its data) when reopened."""
+    db = tmp_path / "old.db"
+    with Store(db) as store:
+        store._conn.execute("DROP INDEX idx_model_run_group")
+        store._conn.execute("DROP INDEX idx_totals_period")
+        store._conn.execute("DROP INDEX idx_run_started_at")
+        store._conn.execute("DROP INDEX idx_run_status_started_at")
+        store._conn.execute("DROP INDEX idx_period_execution_last_complete")
+        store._conn.execute(
+            "CREATE INDEX idx_period_execution_dataset ON period_execution(dataset_fp, config_hash)"
+        )
+        store._conn.execute("DELETE FROM schema_migration WHERE version=8")
+        store._conn.commit()
+    with Store(db) as store:
+        names = {r[0] for r in store._conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        applied = {r[0] for r in store._conn.execute("SELECT version FROM schema_migration")}
+    assert 8 in applied
+    assert set(_REQUIRED_INDEXES) <= names
+    assert "idx_period_execution_dataset" not in names
 
 
 def test_execute_ddl_rejects_alter_table_identifier_starting_with_digit(tmp_path):
@@ -186,7 +412,7 @@ def test_a_migration_failing_partway_rolls_back_and_is_safely_replayable(tmp_pat
     # must not have left the DB in a state a plain reopen can't handle.
     with Store(db) as store:
         versions = {r[0] for r in store._conn.execute("SELECT version FROM schema_migration")}
-    assert versions == {1, 2, 3, 4, 5, 6, 7}, "a clean reopen must fully migrate after a rolled-back failure"
+    assert versions == set(_BUNDLED_VERSIONS), "a clean reopen must fully migrate after a rolled-back failure"
 
 
 def test_store_second_open_no_duplicate_migration(tmp_path):
@@ -236,7 +462,7 @@ def test_concurrent_opens_all_succeed_and_migrate_once(tmp_path):
         versions = [
             r[0] for r in store._conn.execute("SELECT version FROM schema_migration ORDER BY version")
         ]
-    assert versions == [1, 2, 3, 4, 5, 6, 7]
+    assert versions == _BUNDLED_VERSIONS
 
 
 def test_migrations_record_a_checksum(tmp_path):

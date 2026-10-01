@@ -12,6 +12,7 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Workspace database: migration 008 adds indexes for queries that scanned tables growing with history (`model` by run and group, `run` listing and failed-run pruning, `totals` and `period_execution` period lookups). Existing workspaces pick them up when next opened; no data changes.
 - Atomic writes (models, results, reports, manifests, cached downloads) now also fsync the parent directory after the rename, so the rename itself survives a crash; platforms or filesystems that cannot fsync a directory skip this silently, and other errors propagate. Temporary files are still removed on any failure.
 - HTTP source downloads handle `Content-Length` explicitly: an absent header (chunked transfer) and a malformed one (non-numeric, negative, signed, duplicated or with an impossible number of digits) are treated as undeclared, with the malformed case logged and ignored, while the streaming `source.max_download_bytes` ceiling is always enforced. Previously a malformed value raised a bare `ValueError` instead of a `SourceError`.
 - `sorethumb init` no longer reports success when the workspace could not be created: it prints an error, suppresses the success banner, exits `1`, and states explicitly when `sorethumb.toml` was nevertheless written. Unwritable target paths now fail cleanly instead of with a traceback.
