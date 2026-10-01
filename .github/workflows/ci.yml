@@ -121,6 +121,9 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     env:
       HYPOTHESIS_PROFILE: nightly
+      # The real-dataset benchmark skips when it cannot fetch data; here the
+      # network is expected, so an unreachable dataset must fail the job.
+      SORETHUMB_REQUIRE_NETWORK: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
