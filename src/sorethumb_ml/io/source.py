@@ -79,7 +79,7 @@ from urllib.request import url2pathname
 
 import httpx
 
-from sorethumb_ml._atomic import _fsync_path
+from sorethumb_ml._atomic import promote_durably
 from sorethumb_ml.config import SourceConfig
 from sorethumb_ml.errors import SourceError
 from sorethumb_ml.io.fingerprint import content_fingerprint
@@ -406,9 +406,8 @@ def _resolve_http(
 
 
 def _promote(tmp_path: Path, dest: Path) -> None:
-    """Fsync *tmp_path* then atomically rename it to *dest* (same filesystem)."""
-    _fsync_path(tmp_path)
-    os.replace(tmp_path, dest)  # noqa: PTH105 — os.replace IS the atomic-rename primitive
+    """Fsync *tmp_path*, atomically rename it to *dest* (same filesystem), fsync the directory."""
+    promote_durably(tmp_path, dest)
 
 
 def _build_auth_headers(config: SourceConfig) -> dict[str, str]:
