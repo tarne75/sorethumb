@@ -83,6 +83,35 @@ def test_a_correct_release_state_commit_passes(tmp_path):
     assert _check(_repo(tmp_path)) == []
 
 
+# --- entries left under [Unreleased] -------------------------------------------------
+
+
+def test_entries_left_under_unreleased_are_rejected(tmp_path):
+    changelog = _CHANGELOG.replace(
+        "## [Unreleased]\n", "## [Unreleased]\n\n### Fixed\n\n- Forgotten fix.\n", 1
+    )
+    _one(_check(_repo(tmp_path, changelog=changelog)), "under [Unreleased]")
+
+
+def test_unreleased_with_only_empty_subheadings_passes(tmp_path):
+    changelog = _CHANGELOG.replace("## [Unreleased]\n", "## [Unreleased]\n\n### Fixed\n\n", 1)
+    assert _check(_repo(tmp_path, changelog=changelog)) == []
+
+
+def test_unreleased_entries_are_reported_alongside_a_wrong_newest_section(tmp_path):
+    changelog = _CHANGELOG.replace("## [Unreleased]\n", "## [Unreleased]\n\n- Pending.\n", 1)
+    problems = _check(_repo(tmp_path, changelog=changelog, pyproject_version="0.3.0"), version="0.3.0")
+    assert any("newest release section" in p for p in problems), problems
+    assert any("under [Unreleased]" in p for p in problems), problems
+
+
+def test_a_changelog_with_no_unreleased_section_passes(tmp_path):
+    changelog = _CHANGELOG.replace("## [Unreleased]\n\n", "", 1).replace(
+        "[Unreleased]: https://github.com/example/repo/compare/v0.2.0...HEAD\n", ""
+    )
+    assert _check(_repo(tmp_path, changelog=changelog)) == []
+
+
 # --- changelog date -------------------------------------------------------------------
 
 
@@ -129,7 +158,8 @@ def test_newest_changelog_section_must_be_the_version_being_tagged(tmp_path):
 
 def test_only_unreleased_heading_means_no_release_section(tmp_path):
     problems = _check(_repo(tmp_path, changelog="# Changelog\n\n## [Unreleased]\n\n- stuff\n"))
-    _one(problems, "no released")
+    assert any("no released" in p for p in problems), problems
+    assert any("under [Unreleased]" in p for p in problems), problems
 
 
 def test_empty_release_section_is_rejected(tmp_path):

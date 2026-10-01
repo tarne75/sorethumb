@@ -26,6 +26,9 @@ refuses the tag until all of it holds, and lists every problem at once:
 
 - `pyproject.toml`'s version equals the version being tagged, and `CHANGELOG.md`'s
   newest section is `## [X.Y.Z] - YYYY-MM-DD` with content, not `[Unreleased]`.
+  `[Unreleased]` itself must hold no entries: move them into the release section
+  (an empty `## [Unreleased]` heading above it is fine), or the tag would publish
+  release notes that omit them.
 - That date is the actual tag date (the **UTC** date the tag is pushed), never a
   future date and never a placeholder. The `[Unreleased]` and `[X.Y.Z]` footer
   links name `vX.Y.Z`.

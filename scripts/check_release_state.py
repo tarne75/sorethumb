@@ -15,7 +15,8 @@ Checks (stdlib only, so CI can run it without installing the project):
 * ``CHANGELOG.md``'s newest release section is for that version, has content,
   and a real ``YYYY-MM-DD`` date that is not in the future and -- when
   ``--tag-date`` is given -- is exactly the tag date; the ``[Unreleased]`` and
-  ``[X.Y.Z]`` footer links name ``vX.Y.Z``;
+  ``[X.Y.Z]`` footer links name ``vX.Y.Z``; and ``[Unreleased]`` holds no entries
+  (anything left there would be missing from the release's own notes);
 * ``SECURITY.md`` and ``README.md`` carry no pre-release wording ("has not yet
   had its first tagged release", "not yet on PyPI", "Status: pre-release", and
   -- from 1.0 on -- "pre-1.0") that the version being tagged contradicts.
@@ -61,7 +62,33 @@ def _collapse(text: str) -> str:
     return re.sub(r"\s*\n\s*(?:>\s*)?", " ", text)
 
 
+def _unreleased_problems(text: str) -> list[str]:
+    """Flag entries still sitting under ``## [Unreleased]`` when a release is being tagged.
+
+    Everything that ships belongs in the release's own section; whatever is left
+    under [Unreleased] is, by definition, not part of the release notes the tag
+    publishes. A trailing link-reference block is part of the file, not of the section.
+    """
+    heading = re.search(r"^## \[Unreleased\]\s*$", text, flags=re.MULTILINE | re.IGNORECASE)
+    if heading is None:
+        return []
+    following = _HEADING_RE.search(text, heading.end())
+    body = text[heading.end() : following.start() if following else len(text)]
+    body = re.sub(r"^\[[^\]]+\]:\s*\S+\s*$", "", body, flags=re.MULTILINE)
+    entries = [line for line in body.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    if not entries:
+        return []
+    return [
+        f"CHANGELOG.md still has {len(entries)} line(s) of entries under [Unreleased]: move them into the "
+        "release section, so the release notes the tag publishes include them, and leave [Unreleased] empty."
+    ]
+
+
 def _changelog_problems(text: str, version: str, tag_date: date | None, today: date) -> list[str]:
+    return _release_section_problems(text, version, tag_date, today) + _unreleased_problems(text)
+
+
+def _release_section_problems(text: str, version: str, tag_date: date | None, today: date) -> list[str]:
     problems: list[str] = []
     headings = [m for m in _HEADING_RE.finditer(text) if m.group("name").lower() != "unreleased"]
     if not headings:
