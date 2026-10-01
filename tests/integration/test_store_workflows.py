@@ -393,3 +393,118 @@ def test_concurrent_write_results_does_not_corrupt_the_workspace(tmp_path):
 
         # And the database connection itself is unharmed by the contention.
         assert ws.store.run_status("run1") == "running"
+
+
+# ---------------------------------------------------------------------------
+# register_artifact is an UPSERT keyed by artifact_id (P1-5)
+# ---------------------------------------------------------------------------
+
+
+def _artifact_row(ws, artifact_id):
+    row = ws.store._conn.execute("SELECT * FROM artifact WHERE artifact_id=?", (artifact_id,)).fetchone()
+    return None if row is None else dict(row)
+
+
+def _age_artifact(ws, artifact_id, created_at="2020-01-01T00:00:00Z"):
+    ws.store._conn.execute("UPDATE artifact SET created_at=? WHERE artifact_id=?", (created_at, artifact_id))
+    ws.store._conn.commit()
+
+
+def test_reregistering_an_artifact_preserves_created_at_and_updates_mutable_fields(tmp_path):
+    with _open_ws(tmp_path) as ws:
+        ws.store.upsert_dataset("fp1", "uri", "sfp", "cfp", 10, 2)
+        ws.store.insert_run("run_a", "fp1", "{}", 0)
+        ws.store.register_artifact("art", str(tmp_path / "f1"), "model", 10, False, run_id="run_a")
+        _age_artifact(ws, "art")
+
+        for size in (20, 30, 40):  # repeated registration, as a resumed/forced run does
+            ws.store.register_artifact("art", str(tmp_path / "f2"), "results", size, True, run_id="run_a")
+
+        row = _artifact_row(ws, "art")
+    assert row["created_at"] == "2020-01-01T00:00:00Z"  # age survives every re-registration
+    assert (row["path"], row["kind"], row["byte_size"], row["regenerable"]) == (
+        str(tmp_path / "f2"),
+        "results",
+        40,
+        1,
+    )
+    assert row["run_id"] == "run_a"
+
+
+def test_reregistering_without_a_run_id_keeps_the_existing_owner(tmp_path):
+    with _open_ws(tmp_path) as ws:
+        ws.store.upsert_dataset("fp1", "uri", "sfp", "cfp", 10, 2)
+        ws.store.insert_run("run_a", "fp1", "{}", 0)
+        ws.store.register_artifact("art", str(tmp_path / "f"), "model", 1, False, run_id="run_a")
+        ws.store.register_artifact("art", str(tmp_path / "f"), "model", 2, False)
+        assert _artifact_row(ws, "art")["run_id"] == "run_a"
+
+
+def test_repeated_registration_does_not_reset_the_prune_clock(tmp_path):
+    """A regenerable artifact older than the retention window stays prunable after it is re-registered;
+    INSERT OR REPLACE reset created_at to 'now' and made it immortal on every resume."""
+    with _open_ws(tmp_path) as ws:
+        ws.store.register_artifact("old", str(tmp_path / "old.html"), "report", 5, True)
+        _age_artifact(ws, "old")
+        ws.store.register_artifact("old", str(tmp_path / "old.html"), "report", 6, True)
+        assert [r["artifact_id"] for r in ws.store.artifacts_for_prune(retention_days=30)] == ["old"]
+
+
+def test_a_path_owned_by_another_artifact_is_an_error_and_changes_nothing(tmp_path):
+    from sorethumb_ml.errors import StoreError
+
+    shared = str(tmp_path / "shared.bin")
+    with _open_ws(tmp_path) as ws:
+        ws.store.register_artifact("first", shared, "model", 1, False)
+        _age_artifact(ws, "first")
+        with pytest.raises(StoreError, match="first"):
+            ws.store.register_artifact("second", shared, "model", 2, False)
+
+        assert _artifact_row(ws, "second") is None
+        kept = _artifact_row(ws, "first")
+        # The original registration is untouched (INSERT OR REPLACE deleted it).
+        assert kept is not None
+        assert kept["created_at"] == "2020-01-01T00:00:00Z"
+        assert kept["byte_size"] == 1
+        # The connection is still usable after the refusal.
+        ws.store.register_artifact("third", str(tmp_path / "other.bin"), "model", 3, False)
+        assert _artifact_row(ws, "third") is not None
+
+
+def test_a_path_can_change_hands_only_by_deleting_the_old_registration(tmp_path):
+    shared = str(tmp_path / "shared.bin")
+    with _open_ws(tmp_path) as ws:
+        ws.store.register_artifact("first", shared, "model", 1, False)
+        ws.store.delete_artifact("first")
+        ws.store.register_artifact("second", shared, "model", 2, False)
+        assert _artifact_row(ws, "first") is None
+        assert _artifact_row(ws, "second")["path"] == shared
+
+
+def test_a_forced_rerun_keeps_every_artifact_age(tmp_path):
+    """End to end through the real writers (plan, models, results): re-running the same run with
+    force=True re-registers every artifact id; none may lose its age or its row."""
+    from sorethumb_ml import Workspace
+    from sorethumb_ml._pipeline import run_detection
+    from tests.factories.configs import make_config
+    from tests.factories.frames import write_leading_anomaly_csv
+
+    csv = write_leading_anomaly_csv(tmp_path / "d.csv")
+    cfg = make_config(csv, tmp_path / "ws", contamination=0.05, combination="composite")
+    run_detection(cfg, no_report=True)
+
+    with Workspace.open(tmp_path / "ws") as ws:
+        ids = [
+            r["artifact_id"] for r in ws.store._conn.execute("SELECT artifact_id FROM artifact").fetchall()
+        ]
+        assert any(i.endswith("_plan") for i in ids)
+        assert len(ids) >= 4
+        ws.store._conn.execute("UPDATE artifact SET created_at='2020-01-01T00:00:00Z'")
+        ws.store._conn.commit()
+
+    run_detection(cfg, no_report=True, force=True)
+
+    with Workspace.open(tmp_path / "ws") as ws:
+        rows = ws.store._conn.execute("SELECT artifact_id, created_at FROM artifact").fetchall()
+    assert sorted(r["artifact_id"] for r in rows) == sorted(ids)
+    assert {r["created_at"] for r in rows} == {"2020-01-01T00:00:00Z"}

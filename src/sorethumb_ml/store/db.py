@@ -612,19 +612,53 @@ class Store:
         regenerable: bool,
         run_id: str | None = None,
     ) -> None:
-        """Register a file artifact in the index.
+        """Register (or re-register) a file artifact in the index.
+
+        An UPSERT keyed by ``artifact_id``: registering the same id again updates
+        its mutable fields (``path``, ``kind``, ``byte_size``, ``regenerable``,
+        and ``run_id`` when one is given) and **never touches ``created_at``**,
+        which the prune policy ages artifacts by. (``INSERT OR REPLACE`` deleted
+        and re-inserted the row, silently resetting that age on every resume.)
+
+        A path is owned by exactly one artifact. Registering a path that another
+        ``artifact_id`` already owns is an error (``StoreError``), not a transfer:
+        a silent hand-over would delete the other artifact's row while its owner
+        still believes the file is tracked, and a later prune of either would
+        remove the file out from under the other. Callers that really mean to move
+        a file must ``delete_artifact`` the old id first. The existing
+        registrations all derive both id and path from ``(run, group, detector)``,
+        so legitimate re-registration always reuses the same id.
 
         *run_id* is the run that produced the artifact; it lets the prune query
         join failed runs to their artifacts by equality rather than a path
         substring match. Pass it whenever the artifact belongs to a run.
         """
-        self._conn.execute(
-            """
-            INSERT OR REPLACE INTO artifact (artifact_id, path, kind, byte_size, regenerable, run_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (artifact_id, path, kind, byte_size, 1 if regenerable else 0, run_id),
-        )
+        try:
+            self._conn.execute(
+                """
+                INSERT INTO artifact (artifact_id, path, kind, byte_size, regenerable, run_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(artifact_id) DO UPDATE SET
+                    path        = excluded.path,
+                    kind        = excluded.kind,
+                    byte_size   = excluded.byte_size,
+                    regenerable = excluded.regenerable,
+                    run_id      = COALESCE(excluded.run_id, artifact.run_id)
+                """,
+                (artifact_id, path, kind, byte_size, 1 if regenerable else 0, run_id),
+            )
+        except sqlite3.IntegrityError as exc:
+            self._conn.rollback()
+            owner = self._conn.execute(
+                "SELECT artifact_id FROM artifact WHERE path = ? AND artifact_id != ?", (path, artifact_id)
+            ).fetchone()
+            if owner is None:
+                raise
+            raise StoreError(
+                f"Cannot register artifact {artifact_id!r}: path {path!r} is already owned by "
+                f"artifact {owner['artifact_id']!r}. Delete the existing registration first if the "
+                "file is meant to change hands."
+            ) from exc
         self._conn.commit()
 
     def artifacts_for_prune(self, retention_days: int) -> list[dict[str, Any]]:
