@@ -22,7 +22,9 @@
 #   - Does not bump pyproject.toml's version -- it must already say the
 #     version you're releasing.
 #   - Does not rewrite CHANGELOG.md's [Unreleased] section into a dated
-#     release section -- that section must already exist with real content.
+#     release section -- that section must already exist with real content,
+#     dated with today's UTC date (the tag date), in the same release-state
+#     commit that updates SECURITY.md and README.md (see section 2 below).
 #   - Does not commit or push anything to `main` -- your working tree must
 #     already be clean and already match origin/main exactly.
 #
@@ -110,6 +112,14 @@ _ok "$TAG does not already exist, locally or on origin"
 #    forces that flip to happen as its own commit before a real tag can be
 #    pushed, rather than relying on remembering to do it. When it fires,
 #    that one commit should, together:
+#      - CHANGELOG.md: rename [Unreleased] to "## [X.Y.Z] - <tag date>" (the
+#        UTC date you will push the tag, never a future date), add a fresh
+#        empty [Unreleased], and point the [Unreleased]/[X.Y.Z] footer links
+#        at vX.Y.Z (P0-9).
+#      - SECURITY.md: rewrite "has not yet had its first tagged release" in
+#        "Supported Versions" to state the released version (P0-9).
+#      - README.md: replace the "Status: pre-release" banner and the
+#        "not yet published to PyPI" sentence (P0-9) as well as the below.
 #      - README.md: replace the "Not yet on PyPI. Install from a clone:"
 #        paragraph with the real `pip install sorethumb-ml` command as the
 #        primary path; keep "install from a clone" as a labelled
@@ -130,12 +140,20 @@ _ok "$TAG does not already exist, locally or on origin"
 #    scoping note this codifies.
 # ---------------------------------------------------------------------------
 
-_step "Checking release-state documentation has been updated"
+_step "Checking release-state documentation (P0-9: scripts/check_release_state.py)"
 
-if grep -q "Not yet on PyPI" README.md; then
-  _fail "README.md still says 'Not yet on PyPI' -- this must become a real \`pip install sorethumb-ml\` instruction (keeping a labelled source-development alternative) in its own commit before tagging. See the comment just above this check for the full list of what that commit should cover."
-fi
-_ok "README.md's installation section looks release-ready"
+# One checker, shared with publish.yml (which re-runs it against the tagged
+# commit): pyproject version == $VERSION; CHANGELOG's newest section is
+# [$VERSION], has content, and is dated exactly today (UTC) -- the tag date --
+# not in the future; footer links name v$VERSION; and neither SECURITY.md nor
+# README.md still carries pre-release wording ("has not yet had its first
+# tagged release", "Not yet on PyPI", "Status: pre-release"). Every problem is
+# listed at once. Fixing them is ONE release-state commit on the tag day:
+# CHANGELOG date + SECURITY.md + README.md (+ the README link flip above).
+TAG_DATE="$(date -u +%F)"
+python3 scripts/check_release_state.py --version "$VERSION" --tag-date "$TAG_DATE" \
+  || _fail "release-state documentation is not ready to tag $TAG (tag date would be $TAG_DATE UTC). Fix everything listed above in a single release-state commit, push, wait for CI, then re-run this script -- this script never edits those files itself."
+_ok "pyproject version, CHANGELOG date, SECURITY.md and README.md are consistent with tagging $TAG on $TAG_DATE"
 
 # ---------------------------------------------------------------------------
 # 3. Confirm the exact commit being tagged already went green on GitHub's
@@ -156,24 +174,13 @@ _ok "CI run for this commit succeeded on GitHub"
 #    locally before anything is tagged rather than only in publish.yml.
 # ---------------------------------------------------------------------------
 
-_step "Checking pyproject.toml's version matches $VERSION"
-
-PYPROJECT_VERSION="$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
-if [[ "$PYPROJECT_VERSION" != "$VERSION" ]]; then
-  _fail "pyproject.toml says version = \"$PYPROJECT_VERSION\", not \"$VERSION\". Bump it, commit, push, wait for CI, then re-run this script -- this script never edits pyproject.toml itself."
-fi
-_ok "pyproject.toml version matches"
-
-_step "Checking CHANGELOG.md has a real [$VERSION] section"
-
+# pyproject version / CHANGELOG section checks now live in section 2's shared
+# checker (P0-9). The release notes are just that section's body.
 CHANGELOG_BODY="$(awk -v ver="[$VERSION]" '
   /^## \[/ { if (found) exit; if (index($0, ver) == 1 + length("## ")) { found=1; next } }
+  found && /^\[[^]]+\]: / { next }  # the file-footer link references are not release notes
   found { print }
 ' CHANGELOG.md)"
-if [[ -z "$(echo "$CHANGELOG_BODY" | tr -d '[:space:]')" ]]; then
-  _fail "CHANGELOG.md has no non-empty '## [$VERSION]' section. Rename [Unreleased] to '## [$VERSION] - $(date +%Y-%m-%d)' (with real content under it), commit, push, wait for CI, then re-run this script -- this script never edits CHANGELOG.md itself."
-fi
-_ok "CHANGELOG.md has a [$VERSION] section with content"
 
 # ---------------------------------------------------------------------------
 # 5. The same checks release-validation.yml runs, run locally for fast

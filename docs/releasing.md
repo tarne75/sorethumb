@@ -17,6 +17,26 @@ that specific run in GitHub's UI (Actions → the run → Review deployments).
 Nothing reaches PyPI without that manual click, no matter what triggered
 the workflow.
 
+### The release-state commit (P0-9)
+
+Before the tag, one commit on the tag day must make the repository say what is
+about to be true. `scripts/check_release_state.py` (run by `release.sh`, and
+again by `publish.yml`'s `verify-release-state` job against the tagged commit)
+refuses the tag until all of it holds, and lists every problem at once:
+
+- `pyproject.toml`'s version equals the version being tagged, and `CHANGELOG.md`'s
+  newest section is `## [X.Y.Z] - YYYY-MM-DD` with content, not `[Unreleased]`.
+- That date is the actual tag date (the **UTC** date the tag is pushed), never a
+  future date and never a placeholder. The `[Unreleased]` and `[X.Y.Z]` footer
+  links name `vX.Y.Z`.
+- `SECURITY.md` and `README.md` no longer say the project is unreleased
+  ("has not yet had its first tagged release", "Not yet on PyPI", "Status:
+  pre-release", ...), and from 1.0 on no longer call it "pre-1.0".
+
+Because the changelog date must equal the tag date, make this commit, push it,
+let CI pass, and tag on the same UTC day; if the day rolls over, re-date it in
+a new commit rather than tagging over the mismatch.
+
 ## Rehearsing the publish path before trusting it with a real release (P2-5)
 
 `.github/workflows/publish-testpypi.yml` runs the *exact same* shape of

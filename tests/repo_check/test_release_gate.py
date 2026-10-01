@@ -68,3 +68,28 @@ def test_publishing_cannot_start_without_the_release_validation_gate(workflow: s
         needs = jobs[name].get("needs", [])
         needs = [needs] if isinstance(needs, str) else needs
         assert "validate" in needs, f"{workflow}: job {name!r} can publish without the validate gate"
+
+
+# ---------------------------------------------------------------------------
+# P0-9: the release-state commit (CHANGELOG date, SECURITY.md, README wording,
+# version agreement) is enforced at tag time, locally and in CI.
+# ---------------------------------------------------------------------------
+
+
+def test_publish_workflow_verifies_release_state_before_validation_and_publishing():
+    jobs = _load("publish.yml")["jobs"]
+    verify = jobs["verify-release-state"]
+    runs = [r for r in _run_steps(verify) if "scripts/check_release_state.py" in r]
+    assert runs, "verify-release-state does not run scripts/check_release_state.py"
+    assert all('--version "${GITHUB_REF_NAME#v}"' in r and "--tag-date" in r for r in runs), runs
+    needs = jobs["validate"]["needs"]
+    needs = [needs] if isinstance(needs, str) else needs
+    assert "verify-release-state" in needs, (
+        "validate (and so publishing) does not wait for the release-state check"
+    )
+
+
+def test_release_script_runs_the_same_release_state_checker_with_a_tag_date():
+    text = (_ROOT / "scripts" / "release.sh").read_text(encoding="utf-8")
+    assert "scripts/check_release_state.py" in text
+    assert '--version "$VERSION" --tag-date' in text

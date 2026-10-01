@@ -53,12 +53,32 @@ jobs:
           fi
           echo "OK: ${{ github.sha }} is reachable from origin/main."
 
+  # P0-9: the release-state commit must really have happened. Fails the tag if
+  # the CHANGELOG date is in the future or is not the tag date (the UTC date
+  # this run started, i.e. when the tag was pushed), if the version in
+  # pyproject.toml / CHANGELOG.md / the footer links disagrees with the tag, or
+  # if SECURITY.md / README.md still say the project is unreleased. Stdlib-only
+  # script, run against the tagged commit's own files. scripts/release.sh runs
+  # the same script locally first.
+  verify-release-state:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Verify CHANGELOG date, version agreement and release wording for this tag
+        run: |
+          tag_date="$(date -u -d "${{ github.run_started_at }}" +%F)"
+          python scripts/check_release_state.py --version "${GITHUB_REF_NAME#v}" --tag-date "$tag_date"
+
   # Runs the exact same suite ci.yml runs on every push/PR, but against this
   # exact tagged commit -- not a past run on main, which could be stale (a
   # tag pushed some time after main last moved) or could have been for a
   # different commit than the one being tagged.
   validate:
-    needs: verify-tag-on-main
+    needs: [verify-tag-on-main, verify-release-state]
     uses: ./.github/workflows/release-validation.yml
 
   verify-and-publish:
