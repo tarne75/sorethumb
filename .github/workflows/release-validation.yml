@@ -60,6 +60,43 @@ jobs:
       - run: uv sync --all-extras --frozen
       - run: uv run pytest -m "unit or contract"
 
+  # Compatibility floor (P1-7). Every other job here installs from the frozen
+  # uv.lock, i.e. the *newest* versions that resolve -- so a declared lower bound
+  # in pyproject.toml (`polars>=1.3.0`) is never actually exercised, and can be
+  # wrong without anything failing. This job resolves each *direct* dependency
+  # (core and every runtime extra) at exactly its declared minimum
+  # (`--resolution lowest-direct`; transitive packages stay at their newest
+  # compatible versions, as an end user's install would), on the minimum
+  # supported Python, and runs the same unit + contract lanes as fast-tests.
+  # Dev/test tooling (pytest, hypothesis, ...) is installed afterwards under the
+  # runtime pins as a constraint file, so only the library's own floors are
+  # under test. If this job fails, raise the floor in pyproject.toml (and
+  # `uv lock`) -- do not weaken or skip the test.
+  lowest-direct:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HYPOTHESIS_PROFILE: ci
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.11"
+      - name: Resolve every direct runtime dependency at its declared minimum
+        run: |
+          uv pip compile pyproject.toml \
+            --extra explain --extra report --extra benchmark \
+            --resolution lowest-direct --python-version 3.11 \
+            -o lowest-direct.txt
+          grep -E '^(polars|pyarrow|numpy|scikit-learn|scipy|pydantic|pydantic-settings|typer|rich|httpx|joblib)==' lowest-direct.txt
+      - name: Install the minimums, then the project and test tooling under them
+        run: |
+          uv venv --python 3.11 .lowest-venv
+          uv pip install --python .lowest-venv/bin/python -r lowest-direct.txt
+          uv pip install --python .lowest-venv/bin/python -c lowest-direct.txt -e ".[dev]"
+      - name: Unit and contract lanes against the minimum versions
+        run: .lowest-venv/bin/pytest -m "unit or contract"
+
   # Local integration tests (real workspace, SQLite, CLI process, full
   # pipeline, report rendering) on both advertised platforms (P2-3: macOS is
   # in pyproject.toml's classifiers and must actually be exercised here, not
