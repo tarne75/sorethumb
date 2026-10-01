@@ -67,9 +67,22 @@ def _add_row(table: Table, *cells: object) -> None:
 # App / sub-apps
 # ---------------------------------------------------------------------------
 
+# Every Typer app sets these explicitly rather than trusting the installed
+# Typer's defaults. pretty_exceptions_show_locals defaults to True on our
+# declared floor (typer 0.16.0): an unexpected exception would then print every
+# frame's local variables -- during an HTTP download, the headers dict holding
+# the Authorization credential from source.auth_env_var -- into the terminal
+# and CI logs. pretty_exceptions_short keeps an unexpected error to the frames
+# that matter instead of a page of library internals.
+_TYPER_EXCEPTION_SETTINGS: dict[str, Any] = {
+    "pretty_exceptions_show_locals": False,
+    "pretty_exceptions_short": True,
+}
+
 app = typer.Typer(
     name="sorethumb",
     no_args_is_help=True,
+    **_TYPER_EXCEPTION_SETTINGS,
     rich_markup_mode="markdown",
     help="**sorethumb** — unsupervised anomaly detection for tabular data.",
 )
@@ -77,6 +90,7 @@ app = typer.Typer(
 config_app = typer.Typer(
     name="config",
     no_args_is_help=True,
+    **_TYPER_EXCEPTION_SETTINGS,
     help="Validate or inspect configuration.",
 )
 app.add_typer(config_app, name="config")
@@ -84,6 +98,7 @@ app.add_typer(config_app, name="config")
 workspace_app = typer.Typer(
     name="workspace",
     no_args_is_help=True,
+    **_TYPER_EXCEPTION_SETTINGS,
     help="Manage the sorethumb workspace (runs, artefacts, migrations).",
 )
 app.add_typer(workspace_app, name="workspace")
