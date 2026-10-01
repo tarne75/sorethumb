@@ -12,6 +12,7 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `sorethumb init` no longer reports success when the workspace could not be created: it prints an error, suppresses the success banner, exits `1`, and states explicitly when `sorethumb.toml` was nevertheless written. Unwritable target paths now fail cleanly instead of with a traceback.
 - Ranking and flag selection now use a stable descending sort with the earliest source row as the tie-break, so rank order and `explain.max_rows` selection are deterministic when rows share a composite score. Previously a reversed unstable argsort reversed tie groups, and the exact-k tie-break used array position, which is not source order once a group is time-sorted.
 
 ## [0.1.0] - 2026-09-21

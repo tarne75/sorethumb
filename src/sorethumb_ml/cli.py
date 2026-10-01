@@ -655,8 +655,11 @@ def init(
 
     from sorethumb_ml.io.toml_write import render_toml_value  # noqa: PLC0415
 
-    path.mkdir(parents=True, exist_ok=True)
     ws_dir = path / _DEFAULT_WORKDIR
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        _fail(False, f"Cannot create {path}: {exc}. Nothing was written.", ExitCode.RUNTIME)
     # Fill in the one field _generate_starter_toml() leaves as "required — no
     # default" that init already has a real answer for, so the written file
     # matches the workspace just created below rather than needing a manual
@@ -665,14 +668,25 @@ def init(
         "# workdir =  # required — no default",
         f"workdir = {render_toml_value(str(ws_dir))}",
     )
-    toml_path.write_text(content, encoding="utf-8")
+    try:
+        toml_path.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        _fail(False, f"Cannot write {toml_path}: {exc}. Nothing was written.", ExitCode.RUNTIME)
 
     try:
         Workspace.init(ws_dir)
-        console.print(f"[green]Workspace created:[/green] {ws_dir}")
     except Exception as exc:  # noqa: BLE001
-        err_console.print(f"[yellow]Workspace init warning:[/yellow] {exc}")
+        # Partial result, stated explicitly: the config file exists but the
+        # workspace it points at does not. No success banner, non-zero exit.
+        _fail(
+            False,
+            f"Workspace initialisation failed: {exc}. {toml_path} WAS written, but the workspace "
+            f"{ws_dir} was not created. Fix the problem and remove {toml_path} before re-running "
+            "`sorethumb init` (init leaves an existing sorethumb.toml untouched).",
+            ExitCode.RUNTIME,
+        )
 
+    console.print(f"[green]Workspace created:[/green] {ws_dir}")
     console.print(f"[green]Config written:[/green] {toml_path}")
     console.print("\nNext steps:")
     console.print("  1. Edit [bold]sorethumb.toml[/bold] → set [cyan]source.uri[/cyan] to your dataset.")

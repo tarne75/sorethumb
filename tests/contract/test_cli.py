@@ -150,6 +150,77 @@ def test_init_does_not_overwrite_existing(tmp_path: Path):
     assert (tmp_path / "sorethumb.toml").read_text(encoding="utf-8") == original
 
 
+def _flat(result) -> str:
+    """Output with Rich's line wrapping collapsed, so phrases can be asserted on."""
+    return " ".join(result.output.split())
+
+
+def _assert_no_success_output(result) -> None:
+    out = result.output
+    for banner in ("Workspace created", "Config written", "Next steps"):
+        assert banner not in out, out
+
+
+def test_init_reports_a_failing_workspace_as_an_error_and_states_the_partial_result(tmp_path: Path):
+    """A real failure, not a mock: a regular file sits where the workspace
+    directory must go, so Workspace.init cannot create it (this fails the same way
+    for root, unlike a chmod-based unwritable directory)."""
+    (tmp_path / "sorethumb-workspace").write_text("in the way", encoding="utf-8")
+    result = runner.invoke(app, ["init", str(tmp_path)])
+
+    assert result.exit_code == 1
+    _assert_no_success_output(result)
+    assert "Workspace initialisation failed" in _flat(result)
+    # The config file was still written; the message says so, and names it.
+    assert (tmp_path / "sorethumb.toml").is_file()
+    assert "WAS written" in _flat(result)
+    assert "sorethumb.toml" in _flat(result)
+    assert "was not created" in _flat(result)
+
+
+def test_init_workspace_failure_is_an_error_even_for_unexpected_exception_types(tmp_path: Path, monkeypatch):
+    from sorethumb_ml import cli as cli_mod
+
+    def _boom(_path):
+        msg = "disk on fire"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(cli_mod.Workspace, "init", staticmethod(_boom))
+    result = runner.invoke(app, ["init", str(tmp_path)])
+    assert result.exit_code == 1
+    _assert_no_success_output(result)
+    assert "disk on fire" in _flat(result)
+    assert "WAS written" in _flat(result)
+
+
+def test_init_unusable_target_path_fails_before_writing_anything(tmp_path: Path):
+    target = tmp_path / "not-a-dir"
+    target.write_text("a file, not a directory", encoding="utf-8")
+    result = runner.invoke(app, ["init", str(target)])
+    assert result.exit_code == 1
+    _assert_no_success_output(result)
+    assert "Nothing was written" in _flat(result)
+    assert target.read_text(encoding="utf-8") == "a file, not a directory"
+
+
+def test_init_unwritable_config_location_fails_without_a_success_banner(tmp_path: Path):
+    # A read-only target directory makes the config write fail.
+    import os
+
+    if os.geteuid() == 0:  # pragma: no cover - root ignores directory permissions
+        return
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o500)
+    try:
+        result = runner.invoke(app, ["init", str(locked)])
+    finally:
+        locked.chmod(0o700)
+    assert result.exit_code == 1
+    _assert_no_success_output(result)
+    assert "Nothing was written" in _flat(result)
+
+
 def test_init_toml_lists_extra_params_commented(tmp_path: Path):
     """The starter file lists every sklearn extra_params key, commented out."""
     from sorethumb_ml.detectors.isolation_forest import IsolationForestDetector

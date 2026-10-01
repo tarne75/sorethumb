@@ -165,6 +165,14 @@ with that absolute path). This is the recommended onboarding path when you want
 full control over every setting. If `sorethumb.toml` already exists in `path`,
 `init` does nothing.
 
+If the workspace cannot be created (for example a file is in the way, or the
+location is not writable), `init` prints an error, **no success banner**, and
+exits `1`. The config file is written before the workspace, so in that case it
+already exists; the error message says explicitly that `sorethumb.toml` was
+written. Remove it and re-run `init` once the problem is fixed, because `init`
+never touches an existing `sorethumb.toml`. If the target directory itself cannot
+be created or the file cannot be written, nothing is written at all.
+
 ```bash
 sorethumb init                        # sorethumb.toml and sorethumb-workspace/ in the current directory
 sorethumb init /path/to/my-analysis   # the same, in a new directory
