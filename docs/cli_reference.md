@@ -80,10 +80,22 @@ workspace, or set an absolute path. (As a library, `run.workdir` is a required
 field of `Config`; only the CLI supplies the default.)
 
 *With no config file* (`sorethumb run data.csv`) nothing is written beside your
-data. The workspace is created at the default location, and you are asked whether
-to save a config (to `--config`, default `sorethumb.toml` in the current directory)
-for future runs. *With a
+data. The workspace is created at the default location. On an interactive
+terminal you are asked whether to save a config (to `--config`, default
+`sorethumb.toml` in the current directory) for future runs; when stdin is not a
+terminal (cron, CI, a pipe) the answer is "no" and a note on stderr says how to
+save one. `--save-config` / `--no-save-config` decide without asking. *With a
 config file that omits `run.workdir`*, the same default applies.
+
+Commands that only read or maintain a workspace — `anomalies`, `runs`, `show`,
+`report`, `history`, `explain-plan RUN_ID` and `workspace ls/du/prune/vacuum/migrate/reset`
+— don't need a config file either. With no `sorethumb.toml` and no `--config`,
+they use `--workdir`, or the default `./sorethumb-workspace/`, so the follow-up
+commands after a zero-config `run` find its workspace. `history` then reports on
+the dataset and configuration of the workspace's latest run. Naming a config
+with `--config` (or `SORETHUMB_CONFIG`) that doesn't exist is still an error
+(exit code 2), as is any command that reads the data source (`run` without a
+data file, `inspect`, `score`, `backfill`, `explain-plan` without a run ID).
 
 `sorethumb init [path]` is the explicit route: it writes `path/sorethumb.toml`
 and creates the workspace at `path/sorethumb-workspace/`, with `run.workdir` in the
@@ -249,7 +261,7 @@ rows at all), which is not treated as an error.
 
 | Argument | Description |
 |----------|-------------|
-| `data_file` | Optional path to a data file. Overrides `source.uri` in the config. When no `sorethumb.toml` exists, all settings default and workdir defaults to `./sorethumb-workspace/` in the current directory; you are prompted to save a config for future runs. |
+| `data_file` | Optional path to a data file. Overrides `source.uri` in the config. When no `sorethumb.toml` exists, all settings default and workdir defaults to `./sorethumb-workspace/` in the current directory; on an interactive terminal you are asked whether to save a config for future runs (never when stdin is not a terminal, or with `--json`). |
 
 **Options:**
 
@@ -263,6 +275,7 @@ rows at all), which is not treated as an error.
 | `--period YYYY-MM-DD` | — | Force a specific period label (for time-series datasets). |
 | `--limit-groups INT` | — | Cap the number of groups processed, applied after `--only-group`/`--group-filter`. Groups are sorted by label first, so the same limit always keeps the same groups. Must be >= 1 when given (exit code 2 otherwise). |
 | `--detectors STR`, `-d` | — | Comma-separated detector aliases, replacing the config list for this invocation only. Aliases: `if`=isolation_forest · `km`=kmeans_distance · `oc`=one_class_svm · `ecod` · `lof` · `hbos`. Full names also accepted. Never modifies `sorethumb.toml`. |
+| `--save-config / --no-save-config` | ask on a terminal, else no | With `data_file` and no `sorethumb.toml`: save (or don't save) this run's settings to `sorethumb.toml` without asking. No effect when the config file already exists. |
 | `--json` | off | Machine-readable JSON summary on stdout. |
 | `--dry-run` | off | Resolve the plan and register the run, but fit no models. Still writes the workspace + schema migrations, the `dataset` / `dataset_snapshot` rows, and the `run` row (left in status `running`). Skips the feature plan, detector models, per-group results, history rows and the report. |
 
@@ -683,8 +696,9 @@ sorethumb workspace reset --yes   # skip confirmation (CI / scripted teardown)
 ### First run on a new dataset
 
 ```bash
-# Zero-config path — sorethumb prompts to save the config
+# Zero-config path — sorethumb offers to save the config (on a terminal)
 sorethumb run --log-level INFO /data/transactions.parquet
+sorethumb anomalies --top 50         # no config needed to read the results
 
 # Config-based path — full control from the start
 sorethumb init ~/analysis/transactions

@@ -17,6 +17,7 @@ import json
 import logging
 import logging.handlers
 import re
+import sys
 from collections.abc import Callable
 from datetime import UTC
 from enum import IntEnum
@@ -369,6 +370,43 @@ def _load_config(
 
     _add_file_handler(Path(cfg.run.workdir), cfg.run.log_level)
     return cfg
+
+
+def _resolve_workdir(
+    config_path: Path | None,
+    workdir: Path | None,
+    log_level: str | None,
+    *,
+    json_output: bool = False,
+) -> tuple[Path, Config | None]:
+    """Locate the workspace for a command that only reads it (or maintains it).
+
+    These commands (``runs``, ``show``, ``anomalies``, ``report``, ``history``,
+    ``explain-plan RUN_ID`` and ``workspace *``) never read the data source, so
+    they don't need a ``sorethumb.toml``. Resolution:
+
+    - ``--config`` given (or ``SORETHUMB_CONFIG`` set), or ``./sorethumb.toml``
+      exists: load it exactly as every other command does, including exit 2
+      when an explicitly named file is missing or invalid.
+    - Otherwise: ``--workdir``, falling back to ``./sorethumb-workspace/`` --
+      the same default ``sorethumb run DATA_FILE`` uses with no config, so the
+      follow-up commands it suggests find the workspace it just wrote. The
+      legacy ``.`` workspace guard still applies when no workdir is given.
+
+    Returns ``(workdir, config)``; *config* is ``None`` in the second case, and
+    callers use the run's own persisted settings or the library defaults.
+    """
+    if config_path is not None or Path("sorethumb.toml").exists():
+        cfg = _load_config(config_path, workdir=workdir, log_level=log_level, json_output=json_output)
+        return Path(cfg.run.workdir), cfg
+    if workdir is None:
+        _guard_legacy_dot_workspace(json_output=json_output)
+        workdir = Path(_DEFAULT_WORKDIR)
+    # Log to the workspace only when it already exists: a read-only command
+    # pointed at a path with no workspace must not create one there.
+    if workdir.is_dir():
+        _add_file_handler(workdir, log_level or "INFO")
+    return workdir, None
 
 
 def _write_minimal_toml(path: Path, cfg: Config) -> None:
@@ -818,6 +856,18 @@ def run(
             ),
         ),
     ] = None,
+    save_config: Annotated[
+        bool | None,
+        typer.Option(
+            "--save-config/--no-save-config",
+            help=(
+                "With DATA_FILE and no sorethumb.toml: save (or don't save) this run's "
+                "settings to sorethumb.toml without asking. Default: ask on an "
+                "interactive terminal, don't save otherwise."
+            ),
+            show_default=False,
+        ),
+    ] = None,
     json_output: _JSON_OPT = False,
 ) -> None:
     """Run anomaly detection on the configured dataset.
@@ -844,17 +894,8 @@ def run(
         json_output=json_output,
     )
 
-    # Never prompt (or print a notice that would pollute stdout) in
-    # --json mode -- a --json caller gets exactly the run's JSON result on
-    # stdout, nothing else, and the config is simply left unsaved rather than
-    # asked about, same as answering "no" would do.
-    if not json_output and not config_existed and data_file is not None:
-        console.print(
-            f"[dim]No sorethumb.toml found — running with defaults, workdir={cfg.run.workdir!r}.[/dim]"
-        )
-        if typer.confirm("Save settings to sorethumb.toml for future runs?", default=False):
-            _write_minimal_toml(config_path, cfg)
-            console.print(f"[green]Saved {config_path}[/green]")
+    if not config_existed and data_file is not None:
+        _maybe_save_zero_config(config_path, cfg, save_config=save_config, json_output=json_output)
 
     # Validate group-filter regex up front so an invalid pattern fails before any work
     if group_filter:
@@ -896,6 +937,39 @@ def run(
     _print_run_summary(result)
 
     raise typer.Exit(int(_exit_code_for(result)))
+
+
+def _maybe_save_zero_config(
+    config_path: Path, cfg: Config, *, save_config: bool | None, json_output: bool
+) -> None:
+    """Offer to save a zero-config run's settings, without ever blocking a script.
+
+    ``--save-config``/``--no-save-config`` decide outright. Otherwise the user
+    is asked only when stdin is an interactive terminal; under cron, CI or a
+    pipe there is nobody to answer, so the answer is "no" and a note on stderr
+    says how to save a config. ``--json`` never prompts and never prints to
+    stdout: its caller gets exactly the run's JSON result.
+    """
+    if not json_output:
+        console.print(
+            f"[dim]No sorethumb.toml found — running with defaults, workdir={cfg.run.workdir!r}.[/dim]"
+        )
+    if save_config is None:
+        if json_output:
+            return
+        if not sys.stdin.isatty():
+            err_console.print(
+                "Not saving settings (stdin is not a terminal). Run `sorethumb init` to create "
+                "sorethumb.toml, or pass --save-config.",
+                markup=False,
+                highlight=False,
+            )
+            return
+        save_config = typer.confirm("Save settings to sorethumb.toml for future runs?", default=False)
+    if save_config:
+        _write_minimal_toml(config_path, cfg)
+        if not json_output:
+            console.print(f"[green]Saved {config_path}[/green]")
 
 
 # ---------------------------------------------------------------------------
@@ -980,8 +1054,10 @@ def report(
     ``--workdir`` otherwise only locate the workspace the run lives in.
     """
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, log_level=log_level)
-    ws_path = Path(cfg.run.workdir)
+    from sorethumb_ml.config import ReportConfig  # noqa: PLC0415
+
+    ws_path, cfg = _resolve_workdir(config, workdir, log_level)
+    formats = cfg.report.formats if cfg is not None else ReportConfig().formats
 
     try:
         ws_cm = Workspace.open(ws_path)
@@ -999,7 +1075,7 @@ def report(
 
         n_groups = len(ws.store.all_run_groups(run_id))
         console.print(f"Re-rendering report for [cyan]{run_id}[/cyan] ({n_groups} groups)…")
-        path = render_report_for_run(ws, run_id, formats=cfg.report.formats)
+        path = render_report_for_run(ws, run_id, formats=formats)
         if path is None:
             _fail(False, f"Could not render report for {run_id}. See the log for details.", ExitCode.RUNTIME)
         console.print(f"[green]Report written:[/green] {path}")
@@ -1148,22 +1224,46 @@ def history(
     ] = None,
     group_key: Annotated[str | None, typer.Option("--group", help="Limit to a specific group key.")] = None,
 ) -> None:
-    """Show rolling-window anomaly trends for the configured dataset."""
+    """Show rolling-window anomaly trends for the configured dataset.
+
+    With no sorethumb.toml (and no --config), shows the dataset and
+    configuration of the workspace's most recent run, using that run's own
+    history and report settings.
+    """
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    ws_path, loaded = _resolve_workdir(config, workdir, log_level)
 
-    ws_path = Path(cfg.run.workdir)
-    _windows = windows or cfg.report.rolling_windows
-
-    with Workspace.open(ws_path) as ws:
+    try:
+        ws_cm = Workspace.open(ws_path)
+    except SorethumbError as exc:
+        _fail(False, str(exc), _classify_error(exc))
+    with ws_cm as ws:
         from sorethumb_ml.io.fingerprint import logical_dataset_id  # noqa: PLC0415
 
         # Trends are read straight from the ledger, keyed on the stable logical
         # dataset id -- no need to touch the source file. Aggregation is scoped
         # to this config's hash -- a different configuration's totals for the
         # same periods are separate rows and are never silently folded in.
-        dataset_fp = logical_dataset_id(cfg.source.dataset_id, cfg.source.uri)
-        config_hash = cfg.config_hash()
+        if loaded is not None:
+            cfg = loaded
+            dataset_fp = logical_dataset_id(cfg.source.dataset_id, cfg.source.uri)
+            config_hash = cfg.config_hash()
+        else:
+            latest = ws.store.list_runs(limit=1)
+            if not latest:
+                _fail(False, "No runs found in workspace.", ExitCode.NOT_FOUND)
+            run_row = latest[0]
+            try:
+                cfg = Config.model_validate_json(run_row["config_json"])
+            except Exception as exc:  # noqa: BLE001 -- any unreadable stored config is the same failure
+                _fail(
+                    False,
+                    f"The latest run's stored config could not be read ({exc}); pass --config.",
+                    ExitCode.RUNTIME,
+                )
+            dataset_fp = str(run_row["dataset_fp"])
+            config_hash = str(run_row["config_hash"])
+        _windows = windows or cfg.report.rolling_windows
 
         from datetime import datetime  # noqa: PLC0415
 
@@ -1231,8 +1331,7 @@ def list_runs_cmd(
 ) -> None:
     """List recent runs with status, dataset, group counts, and duration."""
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, log_level=log_level, json_output=json_output)
-    ws_path = Path(cfg.run.workdir)
+    ws_path, _ = _resolve_workdir(config, workdir, log_level, json_output=json_output)
 
     try:
         with Workspace.open(ws_path) as ws:
@@ -1285,8 +1384,7 @@ def show(
 ) -> None:
     """Show detail for one run or group, including feature plan summary."""
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, log_level=log_level, json_output=json_output)
-    ws_path = Path(cfg.run.workdir)
+    ws_path, _ = _resolve_workdir(config, workdir, log_level, json_output=json_output)
 
     try:
         with Workspace.open(ws_path) as ws:
@@ -1359,8 +1457,7 @@ def anomalies(
     import polars as pl  # noqa: PLC0415
 
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, log_level=log_level, json_output=json_output)
-    ws_path = Path(cfg.run.workdir)
+    ws_path, _ = _resolve_workdir(config, workdir, log_level, json_output=json_output)
 
     try:
         with Workspace.open(ws_path) as ws:
@@ -1460,8 +1557,12 @@ def explain_plan(
     from sorethumb_ml.store.models import load_plan  # noqa: PLC0415
 
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, log_level=log_level, json_output=json_output)
-    ws_path = Path(cfg.run.workdir)
+    if run_id is not None:
+        ws_path, cfg_or_none = _resolve_workdir(config, workdir, log_level, json_output=json_output)
+    else:
+        # Planning the current source data needs a data source, so a config.
+        cfg_or_none = _load_config(config, workdir=workdir, log_level=log_level, json_output=json_output)
+        ws_path = Path(cfg_or_none.run.workdir)
 
     if run_id is not None:
         try:
@@ -1472,6 +1573,8 @@ def explain_plan(
         except SorethumbError as exc:
             _fail(json_output, str(exc), _classify_error(exc))
     else:
+        cfg = cfg_or_none
+        assert cfg is not None  # loaded above whenever run_id is None
         cache_dir = ws_path / "cache" / "datasets"
         cache_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -1666,8 +1769,7 @@ def workspace_ls(
 ) -> None:
     """List runs, datasets, and artefact counts in the workspace."""
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, log_level=log_level, json_output=json_output)
-    ws_path = Path(cfg.run.workdir)
+    ws_path, _ = _resolve_workdir(config, workdir, log_level, json_output=json_output)
 
     try:
         with Workspace.open(ws_path) as ws:
@@ -1704,8 +1806,7 @@ def workspace_du(
 ) -> None:
     """Show disk usage broken down by regenerable vs non-regenerable artefacts."""
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, log_level=log_level)
-    ws_path = Path(cfg.run.workdir)
+    ws_path, _ = _resolve_workdir(config, workdir, log_level)
 
     total_bytes = 0
     for f in ws_path.rglob("*"):
@@ -1737,8 +1838,7 @@ def workspace_prune(
     database rows together — never one without the other.
     """
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, log_level=log_level)
-    ws_path = Path(cfg.run.workdir)
+    ws_path, _ = _resolve_workdir(config, workdir, log_level)
 
     try:
         with Workspace.open(ws_path) as ws:
@@ -1760,8 +1860,7 @@ def workspace_vacuum(
 ) -> None:
     """Run SQLite VACUUM and reconcile orphan files with no database row."""
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, log_level=log_level)
-    ws_path = Path(cfg.run.workdir)
+    ws_path, _ = _resolve_workdir(config, workdir, log_level)
 
     with Workspace.open(ws_path) as ws:
         ws.store.vacuum()
@@ -1777,13 +1876,12 @@ def workspace_migrate(
 ) -> None:
     """Apply pending schema migrations to the workspace database."""
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, log_level=log_level)
+    ws_path, _ = _resolve_workdir(config, workdir, log_level)
 
     if dry_run:
         console.print("[yellow]DRY RUN — no migrations applied.[/yellow]")
         return
 
-    ws_path = Path(cfg.run.workdir)
     # Opening the workspace runs pending migrations automatically.
     # If the workspace doesn't exist yet, init it first.
     if ws_path.exists() and (ws_path / "sorethumb.db").exists():
@@ -1856,8 +1954,8 @@ def workspace_reset(
     a suspiciously shallow path (see _guard_reset_target).
     """
     _setup_logging(log_level or "INFO")
-    cfg = _load_config(config, workdir=workdir, log_level=log_level)
-    ws_path = Path(cfg.run.workdir).resolve()
+    ws_root, _ = _resolve_workdir(config, workdir, log_level)
+    ws_path = ws_root.resolve()
 
     _guard_reset_target(ws_path)
 

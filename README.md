@@ -234,8 +234,18 @@ cd /path/to/my-analysis
 sorethumb run --log-level INFO /path/to/data.csv
 ```
 
-On first run you'll be prompted to save a `sorethumb.toml` for future runs.
-Re-running the same command always uses the file you pass — overriding whatever
+Then read the results from the same directory; no config file is needed for
+that either:
+
+```bash
+sorethumb anomalies --top 10
+sorethumb runs
+sorethumb report
+```
+
+On an interactive terminal, the first run offers to save a `sorethumb.toml` for
+future runs. Under cron, CI or a pipe it doesn't ask (it says how to save one on
+stderr); `--save-config` / `--no-save-config` decide without asking. Re-running the same command always uses the file you pass — overriding whatever
 `uri` is in the config — so iterating across datasets is frictionless. The same
 `./sorethumb-workspace/` default applies to a config file that does not set
 `run.workdir`; `--workdir` and `run.workdir` override it (see
