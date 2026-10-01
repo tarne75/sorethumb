@@ -26,6 +26,7 @@ from typing import Annotated, Any, NoReturn
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
@@ -45,6 +46,22 @@ from sorethumb_ml import (
 
 console = Console()
 err_console = Console(stderr=True)
+
+
+# Rich parses "[...]" in any printed string as markup, so a column named
+# "[/x]" crashed the CLI with MarkupError and "amt [usd]" or a hint like
+# "pip install 'sorethumb-ml[explain]'" lost its brackets. Everything not
+# written by us -- column names, group labels, category values, reasons,
+# paths, URIs, exception and warning messages -- goes through one of these.
+def _e(value: object) -> str:
+    """Escape *value* for interpolation into a Rich markup string."""
+    return escape(str(value))
+
+
+def _add_row(table: Table, *cells: object) -> None:
+    """Add a table row whose cells are shown literally (``Text`` cells keep their style)."""
+    table.add_row(*(cell if isinstance(cell, Text) else Text(str(cell)) for cell in cells))
+
 
 # ---------------------------------------------------------------------------
 # App / sub-apps
@@ -183,7 +200,9 @@ def _parse_detectors_flag(value: str) -> list[dict[str, Any]]:
         name = _DETECTOR_ALIASES.get(alias.lower())
         if name is None:
             valid = ", ".join(sorted(_DETECTOR_ALIASES))
-            err_console.print(f"[red]Unknown detector alias:[/red] {alias!r}\nValid aliases: {valid}")
+            err_console.print(
+                f"[red]Unknown detector alias:[/red] {_e(repr(alias))}\nValid aliases: {_e(valid)}"
+            )
             raise typer.Exit(int(ExitCode.PREFLIGHT))
         det_cls = registry.get(name)
         cap: int | None = det_cls.default_train_row_cap if det_cls else None
@@ -247,7 +266,7 @@ def _fail(json_output: bool, message: str, code: ExitCode) -> NoReturn:
     if json_output:
         typer.echo(json.dumps({"error": message, "kind": code.kind, "exit_code": int(code)}))
     else:
-        err_console.print(f"[red]{message}[/red]")
+        err_console.print(f"[red]{_e(message)}[/red]")
     raise typer.Exit(int(code))
 
 
@@ -688,7 +707,7 @@ def init(
     """
     toml_path = path / "sorethumb.toml"
     if toml_path.exists():
-        err_console.print(f"[yellow]sorethumb.toml already exists:[/yellow] {toml_path}")
+        err_console.print(f"[yellow]sorethumb.toml already exists:[/yellow] {_e(toml_path)}")
         raise typer.Exit(0)
 
     from sorethumb_ml.io.toml_write import render_toml_value  # noqa: PLC0415
@@ -724,8 +743,8 @@ def init(
             ExitCode.RUNTIME,
         )
 
-    console.print(f"[green]Workspace created:[/green] {ws_dir}")
-    console.print(f"[green]Config written:[/green] {toml_path}")
+    console.print(f"[green]Workspace created:[/green] {_e(ws_dir)}")
+    console.print(f"[green]Config written:[/green] {_e(toml_path)}")
     console.print("\nNext steps:")
     console.print("  1. Edit [bold]sorethumb.toml[/bold] → set [cyan]source.uri[/cyan] to your dataset.")
     console.print("  2. [bold]sorethumb inspect[/bold]   — profile your data without fitting any models.")
@@ -760,7 +779,7 @@ def inspect(
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     df = load_dataset(cfg.source, cache_dir=cache_dir)
-    console.print(f"  rows={len(df):,}  cols={len(df.columns)}")
+    console.print(f"  rows={len(df):,}  cols={_e(len(df.columns))}")
 
     plan = build_feature_plan(df, cfg)
 
@@ -772,7 +791,8 @@ def inspect(
 
     for dec in plan.decisions or []:
         color = "red" if dec.treatment.value == "drop" else "green"
-        table.add_row(
+        _add_row(
+            table,
             dec.column,
             dec.col_class.value,
             Text(dec.treatment.value, style=color),
@@ -782,7 +802,7 @@ def inspect(
     console.print(table)
 
     n_features = len(plan.output_features)
-    console.print(f"\nProjected feature width: [bold]{n_features}[/bold] columns")
+    console.print(f"\nProjected feature width: [bold]{_e(n_features)}[/bold] columns")
 
 
 # ---------------------------------------------------------------------------
@@ -905,7 +925,7 @@ def run(
             _fail(json_output, f"Invalid --group-filter regex: {exc}", ExitCode.PREFLIGHT)
 
     if not json_output:
-        console.print(f"[bold]sorethumb run[/bold]  workspace={cfg.run.workdir}")
+        console.print(f"[bold]sorethumb run[/bold]  workspace={_e(cfg.run.workdir)}")
         if dry_run:
             console.print(
                 "[yellow]DRY RUN[/yellow] — resolving the plan and registering the run; "
@@ -952,7 +972,7 @@ def _maybe_save_zero_config(
     """
     if not json_output:
         console.print(
-            f"[dim]No sorethumb.toml found — running with defaults, workdir={cfg.run.workdir!r}.[/dim]"
+            f"[dim]No sorethumb.toml found — running with defaults, workdir={_e(repr(cfg.run.workdir))}.[/dim]"
         )
     if save_config is None:
         if json_output:
@@ -969,7 +989,7 @@ def _maybe_save_zero_config(
     if save_config:
         _write_minimal_toml(config_path, cfg)
         if not json_output:
-            console.print(f"[green]Saved {config_path}[/green]")
+            console.print(f"[green]Saved {_e(config_path)}[/green]")
 
 
 # ---------------------------------------------------------------------------
@@ -1009,7 +1029,7 @@ def score(
     )
 
     if not json_output:
-        console.print(f"[bold]sorethumb score[/bold]  from_run={from_run}")
+        console.print(f"[bold]sorethumb score[/bold]  from_run={_e(from_run)}")
 
     try:
         result: RunResult = score_forward(cfg, from_run, strict=cfg.run.strict, no_report=no_report)
@@ -1074,11 +1094,11 @@ def report(
             _fail(False, f"Run not found: {run_id}", ExitCode.NOT_FOUND)
 
         n_groups = len(ws.store.all_run_groups(run_id))
-        console.print(f"Re-rendering report for [cyan]{run_id}[/cyan] ({n_groups} groups)…")
+        console.print(f"Re-rendering report for [cyan]{_e(run_id)}[/cyan] ({_e(n_groups)} groups)…")
         path = render_report_for_run(ws, run_id, formats=formats)
         if path is None:
             _fail(False, f"Could not render report for {run_id}. See the log for details.", ExitCode.RUNTIME)
-        console.print(f"[green]Report written:[/green] {path}")
+        console.print(f"[green]Report written:[/green] {_e(path)}")
 
 
 # ---------------------------------------------------------------------------
@@ -1161,14 +1181,14 @@ def backfill(
 
         if not pending:
             console.print(
-                f"[green]Nothing to backfill for config {config_hash[:8]} — all periods are up to date.[/green]"
+                f"[green]Nothing to backfill for config {_e(config_hash[:8])} — all periods are up to date.[/green]"
             )
             raise typer.Exit(0)
 
-        console.print(f"Backfill: {len(pending)} pending periods (config {config_hash[:8]})")
+        console.print(f"Backfill: {_e(len(pending))} pending periods (config {_e(config_hash[:8])})")
         if dry_run:
             for lbl in pending:
-                console.print(f"  [dim]would process:[/dim] {lbl}")
+                console.print(f"  [dim]would process:[/dim] {_e(lbl)}")
             raise typer.Exit(0)
 
         # Each period runs independently, so one period failing must not stop the
@@ -1181,12 +1201,12 @@ def backfill(
         raised: list[tuple[str, str]] = []
         n_ok = 0
         for period_lbl in pending:
-            console.print(f"  Processing period [cyan]{period_lbl}[/cyan]…")
+            console.print(f"  Processing period [cyan]{_e(period_lbl)}[/cyan]…")
             try:
                 result = run_detection(cfg, period_label_override=period_lbl, no_report=True)
             except SorethumbError as exc:
                 raised.append((period_lbl, f"{type(exc).__name__}: {exc}"))
-                err_console.print(f"  [red]Period {period_lbl} raised an error:[/red] {exc}")
+                err_console.print(f"  [red]Period {_e(period_lbl)} raised an error:[/red] {_e(exc)}")
                 continue
             if result.n_failed:
                 failed_groups.append((period_lbl, result))
@@ -1195,14 +1215,14 @@ def backfill(
 
         if failed_groups or raised:
             err_console.print(
-                f"\n[red bold]Backfill finished with {len(failed_groups) + len(raised)} failed period(s) "
-                f"of {len(pending)} ({n_ok} succeeded):[/red bold]"
+                f"\n[red bold]Backfill finished with {_e(len(failed_groups) + len(raised))} failed period(s) "
+                f"of {_e(len(pending))} ({_e(n_ok)} succeeded):[/red bold]"
             )
             for period_lbl, result in failed_groups:
                 names = [g.group_label for g in result.groups if g.status == "failed"]
-                err_console.print(f"  {period_lbl}: failed group(s): {', '.join(names)}")
+                err_console.print(f"  {_e(period_lbl)}: failed group(s): {_e(', '.join(names))}")
             for period_lbl, message in raised:
-                err_console.print(f"  {period_lbl}: raised {message}")
+                err_console.print(f"  {_e(period_lbl)}: raised {_e(message)}")
             produced_results = n_ok > 0 or any(r.n_succeeded for _, r in failed_groups)
             raise typer.Exit(int(ExitCode.PARTIAL if produced_results else ExitCode.RUNTIME))
 
@@ -1286,11 +1306,13 @@ def history(
 
         if not window_results:
             console.print(
-                f"[yellow]No history available yet for this dataset under config {config_hash[:8]}.[/yellow]"
+                f"[yellow]No history available yet for this dataset under config {_e(config_hash[:8])}.[/yellow]"
             )
             raise typer.Exit(0)
 
-        table = Table(title=f"Rolling windows (ref={ref_label}, config={config_hash[:8]})", show_header=True)
+        table = Table(
+            title=f"Rolling windows (ref={_e(ref_label)}, config={_e(config_hash[:8])})", show_header=True
+        )
         table.add_column("Window", style="cyan")
         table.add_column("Cur count", justify="right")
         table.add_column("Cur pop", justify="right")
@@ -1304,7 +1326,8 @@ def history(
             def _pct(v: float | None) -> str:
                 return f"{v * 100:.2f}" if v is not None else "—"
 
-            table.add_row(
+            _add_row(
+                table,
                 str(wr.window_size),
                 str(wr.current_anomaly_count),
                 str(wr.current_population),
@@ -1358,7 +1381,8 @@ def list_runs_cmd(
         status_color = {"complete": "green", "failed": "red", "running": "yellow"}.get(
             str(r.get("status", "")), "white"
         )
-        table.add_row(
+        _add_row(
+            table,
             str(r.get("run_id", "")),
             Text(str(r.get("status", "")), style=status_color),
             str(r.get("dataset_fp", ""))[:12],
@@ -1403,11 +1427,11 @@ def show(
         typer.echo(json.dumps({"run": run_row, "groups": groups}, default=str))
         return
 
-    console.print(f"[bold]Run:[/bold] {run_id}")
-    console.print(f"  Status:  {run_row.get('status')}")
-    console.print(f"  Dataset: {run_row.get('dataset_fp', '')[:12]}")
-    console.print(f"  Started: {str(run_row.get('started_at', ''))[:19]}")
-    console.print(f"  Config:  {run_row.get('config_hash', '')[:8]}")
+    console.print(f"[bold]Run:[/bold] {_e(run_id)}")
+    console.print(f"  Status:  {_e(run_row.get('status'))}")
+    console.print(f"  Dataset: {_e(run_row.get('dataset_fp', '')[:12])}")
+    console.print(f"  Started: {_e(str(run_row.get('started_at', ''))[:19])}")
+    console.print(f"  Config:  {_e(run_row.get('config_hash', '')[:8])}")
 
     table = Table(title=f"Groups ({len(groups)})", show_header=True)
     table.add_column("Group key")
@@ -1420,7 +1444,8 @@ def show(
     for g in groups:
         rate = g.get("rate")
         rate_str = f"{rate * 100:.2f}" if rate is not None else "—"
-        table.add_row(
+        _add_row(
+            table,
             str(g.get("group_key", ""))[:12],
             str(g.get("group_label", "")),
             str(g.get("status", "")),
@@ -1485,7 +1510,7 @@ def anomalies(
         if json_output:
             typer.echo("[]")
             raise typer.Exit(0)
-        console.print(f"[yellow]No anomaly rows found for run {run_id}.[/yellow]")
+        console.print(f"[yellow]No anomaly rows found for run {_e(run_id)}.[/yellow]")
         raise typer.Exit(0)
 
     all_rows = pl.concat(frames, how="diagonal").sort("rank")
@@ -1502,7 +1527,7 @@ def anomalies(
         return
 
     table = Table(
-        title=f"Anomalies — run {run_id[:12]}",
+        title=f"Anomalies — run {_e(run_id[:12])}",
         show_header=True,
         show_lines=True,
         header_style="bold",
@@ -1526,10 +1551,12 @@ def anomalies(
             cells.append(str(row.get("_group", "")))
         for r in reason_cols:
             cells.append(str(row.get(r) or "—"))
-        table.add_row(*cells)
+        _add_row(table, *cells)
 
     console.print(table)
-    console.print(f"  [dim]{len(all_rows)} anomaly row(s)   run={run_id}   workspace={ws_path}[/dim]")
+    console.print(
+        f"  [dim]{_e(len(all_rows))} anomaly row(s)   run={_e(run_id)}   workspace={_e(ws_path)}[/dim]"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1594,10 +1621,10 @@ def explain_plan(
     table.add_column("Reason")
 
     for dec in plan.decisions or []:
-        table.add_row(dec.column, dec.col_class.value, dec.treatment.value, dec.reason or "")
+        _add_row(table, dec.column, dec.col_class.value, dec.treatment.value, dec.reason or "")
     console.print(table)
 
-    console.print(f"\n[bold]Output features:[/bold] {len(plan.output_features)}")
+    console.print(f"\n[bold]Output features:[/bold] {_e(len(plan.output_features))}")
 
 
 # ---------------------------------------------------------------------------
@@ -1634,7 +1661,8 @@ def detectors(
 
     for name in names:
         cls = _reg[name]
-        table.add_row(
+        _add_row(
+            table,
             name,
             "✓" if getattr(cls, "supports_tree_shap", False) else "—",
             str(getattr(cls, "default_train_row_cap", "none")),
@@ -1665,8 +1693,8 @@ def config_check(
         typer.echo(json.dumps(_redact_config(cfg), indent=2))
         return
     console.print("[green]Config is valid.[/green]")
-    console.print(f"  workdir: {cfg.run.workdir}")
-    console.print(f"  detectors: {[d.name for d in cfg.detectors if d.enabled]}")
+    console.print(f"  workdir: {_e(cfg.run.workdir)}")
+    console.print(f"  detectors: {_e([d.name for d in cfg.detectors if d.enabled])}")
 
 
 @config_app.command(name="schema")
@@ -1678,7 +1706,7 @@ def config_schema(
     schema_str = json.dumps(schema, indent=2)
     if output:
         output.write_text(schema_str, encoding="utf-8")
-        console.print(f"[green]Schema written:[/green] {output}")
+        console.print(f"[green]Schema written:[/green] {_e(output)}")
     else:
         typer.echo(schema_str)
 
@@ -1721,14 +1749,14 @@ def config_show(
 
     if output is not None:
         _write_minimal_toml(output, run_cfg)
-        console.print(f"[green]Config written:[/green] {output}")
+        console.print(f"[green]Config written:[/green] {_e(output)}")
         return
 
     config_hash = run_row.get("config_hash", "")
-    console.print(f"[bold]Config for run:[/bold] {run_id}  [dim](hash: {config_hash[:8]})[/dim]")
-    console.print(f"  Source URI: {run_cfg.source.uri}")
-    console.print(f"  Workdir:    {run_cfg.run.workdir}")
-    console.print(f"  Seed:       {run_cfg.run.seed}")
+    console.print(f"[bold]Config for run:[/bold] {_e(run_id)}  [dim](hash: {_e(config_hash[:8])})[/dim]")
+    console.print(f"  Source URI: {_e(run_cfg.source.uri)}")
+    console.print(f"  Workdir:    {_e(run_cfg.run.workdir)}")
+    console.print(f"  Seed:       {_e(run_cfg.run.seed)}")
 
     det_table = Table(title="Detectors", show_header=True, header_style="bold cyan")
     det_table.add_column("Name", style="white")
@@ -1739,7 +1767,8 @@ def config_show(
     for det in run_cfg.detectors:
         cap = str(det.train_row_cap) if det.train_row_cap is not None else "default"
         params_str = ", ".join(f"{k}={v}" for k, v in (det.params or {}).items()) or "—"
-        det_table.add_row(
+        _add_row(
+            det_table,
             det.name,
             "yes" if det.enabled else "no",
             cap,
@@ -1749,8 +1778,8 @@ def config_show(
 
     scoring = run_cfg.scoring
     console.print("[bold]Scoring:[/bold]")
-    console.print(f"  combination   = {scoring.combination}")
-    console.print(f"  contamination = {scoring.contamination}")
+    console.print(f"  combination   = {_e(scoring.combination)}")
+    console.print(f"  contamination = {_e(scoring.contamination)}")
 
     console.print("\n[dim]Use --json for the full config or --output <path> to save as sorethumb.toml[/dim]")
 
@@ -1781,8 +1810,8 @@ def workspace_ls(
         typer.echo(json.dumps({"runs": runs}, default=str))
         return
 
-    console.print(f"[bold]Workspace:[/bold] {ws_path}")
-    console.print(f"  Runs: {len(runs)}")
+    console.print(f"[bold]Workspace:[/bold] {_e(ws_path)}")
+    console.print(f"  Runs: {_e(len(runs))}")
 
     if runs:
         table = Table(show_header=True)
@@ -1790,7 +1819,8 @@ def workspace_ls(
         table.add_column("Status")
         table.add_column("Started")
         for r in runs[:10]:
-            table.add_row(
+            _add_row(
+                table,
                 str(r.get("run_id", ""))[:24],
                 str(r.get("status", "")),
                 str(r.get("started_at", ""))[:19],
@@ -1820,8 +1850,8 @@ def workspace_du(
             b //= 1024
         return f"{b:.1f} TB"
 
-    console.print(f"[bold]Workspace:[/bold] {ws_path}")
-    console.print(f"  Total: {_fmt(total_bytes)}")
+    console.print(f"[bold]Workspace:[/bold] {_e(ws_path)}")
+    console.print(f"  Total: {_e(_fmt(total_bytes))}")
 
 
 @workspace_app.command(name="prune")
@@ -1848,8 +1878,8 @@ def workspace_prune(
 
     prefix = "Would remove" if dry_run else "Removed"
     for item in removed:
-        console.print(f"  {prefix}: {item}")
-    console.print(f"[green]{prefix} {len(removed)} item(s).[/green]")
+        console.print(f"  {_e(prefix)}: {_e(item)}")
+    console.print(f"[green]{_e(prefix)} {_e(len(removed))} item(s).[/green]")
 
 
 @workspace_app.command(name="vacuum")
@@ -1926,9 +1956,9 @@ def _guard_reset_target(ws_path: Path) -> None:
             "workspace directory"
         )
     if reasons:
-        err_console.print(f"[red]Refusing to reset {ws_path}:[/red]")
+        err_console.print(f"[red]Refusing to reset {_e(ws_path)}:[/red]")
         for reason in reasons:
-            err_console.print(f"  - {reason}")
+            err_console.print(f"  - {_e(reason)}")
         raise typer.Exit(int(ExitCode.PREFLIGHT))
 
 
@@ -1965,7 +1995,7 @@ def workspace_reset(
     except SorethumbError as exc:
         _fail(False, f"Refusing to reset {ws_path}: not a sorethumb workspace ({exc})", _classify_error(exc))
 
-    console.print(f"[red bold]This will destroy:[/red bold] {ws_path}")
+    console.print(f"[red bold]This will destroy:[/red bold] {_e(ws_path)}")
     if not yes:
         console.print("Type the full workspace path to confirm (Ctrl-C to abort):")
         try:
@@ -1984,10 +2014,10 @@ def workspace_reset(
     try:
         shutil.rmtree(ws_path)
     except OSError as exc:
-        err_console.print(f"[red]Failed to fully delete {ws_path}:[/red] {exc}")
+        err_console.print(f"[red]Failed to fully delete {_e(ws_path)}:[/red] {_e(exc)}")
         raise typer.Exit(int(ExitCode.RUNTIME)) from exc
 
-    console.print(f"[green]Workspace destroyed:[/green] {ws_path}")
+    console.print(f"[green]Workspace destroyed:[/green] {_e(ws_path)}")
 
 
 # ---------------------------------------------------------------------------
@@ -2021,13 +2051,13 @@ def _exit_code_for(result: RunResult) -> ExitCode:
 def _print_run_summary(result: RunResult) -> None:
     status_color = "red" if (result.n_failed or result.group_selection_error) else "green"
     console.print(
-        f"\n[{status_color}]Run {result.run_id}[/{status_color}]  "
-        f"succeeded={result.n_succeeded}  skipped={result.n_skipped}  failed={result.n_failed}"
+        f"\n[{status_color}]Run {_e(result.run_id)}[/{status_color}]  "
+        f"succeeded={_e(result.n_succeeded)}  skipped={_e(result.n_skipped)}  failed={_e(result.n_failed)}"
     )
     if result.group_selection_error:
-        err_console.print(f"  [red]{result.group_selection_error}[/red]")
+        err_console.print(f"  [red]{_e(result.group_selection_error)}[/red]")
     if result.source_run_id:
-        console.print(f"  [dim]Scored forward from run {result.source_run_id} (no re-fitting).[/dim]")
+        console.print(f"  [dim]Scored forward from run {_e(result.source_run_id)} (no re-fitting).[/dim]")
 
     total_rows = sum(g.n_records for g in result.groups if g.status in ("success", "skipped"))
     if result.n_anomalies or total_rows:
@@ -2035,7 +2065,7 @@ def _print_run_summary(result: RunResult) -> None:
             f" ({100.0 * result.n_anomalies / total_rows:.2f}% of {total_rows:,} rows)" if total_rows else ""
         )
         console.print(
-            f"  Flagged for review: {result.n_anomalies:,}{pct} — "
+            f"  Flagged for review: {result.n_anomalies:,}{_e(pct)} — "
             "the review shortlist at the chosen budget, [dim]not an estimate of true prevalence[/dim]"
         )
 
@@ -2048,12 +2078,14 @@ def _print_run_summary(result: RunResult) -> None:
         for g in rate_groups[:8]:
             parts = ", ".join(f"{d}={r * 100:.2f}%" for d, r in g.detector_flag_rates.items())
             dropped = (
-                f"  [yellow]dropped: {', '.join(g.dropped_detectors)}[/yellow]" if g.dropped_detectors else ""
+                f"  [yellow]dropped: {_e(', '.join(g.dropped_detectors))}[/yellow]"
+                if g.dropped_detectors
+                else ""
             )
             label = "" if g.group_label == "__all__" else f"[{g.group_label}] "
-            console.print(f"    {label}{parts}{dropped}")
+            console.print(f"    {_e(label)}{_e(parts)}{dropped}")
         if len(rate_groups) > 8:
-            console.print(f"    [dim]… and {len(rate_groups) - 8} more groups[/dim]")
+            console.print(f"    [dim]… and {_e(len(rate_groups) - 8)} more groups[/dim]")
 
     # Print per-group timings, slowest first
     timed = sorted(
@@ -2066,22 +2098,22 @@ def _print_run_summary(result: RunResult) -> None:
         for g in timed[:10]:
             flag = " [red]SLOW[/red]" if g.elapsed_seconds > 60 else ""
             console.print(
-                f"    {g.group_label:30s}  {g.elapsed_seconds:6.1f}s  anomalies={g.n_anomalies}{flag}"
+                f"    {_e(g.group_label):30s}  {g.elapsed_seconds:6.1f}s  anomalies={_e(g.n_anomalies)}{flag}"
             )
 
     if result.warnings_issued:
         console.print("\n  [yellow bold]Warnings:[/yellow bold]")
         for msg in result.warnings_issued:
-            console.print(f"    [yellow]{msg}[/yellow]")
+            console.print(f"    [yellow]{_e(msg)}[/yellow]")
 
     if result.n_failed:
         console.print("\n  [red bold]Failed groups:[/red bold]")
         for g in result.groups:
             if g.status == "failed":
-                console.print(f"    {g.group_label}: {g.error}")
+                console.print(f"    {_e(g.group_label)}: {_e(g.error)}")
 
     if result.report_status == "success":
-        console.print(f"\n[green]Report:[/green] {result.report_path}")
+        console.print(f"\n[green]Report:[/green] {_e(result.report_path)}")
     elif result.report_status == "failed":
         err_console.print(
             "\n[red bold]Report generation failed[/red bold] -- detection and scoring "
