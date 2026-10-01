@@ -115,6 +115,35 @@ def test_sdist_contains_required_paths() -> None:
     assert not missing, f"sdist is missing required path(s): {sorted(missing)}"
 
 
+def _repo_license_bytes() -> bytes:
+    path = _DIST_DIR.parent / "LICENSE"
+    if not path.is_file():
+        pytest.skip("LICENSE is not present")
+    return path.read_bytes()
+
+
+def test_wheel_ships_the_repository_license() -> None:
+    """The wheel's dist-info/licenses/LICENSE must be the file in the repository, byte for byte."""
+    expected = _repo_license_bytes()
+    with zipfile.ZipFile(_wheel_path()) as zf:
+        members = [n for n in zf.namelist() if re.fullmatch(r"[^/]+\.dist-info/licenses/LICENSE", n)]
+        assert len(members) == 1, f"expected one dist-info/licenses/LICENSE in the wheel, found {members}"
+        assert zf.read(members[0]) == expected, "wheel LICENSE differs from the repository LICENSE"
+
+
+def test_sdist_ships_the_repository_license() -> None:
+    """The sdist's top-level LICENSE must be the file in the repository, byte for byte."""
+    expected = _repo_license_bytes()
+    with tarfile.open(_sdist_path()) as tf:
+        members = [m for m in tf.getmembers() if m.name.count("/") == 1 and m.name.endswith("/LICENSE")]
+        assert len(members) == 1, (
+            f"expected one top-level LICENSE in the sdist, found {[m.name for m in members]}"
+        )
+        extracted = tf.extractfile(members[0])
+        assert extracted is not None, "sdist LICENSE member has no extractable content"
+        assert extracted.read() == expected, "sdist LICENSE differs from the repository LICENSE"
+
+
 def test_sdist_excludes_repository_only_material() -> None:
     names = _sdist_names(_sdist_path())
     offenders = [
