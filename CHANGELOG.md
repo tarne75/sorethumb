@@ -6,237 +6,102 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added
-
-- README "Is it the right tool?" section: a ranked shortlist for human review, not a sole control where a miss is unacceptable; labelled validation and domain review before relying on error rates; a fixed reference run for absolute comparison over time; and only trusted workspaces. The HTML report's rolling-window trend table carries a note that independent-period trends are relative, not an absolute level.
-- `docs/stability.md`: the pre-1.0 API and stability policy. The top-level `sorethumb_ml` export set is now pinned by an exact-equality contract test, which also rejects public names that are importable but not exported.
-
-### Changed
-
-- README: installation, a core-only example and a short "What it does not do" list now come first, and the full benchmark matrices moved to `docs/benchmarks.md`, leaving a compact summary and a link. `scripts/run_benchmark.py --readme` is unchanged but now targets `docs/benchmarks.md`, where the result markers live.
-- `run --json` reports rows flagged for review as `n_flagged` (top level and per group) and no longer emits the redundant `n_anomalies` alias; the name describes a review shortlist rather than a prevalence estimate. Not breaking: nothing has been released.
-- Removed the never-raised `CalibrationModeWarning` and `NonFiniteWarning` classes from `sorethumb_ml.errors`, and the unused `KMeansDetector.last_labels` / `last_contributions` state (an extra N×d array held after every scoring call). Not breaking: nothing has been released.
-
-### Removed
-
-- The `report` extra (matplotlib) and the HTML report's "Chart" tab. The trend-chart helper was never wired into the report, so the tab always said "No chart available." and installing the extra changed nothing. Rolling-window trends remain available from `sorethumb history`. Not breaking: nothing has been released.
-
-### Fixed
-
-- `sorethumb workspace reset` deletes only what sorethumb created: `sorethumb.db` and its SQLite sidecar files, and the `cache/`, `logs/`, `models/`, `reports/`, `results/` and `tmp/` directories. It used to delete the whole workdir, so a `--workdir` pointed at a directory holding your own files lost them too. Other files are now kept and listed, the directory is removed only if it ends up empty, and a symlinked entry is unlinked rather than followed.
-- An unexpected CLI crash no longer prints local variables. With the oldest supported Typer (0.16.0), a crash during an authenticated HTTP download printed every frame's locals, including the request headers carrying the `source.auth_env_var` credential, into the terminal and any CI log. Every Typer app now sets `pretty_exceptions_show_locals=False` and `pretty_exceptions_short=True` explicitly.
-- The CLI prints column names, group labels, category values, reasons, paths and warning text literally. Rich used to parse them as markup: a column named `[/x]` crashed `inspect` and `anomalies` with a `MarkupError` traceback, `amt [usd]` lost its `[usd]`, and the run summary's install hint for the optional extra read `pip install 'sorethumb-ml'` with `[explain]` missing.
-- The zero-config CLI flow no longer dead-ends. After `sorethumb run data.csv`, the follow-up commands (`anomalies`, `runs`, `show`, `report`, `history`, `explain-plan RUN_ID`, `workspace ls/du/prune/vacuum/migrate/reset`) work without a `sorethumb.toml`, using `--workdir` or the default `./sorethumb-workspace/`. They previously failed with "Config file not found" (exit 2), even with `-w`. An explicitly named `--config` that is missing is still exit 2. `run`'s "save settings?" prompt is no longer shown when stdin is not a terminal, where it printed `Aborted.` and exited 1. It now defaults to not saving and says on stderr how to save a config, and the new `--save-config` / `--no-save-config` flags decide without asking.
-- Explanations on a core install (no `explain` extra) now name the right column for rows far outside the data. Isolation Forest's fallback and the RBF One-Class SVM used finite-difference gradients, which are zero in the very column that puts such a row out of range, and the blend then normalised that near-zero noise up to full weight: with the default detectors, a row with an extreme `amount` was often explained as another column. Rows outside the reference range (or with an all-zero gradient) for these detectors are now attributed by their reference-scaled deviation from the median, and the blend leaves out a source whose row carries no information instead of normalising it. Attributions stay labelled `heuristic`; see `docs/explanations.md`.
-- Workspace database: migration 008 adds indexes for queries that scanned tables growing with history (`model` by run and group, `run` listing and failed-run pruning, `totals` and `period_execution` period lookups). Existing workspaces pick them up when next opened; no data changes.
-- Atomic writes (models, results, reports, manifests, cached downloads) now also fsync the parent directory after the rename, so the rename itself survives a crash; platforms or filesystems that cannot fsync a directory skip this silently, and other errors propagate. Temporary files are still removed on any failure.
-- HTTP source downloads handle `Content-Length` explicitly: an absent header (chunked transfer) and a malformed one (non-numeric, negative, signed, duplicated or with an impossible number of digits) are treated as undeclared, with the malformed case logged and ignored, while the streaming `source.max_download_bytes` ceiling is always enforced. Previously a malformed value raised a bare `ValueError` instead of a `SourceError`.
-- `sorethumb init` no longer reports success when the workspace could not be created: it prints an error, suppresses the success banner, exits `1`, and states explicitly when `sorethumb.toml` was nevertheless written. Unwritable target paths now fail cleanly instead of with a traceback.
-- Ranking and flag selection now use a stable descending sort with the earliest source row as the tie-break, so rank order and `explain.max_rows` selection are deterministic when rows share a composite score. Previously a reversed unstable argsort reversed tie groups, and the exact-k tie-break used array position, which is not source order once a group is time-sorted.
-
 ## [0.1.0] - 2026-09-21
 
-First public release. There is no prior published version to diff against,
-so the Fixed/Security/Compatibility entries below record corrections made
-during pre-release hardening rather than changes from an earlier release.
+First public release.
 
 ### Added
 
-- **Core pipeline**: profile every column, encode/impute/derive features,
-  fit an ensemble of anomaly detectors, percentile-calibrate their scores,
-  combine them into a ranking and a flag decision, and explain each flagged
-  row in terms of the original columns.
-- **Detectors**: `isolation_forest`, `kmeans_distance` (CBLOF-style), and
-  `one_class_svm` form the default three-detector ensemble; `ecod`, `hbos`,
-  and `lof` are also available. A detector `extra_params` escape hatch
-  forwards arbitrary constructor keywords to the underlying scikit-learn
-  estimator.
-- **Ensemble combination**: `intersection` (the default — every configured
-  detector must independently flag a row; see Known limitations),
-  `union`, and `composite` (a weighted average with an anti-correlated-member
-  guard and an optional agreement-based weighting scheme).
-- **Explanations**: a per-record, original-column reason for every flagged
-  row — exact for ECOD/HBOS (their score is already an additive sum of
-  per-feature terms), TreeSHAP-based (`model_specific`) for Isolation
-  Forest, and heuristic (centroid distance or finite-difference gradient)
-  for the rest.
-- **CLI**: `run`, `inspect`, `anomalies`, `report`, `history`, `backfill`,
-  `score --from-run`, `benchmark`, `init`, `config`, and `workspace`,
-  backed by a SQLite-based workspace store with resumable, idempotent,
-  ledger-tracked execution.
-- **`sorethumb score --from-run RUN_ID`**: score new data against a
-  previously fitted run's persisted models and calibrators with no
-  refitting, so scores stay on one comparable scale across calls (see
-  Compatibility for what this requires of the calling config).
-- **`sorethumb report`**: re-render a run's HTML/JSON/CSV report purely
-  from persisted state, independent of the process that produced the run.
-- **`sorethumb history` / `sorethumb backfill`**: rolling-window trend
-  aggregation and historical-period backfilling, both scoped correctly to
-  dataset identity and the exact configuration that produced each period.
-- **Two benchmark harnesses**, both run via `scripts/run_benchmark.py` (a
-  maintainer script that needs explicit `--output-dir`/`--readme` paths; it
-  is deliberately not part of the `sorethumb` command): a
-  full-pipeline synthetic-scenario suite (point/local/contextual/clustered/
-  masking/swamping/varying-density anomaly types through the real feature
-  pipeline) and a real-dataset (KDDCup99, Covtype) plus legacy-synthetic
-  suite — each with committed, CI-gated accuracy floors.
-- **Packaging**: published to PyPI as `sorethumb-ml` (see Compatibility);
-  ships `py.typed`; a tag-triggered, manually-approved publish workflow,
-  with a rehearsal path against TestPyPI.
-
-### Changed
-
-- **Statistical framing**: `sorethumb` is a ranker and review-budget
-  selector, not a prevalence estimator. `contamination` is documented and
-  surfaced throughout as a review budget, not a measurement of how many
-  anomalies the data contains; realised per-detector flag rates are always
-  shown alongside the flagged count.
-- **Default ensemble ranking fix**: the `intersection` combination's
-  continuous ranking now uses the per-row median across detectors instead
-  of `min()`, so one badly-misranking detector can no longer drag the whole
-  ensemble's ranking below random. The *flag* decision itself (an AND of
-  every detector's independent vote) is unchanged by this and stays
-  deliberately conservative — see Known limitations.
-- The zero-config default workspace moved from the current directory to a
-  dedicated `./sorethumb-workspace/`, so a first run never scatters files
-  beside the source data.
-- `kmeans_distance` scores CBLOF-style (distance to the nearest
-  *large*-cluster centroid), so a tight anomaly cluster can no longer
-  capture its own centroid and be scored as normal.
-- `Calibrator` supports self-calibration only; the never-reachable
-  "reference" mode was removed.
-
-### Removed
-
-- The unsupported `s3://` source-URI example (only local paths and
-  `http(s)://` were ever actually supported).
-- Several confirmed-dead code paths left over from the history/totals
-  redesign.
-
-### Fixed
-
-Pre-release hardening surfaced and fixed real issues across the codebase
-before anything shipped:
-
-- **Attribution scale and background come from a normal reference**: the gradient and KernelSHAP explainers now take target rows separately from a required `reference` matrix. Perturbation step sizes and the KernelSHAP background were previously derived from the flagged rows themselves, so an explanation changed with the other rows flagged in the same run and a lone flagged row had a zero-variance fallback step. The pipeline passes the unflagged rows as the reference (the whole population when fewer than 10 are unflagged) and computes attributions only for flagged rows.
-- **Attribution backend failures are reported**: when a detector's attribution backend raised, the failure was logged at debug level only and the detector silently contributed nothing. It now emits one `AttributionBackendWarning` per detector and group (cause in the message, the traceback in a warning-level log record); other detectors' explanations for the group are preserved, and `run.strict` promotes the warning to a group failure like any other project warning.
-- **Cohort contrast is comparable across column kinds**: `compute_contrast` now scores numeric columns by the two-sample KS statistic and categorical columns by total variation distance, both bounded in `[0, 1]` and independent of cohort size, so one table can rank both. The previous scores (|Cohen's d| + KS, unbounded, versus a max category lift that used `frequency x unflagged row count` for categories absent from the unflagged cohort) were not comparable and let weak categorical evidence outrank strong numeric separation. `stat_name` is now `ks_statistic` / `total_variation`.
-- **`backfill` survives a period that raises**: a project error (`SorethumbError`) raised while processing one period used to abort the whole backfill with a traceback, skipping every later period and printing no summary. Each period is now guarded; the raised failure is recorded separately from failed groups, later periods still run, a complete summary (periods attempted/succeeded, raised errors with cause, failed groups) is printed, and the command exits 1. Non-project exceptions are still not swallowed.
-- **Artifact registration is a real UPSERT**: `Store.register_artifact` used `INSERT OR REPLACE`, which deleted and re-inserted the row on every re-registration (a resumed or forced run), resetting `created_at` -- the age the prune policy uses -- and, because `path` is also unique, silently deleting a *different* artifact's row that owned the same path. It is now `INSERT ... ON CONFLICT(artifact_id) DO UPDATE` over the mutable fields only (`created_at` is preserved; an omitted `run_id` keeps the existing owner), and registering a path that another artifact already owns raises `StoreError` instead of transferring it.
-- **Stable, classified CLI exit codes and one JSON error shape**: exit codes are now `0` ok, `1` runtime failure, `2` pre-flight rejection (usage, config, source, schema, plan, selector matching nothing), `3` not found (unknown run, missing workspace, missing persisted plan) and `4` partial success (some groups or backfill periods failed, or the requested report did not render). Previously not-found shared `1` with group failures, `run`/`score` mapped every project error to `2`, and the docs table listed only three codes (and described the empty-selector exit as `2` while the code returned `1`). Classification comes from a new `failure_kind` on each project error and a new `NotFoundError(StoreError)`. Every `--json` command now emits one document per outcome; failures are exactly `{"error", "kind", "exit_code"}` and `run`/`score` result documents gain `exit_code` and `outcome`. Documented in `docs/cli_reference.md` and pinned by contract tests, including a check that the docs table matches the enum.
-- **Dependency floors are now tested, and three were wrong**: every release-validation job installed the newest versions from `uv.lock`, so the lower bounds in `pyproject.toml` were never exercised. A new `lowest-direct` job resolves every direct runtime dependency (core and all runtime extras) at its declared minimum on the minimum Python (3.11) and runs the unit and contract lanes. Doing so showed that the declared minimums of `typer`, `polars` and `pydantic` could not pass, so they were raised rather than the tests weakened: `typer>=0.16.0` (was 0.9.0, which cannot handle the `X | None` option types the CLI uses; 0.12.x also breaks against current `click`), `polars>=1.3.0` (was 1.0.0, which cannot scan compressed CSV) and `pydantic>=2.11.0` (was 2.5.0, whose JSON-schema output for `dict[str, Any]` differs from the pinned config-schema contract). All other floors pass unchanged.
-- **Workspace rules are documented accurately and pinned to the code**: the README, CLI reference, config reference and `SECURITY.md` now state the real resolution order (`--workdir`, then `run.workdir`, then `./sorethumb-workspace/`, a path relative to the *current directory* -- not the config file or the data file -- and applied to a config file that omits `run.workdir` too), the layout `sorethumb init` creates (`sorethumb.toml` plus `sorethumb-workspace/`, not "the directory itself"), and that the `models/` joblib/pickle files make a workspace executable. `SECURITY.md` previously named a default workspace (`.sorethumb/`) that never existed. A repo check (`tests/repo_check/test_workspace_docs.py`) ties every documented mention to `cli._DEFAULT_WORKDIR` and exercises the documented rules against the CLI; the `run.workdir` schema description and the `--workdir` help text now name the default.
-- **Missing and non-finite values**: float `NaN` is now treated as missing
-  (imputed like a null) instead of leaking into scaling, and the feature
-  matrix no longer replaces anything non-finite with `0.0` after scaling --
-  that made a `+Inf`/`-Inf` row look perfectly typical. Infinities in
-  columns that feed the matrix, and impossible derived values such as a
-  `float32` overflow, now fail with a clear `PlanError`.
-- **Data identity and history correctness**: row identity (`id_column`) is
-  validated for existence/uniqueness before any filtering; a group
-  selector matching nothing now fails loudly instead of silently
-  completing; history and backfill completion are now atomic and scoped to
-  the exact configuration that produced them; dataset identity survives
-  the source file growing over time.
-- **Model persistence integrity**: persisted models and calibrators are
-  digest-verified and namespaced per detector; a score-forward source run
-  must be genuinely complete and not itself a score-forward run; all
-  model-side writes are atomic.
-- **Config and CLI correctness**: generated `sorethumb.toml` files are now
-  always valid TOML; `--detectors` no longer silently rewrites the rest of
-  an existing config file to defaults; previously-inert configuration
-  fields are now wired up; one canonical `config_hash` is used everywhere
-  instead of two silently-different values.
-- **Explanation correctness**: a detector with zero ensemble weight can no
-  longer supply a row's entire displayed explanation; rows beyond
-  `explain.max_rows` are marked unavailable instead of given a fabricated
-  reason; a PCA back-projection failure fails closed instead of
-  mislabelling; ECOD/HBOS get exact native attributions instead of a noisy
-  finite-difference approximation.
-- **HTTP source fetching**: the documented `read_options` schema-inference
-  override now actually works; HTTP caching is validator-aware (ETag/
-  Last-Modified, genuine 304 reuse) instead of a "cache hit" that still
-  fully re-downloaded every time.
-- **HBOS scoring**: a value far outside the fitted histogram range is now
-  treated as unseen (scored at the density floor) instead of inheriting a
-  dense edge bin's score.
-- **Benchmark evidence**: the `swamping` scenario now uses a genuinely
-  matched clean/contaminated comparison (see Known limitations for what it
-  found); the harness refuses to publish an incomplete or errored result
-  matrix; real-dataset numbers come from a reproducible, provenance-carrying
-  run instead of an empty placeholder.
-- **Packaging**: the source distribution no longer ships local dev-tool
-  state or caches; macOS is now actually integration-tested, matching its
-  advertised support.
+- **Names**: install the `sorethumb-ml` distribution (`pip install sorethumb-ml`;
+  `sorethumb` on PyPI is an unrelated package), import `sorethumb_ml`, and run
+  the `sorethumb` command. Third-party detectors register through the
+  `sorethumb_ml.detectors` entry-point group. Python 3.11–3.13 on Linux and
+  macOS; the package ships `py.typed`.
+- **Pipeline**: profile every column, encode, impute and derive features, fit
+  an ensemble of detectors, percentile-calibrate their scores, combine them into
+  a ranking and a flag decision, and explain each flagged row in terms of the
+  original columns. It ranks a review shortlist: `scoring.contamination` is a
+  review budget, not an estimate of how many anomalies the data contains, and
+  each run shows the per-detector flag rates alongside the flagged count.
+- **Detectors**: `isolation_forest`, `kmeans_distance` (CBLOF-style) and
+  `one_class_svm` form the default ensemble; `ecod`, `hbos` and `lof` are also
+  available. A detector's `extra_params` forwards extra constructor keywords to
+  the underlying scikit-learn estimator.
+- **Ensemble combination**: `intersection` (the default: every configured
+  detector must flag a row; see Known limitations), `union`, and `composite`
+  (a weighted average with a guard that drops an anti-correlated member, and
+  optional agreement-based weighting).
+- **Explanations**: up to `explain.top_n` reasons per flagged row
+  (`reason_1`, `reason_2`, ...), labelled per row by `attribution_kind`:
+  `exact` for ECOD and HBOS, `model_specific` (TreeSHAP) for Isolation Forest
+  with the `explain` extra installed, and `heuristic` otherwise (centroid
+  distance, input gradient, or the reference-scaled deviation used for rows far
+  outside the data). See `docs/explanations.md`.
+- **CLI**: `init`, `inspect`, `run`, `score`, `report`, `backfill`, `history`,
+  `runs`, `show`, `anomalies`, `explain-plan`, `detectors`, `config`
+  (`check`, `schema`, `show`) and `workspace` (`ls`, `du`, `prune`, `vacuum`,
+  `migrate`, `reset`). `sorethumb run data.csv` works with no config file, and
+  the read-only commands after it need none either. Runs are resumable and
+  idempotent, tracked in a SQLite workspace. Exit codes are stable (`0` ok,
+  `1` runtime failure, `2` pre-flight rejection, `3` not found, `4` partial
+  success) and every `--json` command emits one document per outcome; see
+  `docs/cli_reference.md`.
+- **Score-forward**: `sorethumb score --from-run RUN_ID` scores new data with a
+  fitted run's persisted models and calibrators, without refitting, so scores
+  stay on one scale across calls. A config whose fit-time settings differ from
+  the source run's is rejected.
+- **History**: `sorethumb history` shows rolling-window trends and
+  `sorethumb backfill` fills missing periods, both scoped to the dataset and
+  the exact configuration that produced each period.
+- **Reports**: self-contained HTML plus CSV and JSON, re-renderable from
+  persisted state with `sorethumb report`.
+- **Extras**: `explain` (shap, numba) for TreeSHAP and KernelSHAP attributions;
+  `benchmark` (datasets, pandas) for the benchmark harnesses.
+- **Docs**: `docs/stability.md` sets out the pre-1.0 API and stability policy;
+  `docs/benchmarks.md` holds the benchmark results and their accuracy floors.
 
 ### Security
 
 - CSV report output is neutralised against spreadsheet formula injection.
-- `sorethumb workspace reset` refuses to delete a target unless it
-  genuinely opens as a sorethumb workspace, and always refuses an
-  obviously-wrong target (a filesystem root, home directory, git repo
-  root) even if one happened to contain a marker file.
-- Authenticated HTTP(S) downloads (`source.auth`) scope the `Authorization`
-  header to the exact configured origin — it is never sent across a
-  redirect to a different host or port, and an HTTPS→HTTP downgrade
-  redirect is refused outright.
-- **Persisted-model trust boundary** (read before using `score --from-run`
-  or `run.reuse_models` against a workspace you didn't create yourself): a
-  workspace's fitted models are `joblib`/pickle files, unpickled with no
-  sandboxing — this is arbitrary code execution, not safe data loading.
-  The SHA-256 digests checked on load catch corruption or a swapped file;
-  they are **not** a security boundary against a deliberately malicious
-  file. See [SECURITY.md](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md).
+- `sorethumb workspace reset` refuses any target that does not open as a
+  sorethumb workspace, and always refuses a filesystem root, the home
+  directory, the current directory, a git repository root or a very shallow
+  path. It deletes only the entries sorethumb creates, so other files in the
+  directory are kept.
+- Authenticated HTTP(S) downloads (`source.auth`) send the `Authorization`
+  header only to the configured origin: never across a redirect to another host
+  or port. An HTTPS-to-HTTP redirect is refused, and so is a request or redirect
+  to a loopback, link-local, private or reserved address.
+- An unexpected CLI crash never prints local variables, so a traceback cannot
+  reveal the download credential.
+- **Persisted-model trust boundary**: a workspace's fitted models are
+  `joblib`/pickle files, and `score --from-run` and `run.reuse_models` unpickle
+  them with no sandboxing. That is arbitrary code execution, not safe data
+  loading. The SHA-256 digests checked on load catch corruption or a swapped
+  file; they are **not** a security boundary against a deliberately malicious
+  one. Only use workspaces you created or fully trust. See
+  [SECURITY.md](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md).
 
 ### Known limitations
 
-- **Default `combination="intersection"`** requires every configured
-  detector to independently agree before flagging a row. Even after the
-  ranking fix above, this stays deliberately conservative on some data
-  shapes and can produce very few (or zero) true-positive flags — a
-  consequence of requiring unanimous agreement among individually-weaker
-  boundaries, not a bug. See `docs/approximations.md`.
-- **The `swamping` benchmark scenario** found no false-positive-inflating
-  effect from unlabelled training contamination in this pipeline —
-  measured properly, the effect runs the other way (a mild masking /
-  reduced-sensitivity effect). This is reported as an honest empirical
-  finding, not the scenario's originally-assumed premise.
-- Benchmark evidence in the README covers only the shipped default
-  ablation for the full-pipeline suite, and real-dataset (KDDCup99/Covtype)
-  numbers are capped at 20,000 rows for practical CI runtime — both
-  disclosed inline where the tables appear.
-- **Windows is untested and known-broken** (a real, unresolved `OSError`
-  across most CLI paths, confirmed by a rehearsal run) — see the README's
-  and SECURITY.md's Supported platforms sections.
-- Every detector fits on the same, unlabelled data it then scores — there
-  is no held-out "known normal" reference set, since that is what makes
-  this unsupervised in the first place. See `docs/approximations.md` for
-  this and other approximation-driven limitations (PCA, correlation
-  pruning, capped-detector train/score mixing, zero-inflated scaling).
-
-### Compatibility
-
-- **PyPI distribution renamed to `sorethumb-ml`** (`pip install
-  sorethumb-ml`) — `sorethumb` on PyPI is an unrelated package. The CLI
-  command, GitHub repo, and every on-disk convention (`sorethumb.toml`,
-  `sorethumb.db`, `sorethumb.log`, the `sorethumb-workspace/` directory)
-  are unaffected.
-- **Import package renamed to `sorethumb_ml`** (`import sorethumb_ml`,
-  previously `import sorethumb`) to match the PyPI distribution name and
-  avoid the two diverging. The `sorethumb.detectors` third-party
-  entry-point group is likewise now `sorethumb_ml.detectors`. The CLI
-  command stays `sorethumb`.
-- **`score --from-run` compatibility**: a config that claims different
-  fit-time settings than what the source run actually persisted
-  (`columns`/`profiling`/`features`, or a fit detector's `params`/
-  `train_row_cap`) is now rejected outright, rather than silently ignored
-  in favour of what was actually loaded.
-- Identity digests widened from 64-bit to 128-bit (`run_id`, `group_key`,
-  `dataset_fp`, `config_hash`); no migration is needed, since nothing
-  shipped before this release for a workspace to migrate from.
-- `attribution_kind == "exact"` is reserved for ECOD/HBOS's native
-  decomposition; Isolation Forest/TreeSHAP results read `"model_specific"`
-  instead.
+- **The default `combination="intersection"`** flags a row only when every
+  configured detector flags it independently. That is deliberately
+  conservative and, on some data shapes, can flag very few true anomalies or
+  none. See `docs/approximations.md`.
+- **Without the `explain` extra**, Isolation Forest explanations are
+  `heuristic` rather than `model_specific`.
+- Every detector fits on the same unlabelled data it scores; there is no
+  held-out "known normal" reference. Independent runs are not on a common score
+  scale; use `score --from-run` for a comparable trend. See
+  `docs/approximations.md` for this and the other approximations (PCA,
+  correlation pruning, row-capped detector training, zero-inflated scaling).
+- **The `swamping` benchmark scenario** found no false-positive inflation from
+  unlabelled training contamination; measured on matched data, the effect runs
+  the other way (mildly reduced sensitivity).
+- Real-dataset benchmark figures (KDDCup99, Covtype) are capped at 20,000 rows
+  for CI runtime, as `docs/benchmarks.md` states where the tables appear.
+- **Windows is untested and known to fail** across most CLI paths; see the
+  README's and SECURITY.md's Supported platforms sections.
 
 [Unreleased]: https://github.com/tarne75/sorethumb/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/tarne75/sorethumb/releases/tag/v0.1.0
