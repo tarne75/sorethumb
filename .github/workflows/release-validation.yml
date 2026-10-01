@@ -7,7 +7,10 @@ name: Release validation
 # ci.yml run against a possibly-different commit on main). Anything NOT
 # required to gate a release -- the benchmark accuracy floors, informational
 # coverage, the network-hitting docs-snippets/full-nightly lanes -- stays in
-# ci.yml itself, not here.
+# ci.yml itself, not here. The one exception (P0-7) is `accuracy-smoke`: the
+# fast, deterministic, network-free synthetic ROC-AUC floors, which every
+# release commit must clear, so a score-direction or ranking regression can't
+# be published even if the scheduled lanes haven't caught it yet.
 #
 # Every third-party action below is pinned to an exact commit, not a floating
 # major-version tag -- see the header comment in ci.yml for why the SHA is
@@ -108,6 +111,28 @@ jobs:
       - run: uv lock --check
       - run: uv sync --all-extras --frozen
       - run: uv run pytest -m repo_check
+
+  # Ranking-quality gate (P0-7). The existing fast synthetic accuracy smoke:
+  # network-free (the two synthetic datasets only), seeded, ~4s of test time.
+  # It asserts a tolerance-banded ROC-AUC floor per guarded detector (floors sit
+  # below the observed values, so noise can't flake it) plus "default ensemble
+  # beats random" -- the checks that catch an inverted score direction or a
+  # detector that scores a planted anomaly cluster as normal. It runs here, not
+  # only in ci.yml, so publish.yml / publish-testpypi.yml gate on it for the
+  # exact commit being published. The expensive and network-backed suites
+  # (full pipeline-scenario floors, real-dataset smoke) stay scheduled in
+  # ci.yml's full-nightly.
+  accuracy-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.12"
+      - run: uv lock --check
+      - run: uv sync --all-extras --frozen
+      - run: uv run pytest tests/benchmark/test_accuracy_floors.py -m benchmark
 
   # Build, twine check, package-data assertion, and clean install smoke for
   # core and every advertised extra -- for BOTH the wheel and the sdist

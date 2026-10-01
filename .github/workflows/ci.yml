@@ -38,8 +38,11 @@ jobs:
   # a score-direction regression. Deliberately narrow (synthetic data only,
   # one seed) so it stays fast enough to require on every PR; the full
   # accuracy-floor suite and real-dataset checks run on schedule (see
-  # `full-nightly` below). Not part of release-validation.yml's gate (P0-9
-  # scopes the release gate to correctness/build, not accuracy floors).
+  # `full-nightly` below). The same test also runs inside
+  # release-validation.yml's `accuracy-smoke` job (P0-7), which is what gates
+  # publication of the exact tagged commit; this standalone job is kept so the
+  # existing required-check name keeps resolving. Once branch protection is
+  # pointed at `validate / accuracy-smoke`, this duplicate can be removed.
   benchmark-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 5
