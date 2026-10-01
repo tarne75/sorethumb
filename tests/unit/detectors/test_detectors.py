@@ -272,6 +272,27 @@ def test_ocsvm_natural_flag_below_zero():
     np.testing.assert_array_equal(flags, expected)
 
 
+def test_ocsvm_scores_are_sklearns_decision_function_unflipped():
+    """sklearn's decision function is positive for inliers and negative for
+    outliers, which already is "higher = more normal": the detector must return
+    it as-is. A negation here would silently invert every OneClassSVM ranking."""
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(300, 2))
+    det = OneClassSVMDetector(nu=0.1)
+    det.fit(X, seed=0)
+
+    queries = np.array([[0.0, 0.0], [8.0, 8.0], [-9.0, 7.0]])  # centre, then two far outliers
+    scores = det.score_samples(queries)
+
+    # Exactly sklearn's value, not its negation and not a rescaling of it.
+    np.testing.assert_array_equal(scores, det._model.decision_function(queries))
+    # Inlier above outliers; the inlier is on the positive side, outliers on the negative.
+    assert scores[0] > 0.0
+    assert (scores[1:] < 0.0).all()
+    assert scores[0] > scores[1:].max()
+    np.testing.assert_array_equal(det.natural_flag(scores), [False, True, True])
+
+
 def test_ocsvm_auto_nu_defaults_to_01():
     X = _normal_data(n=100)
     det = OneClassSVMDetector(nu="auto")

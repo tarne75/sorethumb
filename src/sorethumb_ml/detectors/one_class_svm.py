@@ -1,20 +1,11 @@
 """OneClassSVM detector.
 
-score_samples() returns the *negated* sklearn decision_function value so that
-higher = more normal, matching the Detector protocol convention. sklearn's
-decision_function is positive for the normal class and negative for outliers,
-so negating it gives negative-for-normal, which is wrong — we negate once
-more so the final sign is: higher (closer to zero from below) = more normal.
-
-Wait — re-reading sklearn docs: decision_function returns positive for inliers
-and negative for outliers. So we need to *negate* to get "higher = more normal"
-from "higher = more anomalous". Actually, sklearn docs say:
-
-  Signed distance to the separating hyperplane.
-  Positive for an inlier, negative for an outlier.
-
-So decision_function already gives higher = more normal (inliers are positive).
-We do NOT negate. natural_flag is `scores < 0` (below the hyperplane).
+``score_samples()`` returns sklearn's ``decision_function`` unchanged, and no
+sign flip is applied. The decision function is the signed distance to the
+separating hyperplane: positive for inliers, negative for outliers. That is
+already the Detector protocol's convention, higher = more normal, so the
+natural flag is ``scores < 0`` (below the hyperplane). The convention is pinned
+by ``test_ocsvm_scores_are_sklearns_decision_function_unflipped``.
 
 nu="auto" trains with nu=0.1 as a reasonable default contamination estimate.
 OneClassSVM is O(n²) for the kernel matrix; the train-row cap (25 000 default)
