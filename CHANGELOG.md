@@ -6,6 +6,10 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `run --json` reports rows flagged for review as `n_flagged` (top level and per group) and no longer emits the redundant `n_anomalies` alias; the name describes a review shortlist rather than a prevalence estimate. Not breaking: nothing has been released.
+
 ### Fixed
 
 - Ranking and flag selection now use a stable descending sort with the earliest source row as the tie-break, so rank order and `explain.max_rows` selection are deterministic when rows share a composite score. Previously a reversed unstable argsort reversed tie groups, and the exact-k tie-break used array position, which is not source order once a group is time-sorted.

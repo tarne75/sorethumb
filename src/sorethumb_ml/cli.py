@@ -1993,7 +1993,7 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
         "n_succeeded": result.n_succeeded,
         "n_skipped": result.n_skipped,
         "n_failed": result.n_failed,
-        "n_anomalies": result.n_anomalies,
+        "n_flagged": result.n_anomalies,  # review shortlist size, not a prevalence estimate
         "report_path": str(result.report_path) if result.report_path else None,
         "report_status": result.report_status,
         "started_at": result.started_at,
@@ -2005,7 +2005,6 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
                 "group_label": g.group_label,
                 "n_records": g.n_records,
                 "n_flagged": g.n_anomalies,  # review shortlist size, not a prevalence estimate
-                "n_anomalies": g.n_anomalies,  # kept for compatibility; same value as n_flagged
                 "detector_flag_rates": g.detector_flag_rates,
                 "dropped_detectors": g.dropped_detectors,
                 "status": g.status,

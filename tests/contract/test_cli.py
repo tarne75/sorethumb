@@ -451,7 +451,10 @@ def test_run_json_output(workspace):
     assert "run_id" in data
     assert "groups" in data
     g = data["groups"][0]
-    assert g["n_flagged"] == g["n_anomalies"]  # review-shortlist size, renamed for honesty
+    assert isinstance(g["n_flagged"], int)
+    assert "n_anomalies" not in g  # the redundant alias was removed before the first release
+    assert "n_anomalies" not in data
+    assert data["n_flagged"] == sum(grp["n_flagged"] for grp in data["groups"])
     assert isinstance(g["detector_flag_rates"], dict)
     assert set(g["detector_flag_rates"]) == {"isolation_forest"}  # the workspace fixture's detector
     assert all(0.0 <= r <= 1.0 for r in g["detector_flag_rates"].values())
@@ -531,6 +534,46 @@ def test_run_summary_and_json_surface_warnings_issued():
     payload = _run_result_to_dict(result)
     assert payload["warnings_issued"] == [warning_msg]
     assert payload["groups"][0]["warnings_issued"] == [warning_msg]
+
+
+def test_run_json_flag_counts_use_one_name_and_no_alias():
+    """Group and run documents expose ``n_flagged`` only; ``n_anomalies`` is gone."""
+    from sorethumb_ml._pipeline import GroupSummary, RunResult
+    from sorethumb_ml.cli import _run_result_to_dict
+
+    def _group(key: str, n: int) -> GroupSummary:
+        return GroupSummary(
+            group_key=key,
+            group_label=key,
+            n_records=100,
+            n_anomalies=n,
+            anomaly_rate=n / 100,
+            results_path=None,
+            status="success",
+            error=None,
+            elapsed_seconds=0.1,
+            drifted=False,
+            refit_reason=None,
+            warnings_issued=[],
+        )
+
+    result = RunResult(
+        run_id="run1",
+        dataset_uri="file:///x.csv",
+        dataset_fp="fp1",
+        config_hash="ch1",
+        period_label=None,
+        workspace_path=Path("/tmp/ws"),
+        groups=[_group("a", 3), _group("b", 4)],
+        report_path=None,
+        started_at="t0",
+        finished_at="t1",
+    )
+    payload = _run_result_to_dict(result)
+    assert payload["n_flagged"] == 7
+    assert [g["n_flagged"] for g in payload["groups"]] == [3, 4]
+    assert "n_anomalies" not in payload
+    assert all("n_anomalies" not in g for g in payload["groups"])
 
 
 # ---------------------------------------------------------------------------

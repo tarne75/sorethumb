@@ -150,6 +150,11 @@ and `outcome` (`ok`, `partial`, `runtime` or `preflight`) alongside the usual
 fields, so a caller can branch on one field whether the run finished cleanly or
 not.
 
+The run document counts rows **flagged for review** as `n_flagged`, both at the top
+level (all groups) and per group. It is the size of the review shortlist at the
+chosen budget, not an estimate of how many records are truly anomalous, which is
+why the field is not called `n_anomalies`. There is no alias under the old name.
+
 ---
 
 ## `sorethumb init [path]`
@@ -713,7 +718,7 @@ sorethumb workspace prune --days 30  # keep workspace lean
 ### Machine-readable output for downstream tools
 
 ```bash
-sorethumb run --json | jq '.groups[] | select(.n_anomalies > 0)'
+sorethumb run --json | jq '.groups[] | select(.n_flagged > 0)'
 sorethumb anomalies --top 100 --json | jq '.[] | {rank, score: .composite_score, r1: .reason_1}'
 sorethumb runs --json | jq '.[] | select(.status == "failed") | .run_id'
 ```
