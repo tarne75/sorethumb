@@ -864,6 +864,13 @@ def init(
     from sorethumb_ml.io.toml_write import render_toml_value  # noqa: PLC0415
 
     ws_dir = path / _DEFAULT_WORKDIR
+    from sorethumb_ml.errors import PathTooLongError  # noqa: PLC0415
+    from sorethumb_ml.store.workspace import check_path_length  # noqa: PLC0415
+
+    try:
+        check_path_length(ws_dir, list_detectors())
+    except PathTooLongError as exc:
+        _fail(False, f"{exc} Nothing was written.", ExitCode.PREFLIGHT)
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

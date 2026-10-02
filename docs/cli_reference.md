@@ -106,6 +106,17 @@ older default of `.`) and nothing names a workspace, sorethumb refuses to guess:
 pass `--workdir .` to keep using it, or move its contents into
 `./sorethumb-workspace/`.
 
+### Long workspace paths on Windows
+
+Windows limits a path to 260 characters unless long-path support is enabled
+(the `LongPathsEnabled` setting; Microsoft's "Maximum Path Length Limitation"
+page explains it). sorethumb creates files up to about 112 characters below the
+workspace directory, more with a long third-party detector name, so a workspace
+path longer than roughly 145 characters — easy to reach under a OneDrive
+`Documents` folder — can't hold them. `init`, `run` and `score` check this
+before doing any work and stop with exit code 2, saying how many characters
+too long the path is. Use a shorter `--workdir` or enable long paths.
+
 ### What is in a workspace — and why it is executable
 
 ```

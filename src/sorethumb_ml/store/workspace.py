@@ -11,11 +11,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import sys
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Self
 
-from sorethumb_ml._atomic import unlink_with_retry
-from sorethumb_ml.errors import NotFoundError, StoreError
+from sorethumb_ml._atomic import TEMP_NAME_MAX_LEN, unlink_with_retry
+from sorethumb_ml.errors import NotFoundError, PathTooLongError, StoreError
 from sorethumb_ml.store.db import Store
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,86 @@ def owned_entry_names() -> tuple[str, ...]:
     """
     dirs = dict.fromkeys(sub.split("/", 1)[0] for sub in _SUBDIRS)
     return (_MARKER_DB, *(_MARKER_DB + suffix for suffix in _DB_SIDECAR_SUFFIXES), *dirs)
+
+
+# Windows' MAX_PATH is 260 including the terminating NUL.
+WINDOWS_MAX_PATH = 259
+_RUN_ID_LEN = len("score_") + 32  # the longer of "run_<32 hex>" and "score_<32 hex>"
+_GROUP_KEY_LEN = 32
+_HASH_HEX_LEN = 64  # download-cache fingerprints and HTTP-metadata names (sha256 hex)
+_LONGEST_SOURCE_SUFFIX = len(".ndjson.gz")
+# The longest file sorethumb writes beside each detector's model.
+_LONGEST_MODEL_FILE_SUFFIX = len(".calibrator.json")
+
+
+def deepest_path_suffix_length(detector_names: Iterable[str]) -> int:
+    """Return the length of the longest path sorethumb creates *below* a workspace root.
+
+    Includes the leading separator, and the temp file an atomic write creates
+    beside each target. Derived from the layout itself: models/<run>/<group>/
+    <detector>.calibrator.json, results/<run>/<group>/, reports/<run>/,
+    cache/datasets/<sha256>/data<ext> and cache/datasets/.http_meta/<sha256>.json.
+    """
+    longest_detector = max((len(n) for n in detector_names), default=0)
+
+    def leaf(name_len: int) -> int:
+        return 1 + max(name_len, TEMP_NAME_MAX_LEN)
+
+    candidates = (
+        len("/models/")
+        + _RUN_ID_LEN
+        + 1
+        + _GROUP_KEY_LEN
+        + leaf(longest_detector + _LONGEST_MODEL_FILE_SUFFIX),
+        len("/results/") + _RUN_ID_LEN + 1 + _GROUP_KEY_LEN + leaf(len("anomalies.parquet")),
+        len("/reports/") + _RUN_ID_LEN + leaf(_GROUP_KEY_LEN + len(".csv")),
+        len("/cache/datasets/") + _HASH_HEX_LEN + leaf(len("data") + _LONGEST_SOURCE_SUFFIX),
+        len("/cache/datasets/.http_meta") + leaf(_HASH_HEX_LEN + len(".json")),
+    )
+    return max(candidates)
+
+
+def _long_paths_enabled() -> bool:
+    """Return True if Windows long-path support is switched on (LongPathsEnabled=1)."""
+    if sys.platform != "win32":
+        return True
+    import winreg  # noqa: PLC0415
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\FileSystem") as key:
+            value, _ = winreg.QueryValueEx(key, "LongPathsEnabled")
+    except OSError:
+        return False
+    return bool(value == 1)
+
+
+def check_path_length(root: Path, detector_names: Iterable[str]) -> None:
+    r"""Fail early when a Windows workspace is too deep for MAX_PATH.
+
+    No-op except on Windows, and when long paths are enabled or *root* already
+    uses the ``\\?\`` extended-length prefix.
+
+    Raises:
+        PathTooLongError: the deepest path the run would create exceeds 259 characters.
+
+    """
+    if sys.platform != "win32":
+        return
+    root_str = str(root.resolve())
+    if root_str.startswith("\\\\?\\") or _long_paths_enabled():
+        return
+    deepest = len(root_str) + deepest_path_suffix_length(detector_names)
+    if deepest <= WINDOWS_MAX_PATH:
+        return
+    over = deepest - WINDOWS_MAX_PATH
+    msg = (
+        f"The workspace path {root_str} ({len(root_str)} characters) is too long for Windows: "
+        f"sorethumb creates paths up to {deepest - len(root_str)} characters below it, "
+        f"{over} over the 259-character limit. Use a workspace path at least {over} characters "
+        "shorter (--workdir), or enable long paths in Windows (Microsoft's "
+        '"Maximum Path Length Limitation" page explains the LongPathsEnabled setting).'
+    )
+    raise PathTooLongError(msg)
 
 
 def group_value_json_default(value: object) -> str:

@@ -78,6 +78,17 @@ class FileInUseError(StoreError):
     """
 
 
+class PathTooLongError(StoreError):
+    """The workspace is too deep for Windows' 260-character path limit.
+
+    A pre-flight check (Windows only, skipped when long paths are enabled),
+    raised before any model is fitted rather than as a bare FileNotFoundError
+    at the first deep write minutes into a run.
+    """
+
+    failure_kind = "preflight"
+
+
 class MemoryBudgetError(SorethumbError):
     """Raised when the projected feature-matrix size exceeds run.max_memory_mb.
 

@@ -42,6 +42,14 @@ Versioning: [Semantic Versioning](https://semver.org/).
   on Windows in a different letter case or with forward slashes. The prompt
   now shows the exact path to type.
 
+### Added
+
+- **Windows path-length preflight**: without long-path support Windows caps a
+  path at 260 characters, and sorethumb creates files about 112 characters
+  below the workspace directory. `init`, `run` and `score` now stop before
+  doing any work (exit code 2, `PathTooLongError`) when the workspace is too
+  deep, instead of failing with a bare "file not found" minutes into a run.
+
 ### Changed
 
 - **Windows source paths**: spellings of one Windows file that differ only

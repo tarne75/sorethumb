@@ -70,7 +70,12 @@ from sorethumb_ml.store.models import (
     score_with_existing,
 )
 from sorethumb_ml.store.results import read_results, results_path, write_results
-from sorethumb_ml.store.workspace import Workspace, group_value_json_default, make_group_key
+from sorethumb_ml.store.workspace import (
+    Workspace,
+    check_path_length,
+    group_value_json_default,
+    make_group_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -631,6 +636,7 @@ def run_detection(
     slow_after = config.run.slow_stage_seconds
 
     with ws, _strict_warnings(config.run.strict):
+        check_path_length(ws.root, (d.name for d in config.detectors))
         cache_dir = ws.root / "cache" / "datasets"
 
         # ── 1. Load dataset ──────────────────────────────────────────────
@@ -1045,6 +1051,7 @@ def score_forward(
         plan = load_plan(ws, source_run_id)
 
         # ── Load the new dataset ─────────────────────────────────────────
+        check_path_length(ws.root, (d.name for d in source_cfg.detectors))
         cache_dir = ws.root / "cache" / "datasets"
         with _timed_stage("load-dataset", slow_after):
             local_path = resolve_source(config.source, cache_dir)

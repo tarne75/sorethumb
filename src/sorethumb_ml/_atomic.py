@@ -21,6 +21,10 @@ from pathlib import Path
 
 from sorethumb_ml.errors import FileInUseError
 
+# Temp files are "<TEMP_PREFIX><8 random chars><suffix>", next to their target.
+TEMP_PREFIX = ".st-"
+TEMP_NAME_MAX_LEN = len(TEMP_PREFIX) + 8 + len(".tmp")
+
 
 @contextmanager
 def atomic_write(path: Path, *, suffix: str = ".tmp") -> Generator[Path, None, None]:
@@ -41,7 +45,10 @@ def atomic_write(path: Path, *, suffix: str = ".tmp") -> Generator[Path, None, N
     that accepts a path works); this only handles the fsync + rename.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=suffix)
+    # A short fixed prefix rather than the target's own name: on Windows every
+    # character counts against the 260-character path limit (see
+    # store/workspace.check_path_length), and nothing reads these names back.
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=TEMP_PREFIX, suffix=suffix)
     os.close(fd)
     tmp = Path(tmp_name)
     try:
