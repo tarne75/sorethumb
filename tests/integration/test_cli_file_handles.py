@@ -167,7 +167,7 @@ def test_a_locked_report_file_is_named_in_the_run_summary(
     assert result.exit_code == 4, result.output  # report failed, detection succeeded
     flat = " ".join(result.output.split())
     assert "open in another program" in flat
-    assert ".csv" in flat
+    assert ".csv:" in "".join(result.output.split())  # Rich may wrap a long path mid-name
 
 
 def test_report_command_names_a_locked_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

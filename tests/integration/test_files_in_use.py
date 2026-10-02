@@ -140,7 +140,7 @@ def test_prune_command_reports_a_locked_file(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr(ws_mod, "unlink_with_retry", _locked)
     result = CliRunner().invoke(app, ["workspace", "prune", "--workdir", str(tmp_path / "ws"), "--days", "1"])
     assert result.exit_code == 1, result.output
-    assert "locked.parquet" in " ".join(result.output.split())
+    assert "locked.parquet" in "".join(result.output.split())  # Rich may wrap a long path mid-name
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows file-sharing semantics")
