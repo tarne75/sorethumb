@@ -6,6 +6,12 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows**: every write of a model, result, report or downloaded source
+  failed with `OSError: [Errno 9] Bad file descriptor`, because the file was
+  flushed to disk through a read-only handle, which Windows rejects.
+
 ## [0.1.0] - 2026-09-21
 
 First public release.

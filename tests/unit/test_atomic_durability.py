@@ -9,6 +9,7 @@ from __future__ import annotations
 import errno
 import os
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -44,7 +45,66 @@ def test_parent_directory_is_fsynced_after_the_rename(
     atomic_write_bytes(target, b"payload")
 
     assert target.read_bytes() == b"payload"
-    assert events == ["fsync-file", "replace", "fsync-dir"]
+    if sys.platform == "win32":
+        # Windows can't open a directory handle, so _fsync_dir skips by design.
+        assert events == ["fsync-file", "replace"]
+    else:
+        assert events == ["fsync-file", "replace", "fsync-dir"]
+
+
+def test_the_file_is_opened_for_writing_before_fsync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """os.fsync needs a write-capable handle on Windows (FlushFileBuffers)."""
+    opened: list[int] = []
+    real_open = os.open
+
+    def _open(path: str, flags: int, *args: int) -> int:
+        if not Path(path).is_dir():
+            opened.append(flags)
+        return real_open(path, flags, *args)
+
+    monkeypatch.setattr(_atomic.os, "open", _open)
+    atomic_write_bytes(tmp_path / "artifact.bin", b"x")
+    assert opened, "the temp file was never opened for fsync"
+    assert all(flags & (os.O_WRONLY | os.O_RDWR) for flags in opened)
+
+
+def test_windows_fsync_semantics_on_a_read_only_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Simulate Windows: fsync on a read-only descriptor fails with EBADF.
+
+    This is the "OSError: [Errno 9] Bad file descriptor" every CLI path hit on
+    windows-latest; it must pass on every platform with the fix in place.
+    """
+    writable: set[int] = set()
+    real_open, real_fsync, real_close = os.open, os.fsync, os.close
+
+    def _open(path: str, flags: int, *args: int) -> int:
+        fd = real_open(path, flags, *args)
+        if flags & (os.O_WRONLY | os.O_RDWR):
+            writable.add(fd)
+        return fd
+
+    def _fsync(fd: int) -> None:
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(errno.EINVAL, "directory fsync unsupported (simulated)")
+        if fd not in writable:
+            raise OSError(errno.EBADF, "Bad file descriptor (simulated Windows _commit)")
+        real_fsync(fd)
+
+    def _close(fd: int) -> None:
+        # Descriptor numbers are reused; forget the mode once one is closed
+        # (mkstemp's own O_RDWR descriptor is closed before the fsync open).
+        writable.discard(fd)
+        real_close(fd)
+
+    monkeypatch.setattr(_atomic.os, "open", _open)
+    monkeypatch.setattr(_atomic.os, "fsync", _fsync)
+    monkeypatch.setattr(_atomic.os, "close", _close)
+    target = tmp_path / "artifact.bin"
+    atomic_write_bytes(target, b"payload")
+    assert target.read_bytes() == b"payload"
+    assert _leftover_temp_files(tmp_path) == []
 
 
 def test_the_directory_fsynced_is_the_targets_own_parent(

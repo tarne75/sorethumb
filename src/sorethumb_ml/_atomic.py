@@ -89,8 +89,15 @@ def _fsync_dir(directory: Path) -> None:
         os.close(fd)
 
 
+# Flags for opening a file only to fsync it. Write access is required: on
+# Windows os.fsync is _commit() -> FlushFileBuffers, which fails with EBADF
+# ("Bad file descriptor") on a read-only handle. The temp files synced here are
+# always ours (created by mkstemp, mode 0600), so write access is available.
+_FSYNC_OPEN_FLAGS = os.O_RDWR | getattr(os, "O_BINARY", 0)
+
+
 def _fsync_path(path: Path) -> None:
-    fd = os.open(str(path), os.O_RDONLY)
+    fd = os.open(str(path), _FSYNC_OPEN_FLAGS)
     try:
         os.fsync(fd)
     finally:
