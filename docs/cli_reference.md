@@ -675,7 +675,13 @@ Only what sorethumb creates is deleted: `sorethumb.db` (with any
 directory is kept — so a `--workdir` pointed at a directory that already held
 your own files leaves them in place — and is listed. The directory itself is
 removed only when nothing else remains in it (exit 0 either way). A symlink
-among those entries is removed, never followed.
+or Windows directory junction among those entries is removed, never followed,
+and read-only files are deleted too.
+
+The confirmation prompt shows the exact path to type. Any spelling of the same
+directory is accepted: surrounding quotes (as Windows Explorer's "Copy as path"
+adds), a trailing separator, `~`, and on Windows a different letter case or
+forward slashes.
 
 Refuses outright, regardless of `--yes`, unless the target actually opens
 as a real sorethumb workspace (has a `sorethumb.db` marker) — and always

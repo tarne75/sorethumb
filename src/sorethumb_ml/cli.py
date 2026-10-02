@@ -2123,6 +2123,84 @@ def _guard_reset_target(ws_path: Path) -> None:
         raise typer.Exit(int(ExitCode.PREFLIGHT))
 
 
+def _is_link_like(path: Path) -> bool:
+    """Return True for a symlink or a Windows directory junction.
+
+    A junction is not ``is_symlink()``, so without this it would be treated as
+    a real directory -- and shutil.rmtree refuses junctions outright.
+    """
+    if path.is_symlink():
+        return True
+    is_junction = getattr(path, "is_junction", None)  # Python 3.12+
+    if is_junction is not None:
+        return bool(is_junction())
+    import os  # noqa: PLC0415
+    import stat  # noqa: PLC0415
+
+    mount_point = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", None)  # Windows only
+    if mount_point is None:
+        return False
+    try:
+        return bool(getattr(os.lstat(path), "st_reparse_tag", 0) == mount_point)
+    except OSError:
+        return False
+
+
+def _remove_link(path: Path) -> None:
+    """Remove a symlink or junction itself, never what it points to."""
+    from sorethumb_ml._atomic import unlink_with_retry  # noqa: PLC0415
+
+    try:
+        unlink_with_retry(path)
+    except (IsADirectoryError, PermissionError):
+        # A directory symlink or junction on Windows is removed with rmdir,
+        # which unlinks the link without touching its target.
+        path.rmdir()
+
+
+def _rmtree_clearing_read_only(path: Path) -> None:
+    """``shutil.rmtree`` that also deletes read-only files.
+
+    Windows refuses to delete a file with the read-only attribute set (common
+    for anything copied from a read-only share or touched by a sync tool), so
+    on failure the attribute is cleared and the deletion retried once.
+    """
+    import os  # noqa: PLC0415
+    import shutil  # noqa: PLC0415
+    import stat  # noqa: PLC0415
+
+    def _retry(func: Callable[..., Any], target: str, _exc: object) -> None:
+        os.chmod(target, stat.S_IWRITE)  # noqa: PTH101 -- receives a str path from rmtree
+        func(target)
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_retry)
+    else:  # pragma: no cover - exercised on the 3.11 CI legs
+        shutil.rmtree(path, onerror=_retry)
+
+
+def _confirmation_matches(typed: str, ws_path: Path) -> bool:
+    """Return True if *typed* names *ws_path*, however the user spelled it.
+
+    Accepts surrounding whitespace, one pair of matching quotes (what Windows
+    Explorer's "Copy as path" adds), a trailing separator, ``~``, and any
+    spelling that resolves to the same directory -- on Windows that includes a
+    different letter case, forward slashes and a mapped drive letter for a
+    path that resolve() reports in its UNC form.
+    """
+    text = typed.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    if not text:
+        return False
+    if text == str(ws_path):
+        return True
+    try:
+        return Path(text).expanduser().resolve() == ws_path
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
 @workspace_app.command(name="reset")
 def workspace_reset(
     config: _CONFIG_OPT = None,
@@ -2168,13 +2246,14 @@ def workspace_reset(
     owned = [
         ws_path / name
         for name in owned_entry_names()
-        if (ws_path / name).is_symlink() or (ws_path / name).exists()
+        if _is_link_like(ws_path / name) or (ws_path / name).exists()
     ]
     console.print(f"[red bold]This will destroy sorethumb's data in:[/red bold] {_e(ws_path)}")
     for entry in owned:
-        console.print(f"  - {_e(entry.name)}{'/' if entry.is_dir() and not entry.is_symlink() else ''}")
+        console.print(f"  - {_e(entry.name)}{'/' if entry.is_dir() and not _is_link_like(entry) else ''}")
     if not yes:
         console.print("Type the full workspace path to confirm (Ctrl-C to abort):")
+        console.print(f"  {_e(ws_path)}", highlight=False)
         try:
             typed = input("> ").strip()
         except EOFError:
@@ -2182,11 +2261,9 @@ def workspace_reset(
             # traceback -- same outcome as typing the wrong path: abort.
             err_console.print("[red]No input available (stdin closed). Aborting.[/red]")
             raise typer.Exit(int(ExitCode.RUNTIME)) from None
-        if typed != str(ws_path):
+        if not _confirmation_matches(typed, ws_path):
             err_console.print("[red]Path did not match. Aborting.[/red]")
             raise typer.Exit(int(ExitCode.RUNTIME))
-
-    import shutil  # noqa: PLC0415
 
     from sorethumb_ml._atomic import unlink_with_retry  # noqa: PLC0415
 
@@ -2195,12 +2272,14 @@ def workspace_reset(
     _detach_file_handlers()
     try:
         for entry in owned:
-            # A symlink is removed itself, never followed; rmtree never follows
-            # symlinks inside the directories it deletes either.
-            if entry.is_symlink() or not entry.is_dir():
+            # A symlink or junction is removed itself, never followed; rmtree
+            # never follows links inside the directories it deletes either.
+            if _is_link_like(entry):
+                _remove_link(entry)
+            elif not entry.is_dir():
                 unlink_with_retry(entry)
             else:
-                shutil.rmtree(entry)
+                _rmtree_clearing_read_only(entry)
         remaining = sorted(ws_path.iterdir())
         if not remaining:
             ws_path.rmdir()

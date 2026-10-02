@@ -35,6 +35,12 @@ Versioning: [Semantic Versioning](https://semver.org/).
   terminal. Only a real console is now treated as interactive.
 - **`file://C:/...` URIs** (two slashes, as often typed by hand) resolve to
   the drive path instead of an invalid `\\C:\...` share path.
+- **`workspace reset`** removes a directory junction inside the workspace
+  without following it (it used to stop halfway), deletes read-only files,
+  and accepts the typed confirmation however the path is spelled: quoted (as
+  Windows Explorer's "Copy as path" gives it), with a trailing separator, or
+  on Windows in a different letter case or with forward slashes. The prompt
+  now shows the exact path to type.
 
 ## [0.1.0] - 2026-09-21
 
