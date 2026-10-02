@@ -146,6 +146,7 @@ so trivial changes do not invalidate cached artefacts.
 | --- | --- | --- | --- |
 | `report.formats` | list[str] | ['html', 'csv'] | Report formats to generate. Supported: html, csv, json. |
 | `report.open_after` | bool | false | Open the HTML report in the default browser after generation. |
+| `report.csv_bom` | bool | false | Start each CSV report with a UTF-8 byte-order mark. Excel on Windows needs it to read non-ASCII column names and values correctly; other tools don't. |
 | `report.rolling_windows` | list[int] | [1, 7, 14, 28] | Rolling window sizes (in periods) shown by `sorethumb history`. |
 
 ## Detector `extra_params`

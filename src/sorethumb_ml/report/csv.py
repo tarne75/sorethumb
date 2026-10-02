@@ -51,7 +51,7 @@ def _neutralize_frame(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-def write_group_csv(df: pl.DataFrame, out_dir: Path, group_key: str) -> Path:
+def write_group_csv(df: pl.DataFrame, out_dir: Path, group_key: str, *, include_bom: bool = False) -> Path:
     """Write *df* as a CSV sibling to the HTML report.
 
     Parameters
@@ -62,6 +62,9 @@ def write_group_csv(df: pl.DataFrame, out_dir: Path, group_key: str) -> Path:
         The run's report directory (``reports/<run_id>/``).
     group_key:
         32-character group digest used as the file stem.
+    include_bom:
+        Start the file with a UTF-8 byte-order mark (``report.csv_bom``), which
+        Excel on Windows needs to read non-ASCII text correctly.
 
     Returns
     -------
@@ -71,6 +74,6 @@ def write_group_csv(df: pl.DataFrame, out_dir: Path, group_key: str) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{group_key}.csv"
     with atomic_write(path) as tmp:
-        _neutralize_frame(df).write_csv(str(tmp))
+        _neutralize_frame(df).write_csv(str(tmp), include_bom=include_bom)
     logger.info("CSV written: %s (%d rows).", path, len(df))
     return path

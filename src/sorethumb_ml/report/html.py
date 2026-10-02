@@ -89,6 +89,8 @@ def render_report(
     groups: list[GroupSection],
     out_dir: Path,
     formats: list[str] | tuple[str, ...] = ("html", "csv"),
+    *,
+    csv_bom: bool = False,
 ) -> Path:
     """Write the report artefacts named in *formats* to *out_dir*.
 
@@ -106,7 +108,7 @@ def render_report(
     # Write CSVs first (so links in HTML are valid as soon as the file appears)
     if "csv" in fmts:
         for grp in groups:
-            write_group_csv(grp.records, out_dir, grp.group_key)
+            write_group_csv(grp.records, out_dir, grp.group_key, include_bom=csv_bom)
 
     json_path: Path | None = None
     if "json" in fmts:

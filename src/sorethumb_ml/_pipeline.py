@@ -55,7 +55,7 @@ from sorethumb_ml.io.fingerprint import (
     snapshot_fingerprint,
 )
 from sorethumb_ml.io.nested import unnest_all
-from sorethumb_ml.io.readers import read_frame
+from sorethumb_ml.io.readers import collect_frame, read_frame
 from sorethumb_ml.io.source import redact_source_uri, resolve_source
 from sorethumb_ml.profiling.plan import FeaturePlan, build_feature_plan
 from sorethumb_ml.report.html import GroupSection, RunMeta, render_report
@@ -288,7 +288,9 @@ def _render_report_and_get_status(
     time this runs, so this is a presentation-layer concern, not a signal
     that the results themselves are suspect.
     """
-    report_path, reason = _render_report_or_reason(ws, run_id, formats=config.report.formats)
+    report_path, reason = _render_report_or_reason(
+        ws, run_id, formats=config.report.formats, csv_bom=config.report.csv_bom
+    )
     if report_path is not None:
         if config.report.open_after:
             _open_in_browser(report_path)
@@ -420,7 +422,7 @@ def load_dataset(config: SourceConfig, cache_dir: Path | None = None) -> pl.Data
     _cache.mkdir(parents=True, exist_ok=True)
     local_path = resolve_source(config, _cache)
     lf = read_frame(local_path, config)
-    df = lf.collect()
+    df = collect_frame(lf, local_path)
     if config.max_nesting_depth > 0:
         df = unnest_all(df, config.max_nesting_depth)
     return df
@@ -658,7 +660,7 @@ def run_detection(
         with _timed_stage("load-dataset", slow_after):
             local_path = resolve_source(config.source, cache_dir)
             lf = read_frame(local_path, config.source)
-            df_raw = lf.collect()
+            df_raw = collect_frame(lf, local_path)
             if config.source.max_nesting_depth > 0:
                 df_raw = unnest_all(df_raw, config.source.max_nesting_depth)
 
@@ -1070,7 +1072,7 @@ def score_forward(
         cache_dir = ws.root / "cache" / "datasets"
         with _timed_stage("load-dataset", slow_after):
             local_path = resolve_source(config.source, cache_dir)
-            df_raw = read_frame(local_path, config.source).collect()
+            df_raw = collect_frame(read_frame(local_path, config.source), local_path)
             if config.source.max_nesting_depth > 0:
                 df_raw = unnest_all(df_raw, config.source.max_nesting_depth)
 
@@ -2160,7 +2162,9 @@ def _run_permutation_importance_crosscheck(
 # ---------------------------------------------------------------------------
 
 
-def render_report_for_run(ws: Workspace, run_id: str, *, formats: list[str] | None = None) -> Path | None:
+def render_report_for_run(
+    ws: Workspace, run_id: str, *, formats: list[str] | None = None, csv_bom: bool | None = None
+) -> Path | None:
     """Render (or re-render) the HTML report for *run_id* from persisted state.
 
     Every data-shaping input -- the feature plan, group structure, per-row
@@ -2173,7 +2177,7 @@ def render_report_for_run(ws: Workspace, run_id: str, *, formats: list[str] | No
     is skipped) and gives a repeat of the same deterministic ``run_id`` the
     same report instead of blanking it.
 
-    *formats* is the one deliberate exception: ``report.formats`` is purely
+    *formats* and *csv_bom* are the deliberate exceptions: ``report.formats`` is purely
     cosmetic (which output files get written; it cannot affect what the data
     says), so ``sorethumb report`` passes the *current* config's value here
     to let a `report.formats` change actually take effect on a re-render, as
@@ -2183,11 +2187,11 @@ def render_report_for_run(ws: Workspace, run_id: str, *, formats: list[str] | No
     Returns the ``index.html`` path, or ``None`` if the run is unknown or
     rendering fails (logged, never raised).
     """
-    return _render_report_or_reason(ws, run_id, formats=formats)[0]
+    return _render_report_or_reason(ws, run_id, formats=formats, csv_bom=csv_bom)[0]
 
 
 def _render_report_or_reason(
-    ws: Workspace, run_id: str, *, formats: list[str] | None = None
+    ws: Workspace, run_id: str, *, formats: list[str] | None = None, csv_bom: bool | None = None
 ) -> tuple[Path | None, str | None]:
     """:func:`render_report_for_run`, plus a one-line reason when it returns no report."""
     run_row = ws.store.get_run(run_id)
@@ -2240,8 +2244,10 @@ def _render_report_or_reason(
             )
 
         effective_formats = formats if formats is not None else config.report.formats
+        effective_bom = csv_bom if csv_bom is not None else config.report.csv_bom
+        report_dir = ws.root / "reports" / run_id
         return render_report(
-            meta, group_sections, ws.root / "reports" / run_id, formats=effective_formats
+            meta, group_sections, report_dir, formats=effective_formats, csv_bom=effective_bom
         ), None
 
     except Exception as exc:

@@ -60,6 +60,13 @@ Versioning: [Semantic Versioning](https://semver.org/).
   network filesystem, a mapped network drive or UNC path, or in a OneDrive,
   Dropbox, Google Drive or iCloud folder gets a one-line warning, since SQLite
   and atomic file replacement aren't reliable there.
+- **`report.csv_bom`** (default off): start report CSVs with a UTF-8
+  byte-order mark, which Excel on Windows needs to show non-ASCII column
+  names and values correctly.
+- **Non-UTF-8 sources**: a CSV saved as cp1252 (Excel's plain "CSV" on
+  Windows) now fails with a message saying the file isn't UTF-8 and how to
+  fix it, instead of polars' bare "invalid utf-8 sequence"; the README shows
+  how to convert one.
 
 ### Changed
 

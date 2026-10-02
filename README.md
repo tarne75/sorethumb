@@ -208,6 +208,16 @@ a deliberate gap, not an oversight — see
 | JSONL / NDJSON | `.jsonl`, `.ndjson`, `.jsonl.gz`, `.ndjson.gz` | Streamed line-by-line |
 | TSF | `.tsf` | [Monash Time Series Forecasting](https://github.com/rakshitha123/TSForecasting/tree/master/utils) format — each series becomes one row; `@attribute` columns preserved, series observations expand to `value_0`, `value_1`, … |
 
+**Text encoding.** CSV, TSV and JSON sources must be UTF-8 (a byte-order mark
+is fine). Excel's plain "CSV" format on Windows writes cp1252 instead, which
+fails with a message pointing here. Re-save it as "CSV UTF-8 (Comma delimited)",
+or convert it once, in PowerShell 7 with
+`Get-Content data.csv -Encoding windows-1252 | Set-Content data-utf8.csv -Encoding utf8`
+or with Python:
+`python -c "open('data-utf8.csv', 'w', encoding='utf-8').write(open('data.csv', encoding='cp1252').read())"`.
+As a last resort, `read_options = { encoding = "utf8-lossy" }` reads the file
+with undecodable characters replaced.
+
 Format is auto-detected from the file extension. Set `source.format` explicitly when the extension is ambiguous:
 
 ```toml

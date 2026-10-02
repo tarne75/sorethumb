@@ -1265,6 +1265,7 @@ def report(
 
     ws_path, cfg = _resolve_workdir(config, workdir, log_level)
     formats = cfg.report.formats if cfg is not None else ReportConfig().formats
+    csv_bom = cfg.report.csv_bom if cfg is not None else None
 
     try:
         ws_cm = Workspace.open(ws_path)
@@ -1284,7 +1285,7 @@ def report(
         console.print(f"Re-rendering report for [cyan]{_e(run_id)}[/cyan] ({_e(n_groups)} groups)…")
         from sorethumb_ml._pipeline import _render_report_or_reason  # noqa: PLC0415
 
-        path, reason = _render_report_or_reason(ws, run_id, formats=formats)
+        path, reason = _render_report_or_reason(ws, run_id, formats=formats, csv_bom=csv_bom)
         if path is None:
             _fail(
                 False,

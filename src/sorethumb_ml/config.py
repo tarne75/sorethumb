@@ -558,6 +558,13 @@ class ReportConfig(BaseModel):
         False,
         description="Open the HTML report in the default browser after generation.",
     )
+    csv_bom: bool = Field(
+        False,
+        description=(
+            "Start each CSV report with a UTF-8 byte-order mark. Excel on Windows needs it "
+            "to read non-ASCII column names and values correctly; other tools don't."
+        ),
+    )
     rolling_windows: list[int] = Field(
         default_factory=lambda: [1, 7, 14, 28],
         description="Rolling window sizes (in periods) shown by `sorethumb history`.",
