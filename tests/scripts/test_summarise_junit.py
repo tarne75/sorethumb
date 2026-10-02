@@ -15,7 +15,7 @@ pytestmark = pytest.mark.unit
 
 _XML = """\
 <?xml version="1.0" encoding="utf-8"?>
-<testsuites><testsuite name="pytest" errors="1" failures="2" skipped="1" tests="5">
+<testsuites><testsuite name="pytest" errors="1" failures="3" skipped="1" tests="6">
 <testcase classname="tests.unit.test_a" name="test_one">
 <failure message="OSError: [Errno 9] Bad file descriptor">tests/unit/test_a.py:10: in test_one
     atomic_write_bytes(p, b"x")
@@ -32,6 +32,11 @@ E   OSError: [Errno 9] Bad file descriptor</failure></testcase>
 <error message="failed on setup with &quot;AttributeError: module 'os' has no attribute 'geteuid'&quot;">tests/unit/test_b.py:5: in fixture
     os.geteuid()
 E   AttributeError: module 'os' has no attribute 'geteuid'</error></testcase>
+<testcase classname="tests.unit.test_c" name="test_cli">
+<failure message="AssertionError: assert 1 == 0">tests/unit/test_c.py:7: in test_cli
+    assert result.exit_code == 0
+E   AssertionError: assert 1 == 0
+E    +  where 1 = &lt;Result OSError(9, 'Bad file descriptor')&gt;.exit_code</failure></testcase>
 <testcase classname="tests.unit.test_b" name="test_ok"/>
 <testcase classname="tests.unit.test_b" name="test_skipped"><skipped message="nope"/></testcase>
 </testsuite></testsuites>
@@ -50,6 +55,7 @@ def test_failures_are_grouped_by_exception_and_deepest_src_frame(junit: Path) ->
     assert set(groups) == {
         ("OSError", "src/sorethumb_ml/_atomic.py:95"),
         ("AttributeError", "tests/unit/test_b.py:5"),
+        ("OSError (via CliRunner)", "tests/unit/test_c.py:7"),
     }
     assert len(groups[("OSError", "src/sorethumb_ml/_atomic.py:95")].tests) == 2
     assert groups[("AttributeError", "tests/unit/test_b.py:5")].tests == [
@@ -62,7 +68,7 @@ def test_plain_output_reports_counts_and_largest_group_first(
 ) -> None:
     assert sj.main([str(junit), "--label", "win"]) == 0
     out = capsys.readouterr().out.splitlines()
-    assert out[0] == "[win] tests=5 failures=2 errors=1 skipped=1 groups=2"
+    assert out[0] == "[win] tests=6 failures=3 errors=1 skipped=1 groups=3"
     assert out[1] == "2 x OSError at src/sorethumb_ml/_atomic.py:95"
 
 
@@ -73,7 +79,7 @@ def test_annotations_are_single_line_workflow_commands(
     lines = capsys.readouterr().out.splitlines()
     assert lines[0].startswith("::notice title=win summary::")
     errors = [line for line in lines if line.startswith("::error ")]
-    assert len(errors) == 2
+    assert len(errors) == 3
     assert all("\n" not in e and "%0A" in e for e in errors)
 
 
@@ -83,7 +89,7 @@ def test_groups_beyond_the_annotation_limit_are_folded(
     sj.main([str(junit), "--github-annotations", "--max-annotations", "1"])
     errors = [line for line in capsys.readouterr().out.splitlines() if line.startswith("::error ")]
     assert len(errors) == 2
-    assert "remaining 1 groups" in errors[1]
+    assert "remaining 2 groups" in errors[1]
 
 
 def test_a_missing_file_is_reported_not_fatal(

@@ -46,6 +46,10 @@ _EXC_RE = re.compile(
 )
 # The "path:line: ExceptionType" line pytest ends each frame section with.
 _TAIL_EXC_RE = re.compile(r"\.py:\d+: (?P<exc>[A-Za-z_][\w.]*)\s*$")
+# Click's CliRunner reports a command that died on an exception as
+# "where 1 = <Result OSError(9, 'Bad file descriptor')>.exit_code"; the
+# exception inside is the real cause, not the test's AssertionError.
+_RESULT_EXC_RE = re.compile(r"<Result (?P<exc>[A-Za-z_][\w.]*)\(")
 _MAX_DETAIL_CHARS = 3500
 
 
@@ -89,6 +93,9 @@ def _classify(text: str, message: str) -> tuple[str, str]:
     if not exc:
         exc = "AssertionError" if message.lstrip().startswith("assert") else message.split(":", 1)[0].strip()
         exc = (exc or "unknown")[:80]
+    inner = _RESULT_EXC_RE.search(text) or _RESULT_EXC_RE.search(message)
+    if inner and exc == "AssertionError":
+        exc = f"{inner.group('exc')} (via CliRunner)"
     src_frames = [f for f in frames if f.startswith("src/")]
     frame = (src_frames or frames or ["(no in-repo frame)"])[-1]
     return exc, frame
@@ -153,6 +160,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--label", default="tests")
     parser.add_argument("--max-annotations", type=int, default=9)
     args = parser.parse_args(argv)
+    # Our own output must survive a narrow pipe encoding too (cp1252 on Windows).
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8", errors="replace")
 
     existing = [p for p in args.files if p.is_file()]
     missing = [p for p in args.files if not p.is_file()]
