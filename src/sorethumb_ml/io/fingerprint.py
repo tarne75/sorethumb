@@ -21,6 +21,8 @@ from pathlib import Path
 
 import polars as pl
 
+from sorethumb_ml.io.uri import canonical_source_key
+
 # Reserved column name the pipeline stamps onto the raw source frame (before any
 # period filter, group filter, or time sort) to give every row a stable global
 # identity that survives filtering and joins back to the source. It is an
@@ -78,7 +80,7 @@ def _uri_derived_id(uri: str) -> str:
     same file name apart. Query strings and trailing slashes are ignored so a
     signed-URL refresh does not change the id.
     """
-    base = uri.strip().split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    base = canonical_source_key(uri).strip().split("?", 1)[0].split("#", 1)[0].rstrip("/")
     stem = Path(base).stem or Path(base).name or "dataset"
     stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-.") or "dataset"
     digest = hashlib.sha256(base.encode()).hexdigest()[:12]

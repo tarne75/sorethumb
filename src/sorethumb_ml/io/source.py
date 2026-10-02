@@ -108,6 +108,8 @@ class _CacheMeta(TypedDict):
 # URL scheme ("c"), rejecting every Windows absolute path as an unsupported
 # scheme.
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+# "C:data.csv" -- relative to drive C:'s current directory (no separator after the colon).
+_WINDOWS_DRIVE_RELATIVE_RE = re.compile(r"^[A-Za-z]:(?![\\/])")
 # A drive letter where a file:// URI's host would be ("file://C:/data/x.csv").
 _WINDOWS_DRIVE_NETLOC_RE = re.compile(r"^[A-Za-z]:$")
 
@@ -183,6 +185,13 @@ def resolve_source(
 
     if _WINDOWS_DRIVE_RE.match(uri):
         return _resolve_local(uri)
+
+    if _WINDOWS_DRIVE_RELATIVE_RE.match(uri):
+        raise SourceError(
+            f"Source path '{uri}' is relative to drive {uri[:2]}'s current directory, which "
+            f"sorethumb can't resolve reliably. Use an absolute path ('{uri[:2]}\\...') or a "
+            "path relative to the current directory."
+        )
 
     parsed = urlparse(uri)
 

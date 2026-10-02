@@ -602,7 +602,7 @@
             }
           ],
           "default": null,
-          "description": "Stable logical identity for this dataset, kept constant across snapshots (appended rows, corrections, the file moving to a new path). All history -- periods, per-group totals, runs -- is keyed on it. When unset it is derived from 'uri'; set it explicitly so a change of path does not orphan prior history. Allowed characters: letters, digits, '.', '_', '-' (max 128).",
+          "description": "Stable logical identity for this dataset, kept constant across snapshots (appended rows, corrections, the file moving to a new path). All history -- periods, per-group totals, runs -- is keyed on it. When unset it is derived from 'uri'; set it explicitly so a change of path does not orphan prior history. Spellings of one Windows path that differ only in letter case, separators or a file:// prefix derive the same id. Allowed characters: letters, digits, '.', '_', '-' (max 128).",
           "title": "Dataset Id"
         },
         "format": {

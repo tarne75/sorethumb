@@ -42,6 +42,16 @@ Versioning: [Semantic Versioning](https://semver.org/).
   on Windows in a different letter case or with forward slashes. The prompt
   now shows the exact path to type.
 
+### Changed
+
+- **Windows source paths**: spellings of one Windows file that differ only
+  in letter case, separators or a `file://` prefix (`C:\Data\x.csv`,
+  `c:/data/x.csv`, `file:///C:/Data/x.csv`) are now one dataset for history
+  and one configuration for run ids and model reuse. Paths on Linux and
+  macOS, relative paths and URLs are identified exactly as before. A
+  drive-relative path such as `C:data.csv` is now rejected with a clear
+  message instead of "Unsupported URI scheme 'c'".
+
 ## [0.1.0] - 2026-09-21
 
 First public release.
