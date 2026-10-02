@@ -341,10 +341,13 @@ jobs:
           python docs/check_readme_snippets.py --extract-python "$env:RUNNER_TEMP\quickstart.py"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Push-Location $env:RUNNER_TEMP
-          & "$env:RUNNER_TEMP\smoke\Scripts\python.exe" "$env:RUNNER_TEMP\quickstart.py"
+          $out = & "$env:RUNNER_TEMP\smoke\Scripts\python.exe" "$env:RUNNER_TEMP\quickstart.py" 2>&1 | Out-String
           $code = $LASTEXITCODE
           Pop-Location
-          exit $code
+          Write-Output $out
+          if ($code -ne 0) { exit $code }
+          # An empty or truncated extraction would also exit 0: require the output.
+          if ($out -notmatch "Flagged \d+ rows for review") { Write-Error "quickstart printed no result"; exit 1 }
       - name: Zero-config CLI run with stdin from NUL
         run: |
           $ErrorActionPreference = "Stop"
@@ -353,9 +356,13 @@ jobs:
           & "$env:RUNNER_TEMP\smoke\Scripts\python.exe" -c "import numpy as np, polars as pl; rng = np.random.default_rng(0); a = rng.normal(50, 10, 500); a[:5] = 900; pl.DataFrame({'amount': a, 'region': rng.choice(['us', 'eu'], 500), 'temp': rng.normal(20, 3, 500)}).write_csv('data.csv')"
           cmd /c "$env:RUNNER_TEMP\smoke\Scripts\sorethumb.exe run data.csv < NUL > run.txt 2>&1"
           $code = $LASTEXITCODE
-          Get-Content run.txt
+          $run = Get-Content run.txt -Raw
+          Write-Output $run
           if ($code -ne 0) { exit $code }
-          & "$env:RUNNER_TEMP\smoke\Scripts\sorethumb.exe" anomalies --top 5 | Out-File anomalies.txt -Encoding utf8
+          if ($run -notmatch "succeeded=1") { Write-Error "zero-config run did not report a successful group"; exit 1 }
+          if ($run -match "Aborted") { Write-Error "zero-config run prompted with stdin from NUL"; exit 1 }
+          $rows = & "$env:RUNNER_TEMP\smoke\Scripts\sorethumb.exe" anomalies --top 5 --json | Out-String
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-Content anomalies.txt
+          Write-Output $rows
+          if (($rows | ConvertFrom-Json).Count -lt 1) { Write-Error "anomalies returned no rows"; exit 1 }
           Pop-Location
