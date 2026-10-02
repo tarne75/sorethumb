@@ -426,6 +426,20 @@ def load_dataset(config: SourceConfig, cache_dir: Path | None = None) -> pl.Data
     return df
 
 
+def _log_risky_storage(root: Path) -> None:
+    """Log (never raise) when a workspace sits on network or cloud-synced storage."""
+    from sorethumb_ml.store.storage import detect_risky_storage  # noqa: PLC0415
+
+    reason = detect_risky_storage(root)
+    if reason is not None:
+        logger.warning(
+            "Workspace %s is on %s; SQLite and atomic file replacement aren't reliable there. "
+            "A folder on a local, non-synced drive is recommended.",
+            root,
+            reason,
+        )
+
+
 def list_detectors() -> list[str]:
     """Return sorted names of all registered detectors."""
     return sorted(registry.keys())
@@ -637,6 +651,7 @@ def run_detection(
 
     with ws, _strict_warnings(config.run.strict):
         check_path_length(ws.root, (d.name for d in config.detectors))
+        _log_risky_storage(ws.root)
         cache_dir = ws.root / "cache" / "datasets"
 
         # ── 1. Load dataset ──────────────────────────────────────────────

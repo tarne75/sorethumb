@@ -56,6 +56,10 @@ Versioning: [Semantic Versioning](https://semver.org/).
   below the workspace directory. `init`, `run` and `score` now stop before
   doing any work (exit code 2, `PathTooLongError`) when the workspace is too
   deep, instead of failing with a bare "file not found" minutes into a run.
+- **Warning for workspaces on network or synced storage**: a workspace on a
+  network filesystem, a mapped network drive or UNC path, or in a OneDrive,
+  Dropbox, Google Drive or iCloud folder gets a one-line warning, since SQLite
+  and atomic file replacement aren't reliable there.
 
 ### Changed
 

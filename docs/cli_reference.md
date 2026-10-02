@@ -136,6 +136,17 @@ path longer than roughly 145 characters — easy to reach under a OneDrive
 before doing any work and stop with exit code 2, saying how many characters
 too long the path is. Use a shorter `--workdir` or enable long paths.
 
+### Network drives and synced folders
+
+Keep the workspace on a local drive. Its SQLite database runs in WAL mode,
+which is not reliable over SMB/CIFS or NFS, and file-sync clients (OneDrive,
+Dropbox, Google Drive, iCloud) lock and re-upload files mid-write. Either shows
+up as intermittent "database is locked" or "file is open in another program"
+errors. sorethumb prints one warning when it detects a workspace on a network
+filesystem, a mapped network drive or UNC path, or a sync client's folder
+(including a OneDrive-redirected `Documents`); it doesn't stop the command.
+Your *data* can live anywhere: only the workspace needs local storage.
+
 ### What is in a workspace — and why it is executable
 
 ```

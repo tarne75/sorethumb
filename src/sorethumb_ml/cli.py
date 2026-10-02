@@ -495,6 +495,7 @@ def _load_config(
         _fail(json_output, "Configuration errors: " + "; ".join(lines), ExitCode.PREFLIGHT)
 
     _add_file_handler(Path(cfg.run.workdir), cfg.run.log_level)
+    _warn_about_storage(Path(cfg.run.workdir))
     return cfg
 
 
@@ -533,6 +534,7 @@ def _resolve_workdir(
     # pointed at a path with no workspace must not create one there.
     if workdir.is_dir():
         _add_file_handler(workdir, log_level or "INFO")
+        _warn_about_storage(workdir)
     return workdir, None
 
 
@@ -659,6 +661,27 @@ def _add_file_handler(workdir: Path, level: str) -> None:
         )
     )
     sorethumb_logger.addHandler(handler)
+
+
+_STORAGE_WARNED: set[str] = set()
+
+
+def _warn_about_storage(workdir: Path) -> None:
+    """Warn once per workspace if it sits on network or cloud-synced storage."""
+    from sorethumb_ml.store.storage import detect_risky_storage  # noqa: PLC0415
+
+    key = str(workdir)
+    if key in _STORAGE_WARNED:
+        return
+    _STORAGE_WARNED.add(key)
+    reason = detect_risky_storage(workdir)
+    if reason is not None:
+        err_console.print(
+            f"[yellow]Warning:[/yellow] the workspace {_e(workdir)} is on {_e(reason)}. SQLite and "
+            "atomic file replacement aren't reliable there (expect 'database is locked' or "
+            "'file is open in another program' errors); a folder on a local, non-synced drive is "
+            "recommended."
+        )
 
 
 def _redact_config(config: Config) -> dict[str, Any]:
