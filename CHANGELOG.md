@@ -6,6 +6,46 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Windows support** (Windows 10/11 x64, Python 3.11–3.13): every command,
+  the Python API and reports work on Windows as on Linux and macOS, from
+  PowerShell, Windows PowerShell 5.1 or cmd.exe, and CI runs the unit,
+  contract and integration suites on `windows-latest` for every change, plus
+  an install of the built wheel. The entries below list the fixes and
+  behaviour this involved.
+- **Windows path-length preflight**: without long-path support Windows caps a
+  path at 260 characters, and sorethumb creates files about 112 characters
+  below the workspace directory. `init`, `run` and `score` now stop before
+  doing any work (exit code 2, `PathTooLongError`) when the workspace is too
+  deep, instead of failing with a bare "file not found" minutes into a run.
+- **Warning for workspaces on network or synced storage**: a workspace on a
+  network filesystem, a mapped network drive or UNC path, or in a OneDrive,
+  Dropbox, Google Drive or iCloud folder gets a one-line warning, since SQLite
+  and atomic file replacement aren't reliable there.
+- **`report.csv_bom`** (default off): start report CSVs with a UTF-8
+  byte-order mark, which Excel on Windows needs to show non-ASCII column
+  names and values correctly.
+- **Non-UTF-8 sources**: a CSV saved as cp1252 (Excel's plain "CSV" on
+  Windows) now fails with a message saying the file isn't UTF-8 and how to
+  fix it, instead of polars' bare "invalid utf-8 sequence"; the README shows
+  how to convert one.
+
+### Changed
+
+- **Windows source paths**: spellings of one Windows file that differ only
+  in letter case, separators or a `file://` prefix (`C:\Data\x.csv`,
+  `c:/data/x.csv`, `file:///C:/Data/x.csv`) are now one dataset for history
+  and one configuration for run ids and model reuse. Paths on Linux and
+  macOS, relative paths and URLs are identified exactly as before. A
+  drive-relative path such as `C:data.csv` is now rejected with a clear
+  message instead of "Unsupported URI scheme 'c'".
+- **Commands that work in every shell**: install hints now say
+  `pip install "sorethumb-ml[explain]"` (single quotes fail in cmd.exe), `~`
+  in `--config`, `--workdir` and `init` paths is expanded by sorethumb itself
+  (cmd.exe never expands it), and the docs show how to set environment
+  variables in PowerShell and cmd.exe as well as bash.
+
 ### Fixed
 
 - **Windows**: every write of a model, result, report or downloaded source
@@ -48,40 +88,6 @@ Versioning: [Semantic Versioning](https://semver.org/).
   Windows Explorer's "Copy as path" gives it), with a trailing separator, or
   on Windows in a different letter case or with forward slashes. The prompt
   now shows the exact path to type.
-
-### Added
-
-- **Windows path-length preflight**: without long-path support Windows caps a
-  path at 260 characters, and sorethumb creates files about 112 characters
-  below the workspace directory. `init`, `run` and `score` now stop before
-  doing any work (exit code 2, `PathTooLongError`) when the workspace is too
-  deep, instead of failing with a bare "file not found" minutes into a run.
-- **Warning for workspaces on network or synced storage**: a workspace on a
-  network filesystem, a mapped network drive or UNC path, or in a OneDrive,
-  Dropbox, Google Drive or iCloud folder gets a one-line warning, since SQLite
-  and atomic file replacement aren't reliable there.
-- **`report.csv_bom`** (default off): start report CSVs with a UTF-8
-  byte-order mark, which Excel on Windows needs to show non-ASCII column
-  names and values correctly.
-- **Non-UTF-8 sources**: a CSV saved as cp1252 (Excel's plain "CSV" on
-  Windows) now fails with a message saying the file isn't UTF-8 and how to
-  fix it, instead of polars' bare "invalid utf-8 sequence"; the README shows
-  how to convert one.
-
-### Changed
-
-- **Windows source paths**: spellings of one Windows file that differ only
-  in letter case, separators or a `file://` prefix (`C:\Data\x.csv`,
-  `c:/data/x.csv`, `file:///C:/Data/x.csv`) are now one dataset for history
-  and one configuration for run ids and model reuse. Paths on Linux and
-  macOS, relative paths and URLs are identified exactly as before. A
-  drive-relative path such as `C:data.csv` is now rejected with a clear
-  message instead of "Unsupported URI scheme 'c'".
-- **Commands that work in every shell**: install hints now say
-  `pip install "sorethumb-ml[explain]"` (single quotes fail in cmd.exe), `~`
-  in `--config`, `--workdir` and `init` paths is expanded by sorethumb itself
-  (cmd.exe never expands it), and the docs show how to set environment
-  variables in PowerShell and cmd.exe as well as bash.
 
 ## [0.1.0] - 2026-09-21
 

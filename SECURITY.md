@@ -66,13 +66,12 @@ credentials in the URI itself.
 
 ## Supported Platforms
 
-Tested via CI on **Linux and macOS** — unit, contract, and full integration
-(real workspace, SQLite, CLI subprocess, report rendering) suites on both.
-**Windows is untested and unsupported** — confirmed broken, not merely
-unverified: a one-off integration-suite run on `windows-latest` failed
-broadly (most CLI paths hit `OSError: [Errno 9] Bad file descriptor`, plus a
-console-encoding mismatch). Do not run this on Windows for anything beyond
-casual experimentation you're prepared to see fail outright. See the README's
+Tested via CI on **Linux, macOS and Windows** (x64) — unit, contract and
+full integration (real workspace, SQLite, CLI subprocess, report rendering)
+suites on all three, and on Windows also an install of the built wheel run
+from PowerShell. Keep a workspace on a local drive: SQLite and atomic file
+replacement are not reliable on network shares or in synced folders, on any
+OS. See the README's
 [Supported platforms](https://github.com/tarne75/sorethumb#supported-platforms)
 section.
 

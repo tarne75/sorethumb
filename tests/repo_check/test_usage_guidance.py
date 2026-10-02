@@ -33,7 +33,7 @@ def _section(text: str, title: str) -> str:
 def test_readme_says_when_it_is_the_right_tool() -> None:
     section = _section(_text("README.md"), "Is it the right tool?")
     assert "ranked shortlist" in section
-    assert "Linux or macOS" in section
+    assert "Linux, macOS or Windows" in section
     assert "single machine" in section
 
 
