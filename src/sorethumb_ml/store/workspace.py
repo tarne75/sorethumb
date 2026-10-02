@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Self
 
 from sorethumb_ml._atomic import TEMP_NAME_MAX_LEN, unlink_with_retry
-from sorethumb_ml.errors import NotFoundError, PathTooLongError, StoreError
+from sorethumb_ml.errors import FileInUseError, NotFoundError, PathTooLongError, StoreError
 from sorethumb_ml.store.db import Store
 
 logger = logging.getLogger(__name__)
@@ -291,6 +291,7 @@ class Workspace:
         rows = self._store.artifacts_for_prune(retention_days)
         root = self._root.resolve()
         deleted: list[str] = []
+        failed: list[str] = []
         for row in rows:
             path_str = str(row["path"])
             p = Path(path_str).resolve()
@@ -302,12 +303,25 @@ class Workspace:
                     root,
                 )
                 continue
-            deleted.append(path_str)
             if not dry_run:
-                if p.exists():
-                    unlink_with_retry(p)
-                    logger.info("Pruned artifact: %s", path_str)
+                # One file that can't be deleted (open in another program on
+                # Windows) must not stop the rest. Its index row is kept, so it
+                # stays prunable next time, and the failure is reported.
+                try:
+                    if p.exists():
+                        unlink_with_retry(p)
+                        logger.info("Pruned artifact: %s", path_str)
+                except (OSError, FileInUseError) as exc:
+                    failed.append(f"{path_str} ({exc})")
+                    continue
                 self._store.delete_artifact(str(row["artifact_id"]))
+            deleted.append(path_str)
+        if failed:
+            msg = (
+                f"Pruned {len(deleted)} artifact(s) but could not delete {len(failed)}; they are still "
+                "indexed and will be retried on the next prune: " + "; ".join(failed)
+            )
+            raise StoreError(msg)
         return deleted
 
     @staticmethod

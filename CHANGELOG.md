@@ -24,6 +24,13 @@ Versioning: [Semantic Versioning](https://semver.org/).
   naming the file, and a failed report now says why in the run summary
   instead of only "see the log". `workspace reset` and `workspace prune`
   retry deletions the same way.
+- **Concurrent downloads and prune**: two runs downloading the same content
+  no longer fail when one has the cached file open (the other's identical
+  copy is used); `source.cache = false` downloads get a file of their own
+  per run instead of sharing one that each run replaced (stale ones are
+  removed after an hour); and `workspace prune` deletes everything it can
+  when one file is locked, keeps that one indexed for the next prune, and
+  reports it with a non-zero exit.
 - **Log and database handles** no longer outlive the command that opened
   them, so `workspace reset` can delete `logs/` on Windows, in-process
   callers no longer keep logging into the first workspace they used, and a
