@@ -118,8 +118,8 @@ def test_run_pipeline_benchmark_reports_peak_memory():
         scenario_names=["point"], n_seeds=1, include_baselines=False, include_swamping=False
     )
     rows = run_pipeline_benchmark(cfg)
-    # None only on platforms without the `resource` module (Windows); this
-    # suite runs on POSIX CI, so a real subprocess-measured value is expected.
+    # Measured in the worker subprocess: ru_maxrss on POSIX, the peak working
+    # set on Windows.
     assert rows[0].peak_memory_mb is not None
     assert rows[0].peak_memory_mb > 0
 
