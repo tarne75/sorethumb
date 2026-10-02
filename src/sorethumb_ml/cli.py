@@ -49,7 +49,7 @@ err_console = Console(stderr=True)
 
 # Rich parses "[...]" in any printed string as markup, so a column named
 # "[/x]" crashed the CLI with MarkupError and "amt [usd]" or a hint like
-# "pip install 'sorethumb-ml[explain]'" lost its brackets. Everything not
+# 'pip install "sorethumb-ml[explain]"' lost its brackets. Everything not
 # written by us -- column names, group labels, category values, reasons,
 # paths, URIs, exception and warning messages -- goes through one of these.
 def _e(value: object) -> str:
@@ -442,6 +442,9 @@ def _load_config(
 
     if config_path is None:
         config_path = Path("sorethumb.toml")
+    # "~" is expanded by POSIX shells but not by cmd.exe (or inside quotes),
+    # so a path given on the command line is expanded here too.
+    config_path = config_path.expanduser()
 
     raw: dict[str, Any]
     if not config_path.exists():
@@ -467,7 +470,7 @@ def _load_config(
     # Apply flag overrides (flags beat TOML, which beats env)
     run_section: dict[str, Any] = raw.setdefault("run", {})
     if workdir is not None:
-        run_section["workdir"] = str(workdir)
+        run_section["workdir"] = str(workdir.expanduser())
     elif "workdir" not in run_section:
         _guard_legacy_dot_workspace(json_output=json_output)
         run_section["workdir"] = _DEFAULT_WORKDIR
@@ -525,6 +528,7 @@ def _resolve_workdir(
     if workdir is None:
         _guard_legacy_dot_workspace(json_output=json_output)
         workdir = Path(_DEFAULT_WORKDIR)
+    workdir = workdir.expanduser()  # cmd.exe doesn't expand "~"
     # Log to the workspace only when it already exists: a read-only command
     # pointed at a path with no workspace must not create one there.
     if workdir.is_dir():
@@ -856,6 +860,7 @@ def init(
     sorethumb.toml to point at your dataset, then run `sorethumb inspect`
     to see how your data will be profiled before any models are trained.
     """
+    path = path.expanduser()  # cmd.exe doesn't expand "~"
     toml_path = path / "sorethumb.toml"
     if toml_path.exists():
         err_console.print(f"[yellow]sorethumb.toml already exists:[/yellow] {_e(toml_path)}")

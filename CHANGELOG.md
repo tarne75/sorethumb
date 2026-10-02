@@ -66,6 +66,11 @@ Versioning: [Semantic Versioning](https://semver.org/).
   macOS, relative paths and URLs are identified exactly as before. A
   drive-relative path such as `C:data.csv` is now rejected with a clear
   message instead of "Unsupported URI scheme 'c'".
+- **Commands that work in every shell**: install hints now say
+  `pip install "sorethumb-ml[explain]"` (single quotes fail in cmd.exe), `~`
+  in `--config`, `--workdir` and `init` paths is expanded by sorethumb itself
+  (cmd.exe never expands it), and the docs show how to set environment
+  variables in PowerShell and cmd.exe as well as bash.
 
 ## [0.1.0] - 2026-09-21
 

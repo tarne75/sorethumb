@@ -133,7 +133,7 @@ Your detector should appear in the list alongside the built-ins.
 
 ## Code standards
 
-- ruff for linting and formatting (`uv run ruff check --fix src/ && uv run ruff format src/`)
+- ruff for linting and formatting (`uv run ruff check --fix src/`, then `uv run ruff format src/`)
 - mypy strict on `src/` (`uv run mypy src/`)
 - No `print` in `src/sorethumb_ml/` — use `logging.getLogger(__name__)`
 - No literal thresholds in modules other than `config.py`

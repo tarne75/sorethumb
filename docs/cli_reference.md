@@ -44,6 +44,25 @@ These options appear on most commands and behave identically everywhere:
 |----------|-----------------|-------|
 | `SORETHUMB_CONFIG` | `--config` | Path to `sorethumb.toml`. |
 
+Setting a variable for the current session (the same applies to the variable
+named by `source.auth_env_var`):
+
+```bash
+export SORETHUMB_CONFIG=/path/to/sorethumb.toml       # bash, zsh
+```
+
+```powershell
+$env:SORETHUMB_CONFIG = "C:\path\to\sorethumb.toml"  # PowerShell
+```
+
+```bat
+rem cmd.exe
+set SORETHUMB_CONFIG=C:\path\to\sorethumb.toml
+```
+
+`~` in a path given to `--config`, `--workdir` or `init` is expanded by
+sorethumb itself, so it also works in cmd.exe, which doesn't expand it.
+
 ---
 
 ## Log files

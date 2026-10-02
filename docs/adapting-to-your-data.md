@@ -1,8 +1,8 @@
 # Adapting sorethumb to your data
 
 This document walks you from an unfamiliar CSV to a working, well-configured
-anomaly detection run. It follows the same path as `sorethumb init && sorethumb
-inspect && sorethumb run`.
+anomaly detection run. It follows the same path as `sorethumb init`, then `sorethumb
+inspect`, then `sorethumb run`.
 
 ---
 
