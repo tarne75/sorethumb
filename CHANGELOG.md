@@ -11,6 +11,13 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - **Windows**: every write of a model, result, report or downloaded source
   failed with `OSError: [Errno 9] Bad file descriptor`, because the file was
   flushed to disk through a read-only handle, which Windows rejects.
+- **Redirected output**: a command whose output went to a pipe or file could
+  stop with `UnicodeEncodeError` when the text included a character outside
+  the stream's encoding (for example a column named `温度` on Windows, where
+  pipes default to cp1252). Redirected output is now UTF-8 unless
+  `PYTHONIOENCODING` says otherwise, an unencodable character is replaced
+  rather than aborting, and every `--json` output is ASCII-escaped, so it is
+  lossless under any output encoding.
 
 ## [0.1.0] - 2026-09-21
 

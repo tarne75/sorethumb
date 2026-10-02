@@ -79,7 +79,66 @@ _TYPER_EXCEPTION_SETTINGS: dict[str, Any] = {
     "pretty_exceptions_short": True,
 }
 
-app = typer.Typer(
+
+def _configure_output_streams(streams: tuple[Any, ...] | None = None) -> None:
+    """Make stdout/stderr unable to abort a command over an unencodable character.
+
+    A console already gets UTF-8 on every platform (Windows has used the
+    console's Unicode API since Python 3.6). A pipe or file does not: on Windows
+    it gets the ANSI code page (usually cp1252), so a column name like "温度" or
+    an arrow in our own text raised UnicodeEncodeError mid-command. So:
+
+    - a stream that is not a TTY switches to UTF-8, unless PYTHONIOENCODING
+      says otherwise or it already is UTF-8 -- the encoding Python itself makes
+      the default from 3.15 (PEP 686), and what a script reading our output
+      should expect;
+    - stdout's error handler becomes "replace" (stderr already uses
+      "backslashreplace"), so an explicitly chosen narrow encoding degrades to
+      "?" instead of crashing.
+
+    --json output is unaffected either way: it is pure ASCII.
+    """
+    import os  # noqa: PLC0415
+
+    targets = streams if streams is not None else (sys.stdout, sys.stderr)
+    for stream in targets:
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        changes: dict[str, str] = {}
+        encoding = (getattr(stream, "encoding", None) or "").lower().replace("_", "-")
+        try:
+            is_tty = bool(stream.isatty())
+        except (OSError, ValueError):
+            is_tty = False
+        errors = getattr(stream, "errors", None) or "strict"
+        if not is_tty and encoding not in ("utf-8", "utf8") and not os.environ.get("PYTHONIOENCODING"):
+            changes["encoding"] = "utf-8"
+        # Always pass errors alongside a new encoding: reconfigure(encoding=...)
+        # on its own resets the handler to "strict".
+        if errors == "strict" or changes:
+            changes["errors"] = "replace" if errors == "strict" else errors
+        if changes:
+            try:
+                reconfigure(**changes)
+            except (OSError, ValueError):  # a stream that can't be reconfigured now: leave it
+                continue
+
+
+class _SorethumbTyper(typer.Typer):
+    """Typer app that configures the output streams before running a command.
+
+    Done in ``__call__`` (the console script and ``python -c "...; app()"``),
+    not at import, so importing this module -- or invoking it in-process with
+    Click's CliRunner -- never touches the caller's streams.
+    """
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        _configure_output_streams()
+        return super().__call__(*args, **kwargs)
+
+
+app = _SorethumbTyper(
     name="sorethumb",
     no_args_is_help=True,
     **_TYPER_EXCEPTION_SETTINGS,
@@ -1538,7 +1597,10 @@ def anomalies(
     if json_output:
         display = ["_group", "rank", "composite_score", "attribution_kind", *reason_cols]
         present = [c for c in display if c in all_rows.columns]
-        typer.echo(all_rows.select(present).rename({"_group": "group"}).write_json())
+        # Re-encoded through json.dumps (ensure_ascii) like every other --json
+        # output: polars writes non-ASCII as raw characters, which a narrow
+        # output encoding (PYTHONIOENCODING=cp1252) would turn into "?".
+        typer.echo(json.dumps(json.loads(all_rows.select(present).rename({"_group": "group"}).write_json())))
         return
 
     table = Table(
@@ -1626,7 +1688,7 @@ def explain_plan(
             _fail(json_output, str(exc), _classify_error(exc))
 
     if json_output:
-        typer.echo(plan.to_json())
+        typer.echo(json.dumps(json.loads(plan.to_json())))  # ASCII-escaped, like every --json output
         return
 
     table = Table(title="Feature plan", show_header=True, header_style="bold cyan")

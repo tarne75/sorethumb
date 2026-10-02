@@ -46,7 +46,13 @@ _MUST_NOT_BE_IGNORED = (
 
 def _git(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [shutil.which("git") or "git", *args], cwd=_ROOT, capture_output=True, text=True, check=False
+        [shutil.which("git") or "git", *args],
+        cwd=_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
     )
 
 

@@ -960,6 +960,8 @@ def _run_json_subprocess(args: list[str], *, timeout: float = 30.0) -> subproces
         stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
         check=False,
     )
