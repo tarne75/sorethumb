@@ -1,0 +1,19 @@
+# Check text files out with LF on every platform. Git for Windows defaults to
+# core.autocrlf=true, which would otherwise give Windows checkouts CRLF files:
+# harmless where text is read in text mode, but it changes byte-level
+# comparisons, hashes of tracked files, and what an sdist built there contains.
+* text=auto eol=lf
+
+# Binary formats: never touch line endings.
+*.parquet binary
+*.joblib binary
+*.pkl binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.gz binary
+*.zip binary
+*.whl binary
+*.docx binary
+*.xlsx binary
+*.pdf binary

@@ -28,6 +28,24 @@ uv run pytest -m property
 uv run pytest -m repo_check
 ```
 
+### Developing on Windows
+
+The same steps work in PowerShell, with two differences:
+
+- Install uv with `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
+  instead of the `curl` line.
+- `uv run ...` needs no activated virtualenv. To activate one anyway, it is
+  `.venv\Scripts\Activate.ps1` (PowerShell may first need
+  `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`).
+
+Clone onto a local drive, not inside a OneDrive or other synced folder: sync
+clients lock files mid-write, which shows up as intermittent "file is open in
+another program" failures. The repository is checked out with LF line endings
+on every platform (`.gitattributes`), whatever your `core.autocrlf` setting.
+
+`scripts/release.sh` is a bash script for maintainers cutting a release; run it
+from macOS, Linux or WSL. Everything else in this guide works natively.
+
 If you changed `pyproject.toml`'s dependencies, run `uv lock` to update
 `uv.lock` and commit both together — CI runs `uv lock --check` and will fail
 a PR where they've drifted apart.
