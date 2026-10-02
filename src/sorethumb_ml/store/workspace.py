@@ -14,6 +14,7 @@ import logging
 from pathlib import Path
 from typing import Self
 
+from sorethumb_ml._atomic import unlink_with_retry
 from sorethumb_ml.errors import NotFoundError, StoreError
 from sorethumb_ml.store.db import Store
 
@@ -222,7 +223,7 @@ class Workspace:
             deleted.append(path_str)
             if not dry_run:
                 if p.exists():
-                    p.unlink()
+                    unlink_with_retry(p)
                     logger.info("Pruned artifact: %s", path_str)
                 self._store.delete_artifact(str(row["artifact_id"]))
         return deleted

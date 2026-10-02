@@ -39,7 +39,6 @@ from sorethumb_ml import (
     build_feature_plan,
     list_detectors,
     load_dataset,
-    render_report_for_run,
     run_detection,
     score_forward,
 )
@@ -223,7 +222,8 @@ def _version_callback(value: bool) -> None:
 
 @app.callback()
 def main(
-    version: bool = typer.Option(
+    ctx: typer.Context,
+    version: bool = typer.Option(  # noqa: ARG001 -- handled by the eager _version_callback
         False,
         "--version",
         "-V",
@@ -233,6 +233,9 @@ def main(
     ),
 ) -> None:
     """Unsupervised anomaly detection for tabular data."""
+    # Whatever log file a command opens is closed when it finishes, so nothing
+    # outlives the invocation (Windows can't delete or rotate an open file).
+    ctx.call_on_close(_detach_file_handlers)
 
 
 # ---------------------------------------------------------------------------
@@ -552,23 +555,70 @@ def _setup_logging(level: str) -> None:
     )
 
 
-def _add_file_handler(workdir: Path, level: str) -> None:
-    """Add a rotating file handler to the sorethumb_ml logger.
+class _WorkspaceLogHandler(logging.handlers.RotatingFileHandler):
+    """The per-command file handler writing {workdir}/logs/sorethumb.log.
 
-    Writes to {workdir}/logs/sorethumb.log, rotating at 10 MB, keeping 5 backups.
-    Safe to call multiple times — skips if a file handler already exists.
+    Opened lazily (``delay=True``) and closed when the command finishes (see
+    ``_add_file_handler``): Windows can't delete or rotate a file another
+    handle still holds, so a handler left open blocks ``workspace reset`` and
+    pins a workspace's log for the rest of an in-process session.
+
+    Rotation renames the open log file, which fails on Windows while another
+    sorethumb process has the same log open. Losing that race must not cost
+    any log records, so a failed rollover keeps appending to the current file
+    and is retried on a later record.
     """
-    sorethumb_logger = logging.getLogger("sorethumb_ml")
-    if any(isinstance(h, logging.handlers.RotatingFileHandler) for h in sorethumb_logger.handlers):
-        return
 
-    log_dir = workdir / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    handler = logging.handlers.RotatingFileHandler(
-        log_dir / "sorethumb.log",
+    def doRollover(self) -> None:  # noqa: N802 -- logging's API name
+        try:
+            super().doRollover()
+        except OSError:
+            # Leave rotation for a later record. The stream may have been closed
+            # by the base implementation before the rename failed; reopen it.
+            if self.stream is None or self.stream.closed:
+                self.stream = self._open()
+
+    def shouldRollover(self, record: logging.LogRecord) -> bool:  # noqa: N802 -- logging's API name
+        try:
+            return bool(super().shouldRollover(record))
+        except OSError:
+            return False
+
+
+def _detach_file_handlers() -> None:
+    """Close and remove every workspace log handler from the sorethumb_ml logger."""
+    sorethumb_logger = logging.getLogger("sorethumb_ml")
+    for handler in list(sorethumb_logger.handlers):
+        if isinstance(handler, _WorkspaceLogHandler):
+            sorethumb_logger.removeHandler(handler)
+            handler.close()
+
+
+def _add_file_handler(workdir: Path, level: str) -> None:
+    """Log this command to {workdir}/logs/sorethumb.log, rotating at 10 MB, keeping 5 backups.
+
+    One handler per command: the root callback (``main``) registers
+    ``_detach_file_handlers`` to run when the command's context closes (normal
+    exit, typer.Exit, or an exception), and a handler left over
+    for a *different* workspace -- an earlier in-process invocation -- is
+    replaced rather than reused, so records always land in the workspace the
+    current command is using.
+    """
+    log_path = (workdir / "logs" / "sorethumb.log").resolve()
+    sorethumb_logger = logging.getLogger("sorethumb_ml")
+    for handler in sorethumb_logger.handlers:
+        if isinstance(handler, _WorkspaceLogHandler) and Path(handler.baseFilename) == log_path:
+            handler.setLevel(getattr(logging, level.upper(), logging.INFO))
+            return
+    _detach_file_handlers()
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handler = _WorkspaceLogHandler(
+        log_path,
         maxBytes=10 * 1024 * 1024,
         backupCount=5,
         encoding="utf-8",
+        delay=True,
     )
     handler.setLevel(getattr(logging, level.upper(), logging.INFO))
     handler.setFormatter(
@@ -805,7 +855,8 @@ def init(
         _fail(False, f"Cannot write {toml_path}: {exc}. Nothing was written.", ExitCode.RUNTIME)
 
     try:
-        Workspace.init(ws_dir)
+        with Workspace.init(ws_dir):
+            pass
     except Exception as exc:  # noqa: BLE001
         # Partial result, stated explicitly: the config file exists but the
         # workspace it points at does not. No success banner, non-zero exit.
@@ -1169,9 +1220,15 @@ def report(
 
         n_groups = len(ws.store.all_run_groups(run_id))
         console.print(f"Re-rendering report for [cyan]{_e(run_id)}[/cyan] ({_e(n_groups)} groups)…")
-        path = render_report_for_run(ws, run_id, formats=formats)
+        from sorethumb_ml._pipeline import _render_report_or_reason  # noqa: PLC0415
+
+        path, reason = _render_report_or_reason(ws, run_id, formats=formats)
         if path is None:
-            _fail(False, f"Could not render report for {run_id}. See the log for details.", ExitCode.RUNTIME)
+            _fail(
+                False,
+                f"Could not render report for {run_id}: {reason}. See the log for details.",
+                ExitCode.RUNTIME,
+            )
         console.print(f"[green]Report written:[/green] {_e(path)}")
 
 
@@ -2104,12 +2161,17 @@ def workspace_reset(
 
     import shutil  # noqa: PLC0415
 
+    from sorethumb_ml._atomic import unlink_with_retry  # noqa: PLC0415
+
+    # This command's own log handler holds logs/sorethumb.log open; Windows
+    # refuses to delete an open file, so close it before deleting anything.
+    _detach_file_handlers()
     try:
         for entry in owned:
             # A symlink is removed itself, never followed; rmtree never follows
             # symlinks inside the directories it deletes either.
             if entry.is_symlink() or not entry.is_dir():
-                entry.unlink()
+                unlink_with_retry(entry)
             else:
                 shutil.rmtree(entry)
         remaining = sorted(ws_path.iterdir())

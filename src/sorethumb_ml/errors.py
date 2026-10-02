@@ -66,6 +66,18 @@ class NotFoundError(StoreError):
     failure_kind = "not_found"
 
 
+class FileInUseError(StoreError):
+    """A file could not be replaced or deleted because another program holds it open.
+
+    Windows refuses to replace or delete a file another process has open
+    without delete sharing -- a report CSV open in a spreadsheet, a file-sync
+    client mid-upload, antivirus scanning a fresh file. sorethumb retries
+    briefly first (most such locks are momentary); this is raised only once
+    the lock outlasts the retries, naming the file. A :class:`StoreError`
+    subclass, so existing ``except StoreError`` handlers keep working.
+    """
+
+
 class MemoryBudgetError(SorethumbError):
     """Raised when the projected feature-matrix size exceeds run.max_memory_mb.
 

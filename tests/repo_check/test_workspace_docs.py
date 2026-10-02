@@ -11,14 +11,24 @@ against the real code.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-from sorethumb_ml.cli import _DEFAULT_WORKDIR, _load_config, app
+from sorethumb_ml.cli import _DEFAULT_WORKDIR, _detach_file_handlers, _load_config, app
 
 pytestmark = pytest.mark.repo_check
+
+
+@pytest.fixture(autouse=True)
+def _close_logs_opened_outside_a_command() -> Iterator[None]:
+    # Some tests call _load_config directly, outside a CLI command, so no
+    # command context is there to close the log handler it attaches.
+    yield
+    _detach_file_handlers()
+
 
 _ROOT = Path(__file__).resolve().parents[2]
 _DOCS = [

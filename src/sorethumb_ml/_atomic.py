@@ -12,10 +12,14 @@ from __future__ import annotations
 import contextlib
 import errno
 import os
+import sys
 import tempfile
-from collections.abc import Generator
+import time
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
+
+from sorethumb_ml.errors import FileInUseError
 
 
 @contextmanager
@@ -57,8 +61,61 @@ def promote_durably(tmp: Path, dest: Path) -> None:
     still bring back the old (or no) file on some filesystems.
     """
     _fsync_path(tmp)
-    os.replace(tmp, dest)  # noqa: PTH105 — os.replace IS the atomic-rename primitive
+    replace_with_retry(tmp, dest)
     _fsync_dir(dest.parent)
+
+
+# Windows error codes for "another process has this file open":
+# ERROR_ACCESS_DENIED (5) -- what replacing or deleting a file that is open
+# without delete sharing reports -- ERROR_SHARING_VIOLATION (32) and
+# ERROR_LOCK_VIOLATION (33).
+_WINDOWS_IN_USE_ERRORS = frozenset({5, 32, 33})
+# Most such locks are momentary (antivirus or the search indexer scanning a file
+# just written); a persistent one (a spreadsheet holding a report open) outlasts
+# these and is reported. Roughly two seconds in total.
+_IN_USE_RETRY_DELAYS_S = (0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.8)
+
+
+def _is_in_use(exc: OSError) -> bool:
+    """Return True for a Windows "file is open in another process" failure; never on POSIX."""
+    return (
+        sys.platform == "win32"
+        and isinstance(exc, PermissionError)
+        and getattr(exc, "winerror", None) in _WINDOWS_IN_USE_ERRORS
+    )
+
+
+def _retry_while_in_use(operation: Callable[[], None], path: Path, action: str) -> None:
+    for delay in (*_IN_USE_RETRY_DELAYS_S, None):
+        try:
+            operation()
+            return
+        except OSError as exc:
+            if not _is_in_use(exc):
+                raise
+            if delay is None:
+                msg = (
+                    f"Could not {action} {path}: the file is open in another program (for example a "
+                    "spreadsheet, a file-sync client or antivirus software), or access to it was "
+                    "denied. Close it and try again."
+                )
+                raise FileInUseError(msg) from exc
+            time.sleep(delay)
+
+
+def replace_with_retry(src: Path, dest: Path) -> None:
+    """``os.replace(src, dest)``, retrying briefly while Windows reports *dest* in use.
+
+    On POSIX this is exactly one ``os.replace``. On Windows a sharing violation
+    is retried for about two seconds, then raised as
+    :class:`~sorethumb_ml.errors.FileInUseError` naming *dest*.
+    """
+    _retry_while_in_use(lambda: os.replace(src, dest), dest, "replace")  # noqa: PTH105 -- the atomic-rename primitive
+
+
+def unlink_with_retry(path: Path, *, missing_ok: bool = False) -> None:
+    """``path.unlink()``, with the same Windows in-use retry as :func:`replace_with_retry`."""
+    _retry_while_in_use(lambda: path.unlink(missing_ok=missing_ok), path, "delete")
 
 
 # fsync on a directory handle is rejected with these on filesystems that have no

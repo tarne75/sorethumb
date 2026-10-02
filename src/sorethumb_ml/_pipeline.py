@@ -34,6 +34,7 @@ from sorethumb_ml.detectors import registry
 from sorethumb_ml.errors import (
     AttributionBackendWarning,
     ConfigError,
+    FileInUseError,
     NotFoundError,
     ReportGenerationWarning,
     SampleTruncatedWarning,
@@ -282,7 +283,7 @@ def _render_report_and_get_status(
     time this runs, so this is a presentation-layer concern, not a signal
     that the results themselves are suspect.
     """
-    report_path = render_report_for_run(ws, run_id, formats=config.report.formats)
+    report_path, reason = _render_report_or_reason(ws, run_id, formats=config.report.formats)
     if report_path is not None:
         if config.report.open_after:
             _open_in_browser(report_path)
@@ -291,8 +292,8 @@ def _render_report_and_get_status(
     msg = (
         f"Report generation failed for run {run_id!r} (requested formats "
         f"{config.report.formats}); detection and scoring completed "
-        "successfully -- only the report artefact is missing. See the log "
-        "for the underlying exception."
+        "successfully -- only the report artefact is missing. "
+        f"Cause: {reason}. See the log for the full traceback."
     )
     with warnings.catch_warnings():
         warnings.simplefilter("always", ReportGenerationWarning)
@@ -2160,10 +2161,17 @@ def render_report_for_run(ws: Workspace, run_id: str, *, formats: list[str] | No
     Returns the ``index.html`` path, or ``None`` if the run is unknown or
     rendering fails (logged, never raised).
     """
+    return _render_report_or_reason(ws, run_id, formats=formats)[0]
+
+
+def _render_report_or_reason(
+    ws: Workspace, run_id: str, *, formats: list[str] | None = None
+) -> tuple[Path | None, str | None]:
+    """:func:`render_report_for_run`, plus a one-line reason when it returns no report."""
     run_row = ws.store.get_run(run_id)
     if run_row is None:
         logger.warning("render_report_for_run: unknown run_id %r.", run_id)
-        return None
+        return None, f"unknown run {run_id!r}"
 
     try:
         import sorethumb_ml as _st  # noqa: PLC0415
@@ -2210,11 +2218,15 @@ def render_report_for_run(ws: Workspace, run_id: str, *, formats: list[str] | No
             )
 
         effective_formats = formats if formats is not None else config.report.formats
-        return render_report(meta, group_sections, ws.root / "reports" / run_id, formats=effective_formats)
+        return render_report(
+            meta, group_sections, ws.root / "reports" / run_id, formats=effective_formats
+        ), None
 
-    except Exception:
+    except Exception as exc:
         logger.warning("Report rendering failed for run %s; skipping.", run_id, exc_info=True)
-        return None
+        # A locked file already names itself and says what to do; anything else
+        # gets its type so the one-line summary is still actionable.
+        return None, str(exc) if isinstance(exc, FileInUseError) else f"{type(exc).__name__}: {exc}"
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,17 @@ Versioning: [Semantic Versioning](https://semver.org/).
   `PYTHONIOENCODING` says otherwise, an unencodable character is replaced
   rather than aborting, and every `--json` output is ASCII-escaped, so it is
   lossless under any output encoding.
+- **Files held open by another program** (Windows): replacing a report, model
+  or downloaded file that a spreadsheet, a file-sync client or antivirus
+  software has open is retried briefly, then fails with a `FileInUseError`
+  naming the file, and a failed report now says why in the run summary
+  instead of only "see the log". `workspace reset` and `workspace prune`
+  retry deletions the same way.
+- **Log and database handles** no longer outlive the command that opened
+  them, so `workspace reset` can delete `logs/` on Windows, in-process
+  callers no longer keep logging into the first workspace they used, and a
+  log rotation that loses a race with another process keeps logging instead
+  of reporting "--- Logging error ---" for every later record.
 
 ## [0.1.0] - 2026-09-21
 
