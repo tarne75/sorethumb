@@ -30,6 +30,7 @@ def test_guard_rejects_filesystem_root():
 
 def test_guard_rejects_home_directory(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # what Path.home() reads on Windows
     with pytest.raises(typer.Exit):
         _guard_reset_target(tmp_path.resolve())
 

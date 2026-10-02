@@ -153,6 +153,9 @@ def test_a_filesystem_that_rejects_directory_fsync_is_skipped_cleanly(
     assert _leftover_temp_files(tmp_path) == []
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows can't open a directory handle, so the directory is never fsynced"
+)
 def test_a_real_directory_fsync_failure_is_not_swallowed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -29,6 +29,12 @@ Versioning: [Semantic Versioning](https://semver.org/).
   callers no longer keep logging into the first workspace they used, and a
   log rotation that loses a race with another process keeps logging instead
   of reporting "--- Logging error ---" for every later record.
+- **Prompts on Windows**: `sorethumb run data.csv` started with stdin from
+  `NUL` (`< NUL`, a scheduled task, `subprocess.DEVNULL`) offered to save a
+  config, read end-of-file and aborted; Windows reports the null device as a
+  terminal. Only a real console is now treated as interactive.
+- **`file://C:/...` URIs** (two slashes, as often typed by hand) resolve to
+  the drive path instead of an invalid `\\C:\...` share path.
 
 ## [0.1.0] - 2026-09-21
 

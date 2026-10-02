@@ -108,6 +108,8 @@ class _CacheMeta(TypedDict):
 # URL scheme ("c"), rejecting every Windows absolute path as an unsupported
 # scheme.
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+# A drive letter where a file:// URI's host would be ("file://C:/data/x.csv").
+_WINDOWS_DRIVE_NETLOC_RE = re.compile(r"^[A-Za-z]:$")
 
 # Query parameter names (case-insensitive) that commonly carry a signed-URL
 # token, API key, or other bearer secret -- stripped by redact_source_uri.
@@ -205,6 +207,11 @@ def _file_uri_to_path(parsed: ParseResult) -> str:
     followed the third slash (``file:///C:/...``).
     """
     netloc = parsed.netloc
+    if _WINDOWS_DRIVE_NETLOC_RE.match(netloc):
+        # "file://C:/data/x.csv" -- two slashes, so the drive letter parsed as
+        # the host. Malformed, but common when written by hand and accepted by
+        # browsers; it can only mean a local drive path.
+        return f"{netloc}{url2pathname(parsed.path)}"
     if netloc and netloc != "localhost":
         # file://server/share/path -> a UNC path.
         return f"\\\\{netloc}{url2pathname(parsed.path)}"

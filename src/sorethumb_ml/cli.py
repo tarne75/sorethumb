@@ -124,6 +124,33 @@ def _configure_output_streams(streams: tuple[Any, ...] | None = None) -> None:
                 continue
 
 
+def _stdin_is_interactive() -> bool:
+    """Return True only when stdin is an interactive terminal someone can answer.
+
+    ``isatty()`` alone is wrong on Windows: it is True for any character
+    device, including ``NUL`` -- what ``< NUL``, ``subprocess.DEVNULL`` and a
+    Task Scheduler job give a process -- so a prompt there would read EOF and
+    abort. On Windows the handle must also be a real console (GetConsoleMode
+    succeeds only for one).
+    """
+    try:
+        if sys.stdin is None or not sys.stdin.isatty():
+            return False
+    except (OSError, ValueError):  # closed or detached stdin
+        return False
+    if sys.platform == "win32":
+        import ctypes  # noqa: PLC0415
+        import msvcrt  # noqa: PLC0415
+
+        try:
+            handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+        except (OSError, ValueError):
+            return False
+        mode = ctypes.c_uint32()
+        return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+    return True
+
+
 class _SorethumbTyper(typer.Typer):
     """Typer app that configures the output streams before running a command.
 
@@ -1102,7 +1129,7 @@ def _maybe_save_zero_config(
     if save_config is None:
         if json_output:
             return
-        if not sys.stdin.isatty():
+        if not _stdin_is_interactive():
             err_console.print(
                 "Not saving settings (stdin is not a terminal). Run `sorethumb init` to create "
                 "sorethumb.toml, or pass --save-config.",
