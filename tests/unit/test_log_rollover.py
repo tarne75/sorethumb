@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from sorethumb_ml.cli import _WorkspaceLogHandler
+from sorethumb_ml.cli import _add_file_handler, _detach_file_handlers, _WorkspaceLogHandler
 
 pytestmark = pytest.mark.unit
 
@@ -64,3 +64,34 @@ def test_the_log_file_is_not_opened_until_the_first_record(tmp_path: Path) -> No
         assert not log.exists()
     finally:
         handler.close()
+
+
+def test_a_log_that_cannot_be_opened_is_not_rolled_over(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    handler = _WorkspaceLogHandler(
+        tmp_path / "sorethumb.log", maxBytes=200, backupCount=2, encoding="utf-8", delay=True
+    )
+
+    def _locked() -> None:
+        raise PermissionError(errno.EACCES, "The process cannot access the file (simulated WinError 32)")
+
+    monkeypatch.setattr(handler, "_open", _locked)
+    try:
+        assert handler.shouldRollover(_record("x")) is False
+    finally:
+        handler.close()
+
+
+def test_a_second_command_in_the_same_workspace_reuses_its_log_handler(tmp_path: Path) -> None:
+    logger = logging.getLogger("sorethumb_ml")
+    try:
+        _add_file_handler(tmp_path, "INFO")
+        first = [h for h in logger.handlers if isinstance(h, _WorkspaceLogHandler)]
+        _add_file_handler(tmp_path, "DEBUG")
+        second = [h for h in logger.handlers if isinstance(h, _WorkspaceLogHandler)]
+    finally:
+        _detach_file_handlers()
+    assert len(first) == 1
+    assert second == first
+    assert second[0].level == logging.DEBUG

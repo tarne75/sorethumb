@@ -161,3 +161,23 @@ def test_a_real_open_handle_gives_file_in_use_on_windows(tmp_path: Path) -> None
     assert [p.name for p in tmp_path.iterdir()] == ["report.csv"]  # temp file cleaned up
     atomic_write_text(target, "new")  # works once the handle is closed
     assert target.read_text(encoding="utf-8") == "new"
+
+
+def test_a_stale_download_still_in_use_is_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    locked = tmp_path / "uncached_data-locked.csv"
+    free = tmp_path / "uncached_data-free.csv"
+    two_hours_ago = time.time() - 7200
+    for f in (locked, free):
+        f.write_bytes(_BODY)
+        os.utime(f, (two_hours_ago, two_hours_ago))
+    real_unlink = Path.unlink
+
+    def _unlink(self: Path, missing_ok: bool = False) -> None:
+        if self.name == locked.name:
+            raise PermissionError(13, "The process cannot access the file (simulated WinError 32)")
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", _unlink)
+    src._remove_stale_uncached(tmp_path)
+    assert locked.exists()
+    assert not free.exists()

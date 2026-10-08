@@ -8,6 +8,7 @@ SourceError that says what is wrong and how to fix it; utf8-lossy still works.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import polars as pl
 import pytest
@@ -42,7 +43,11 @@ def test_utf8_lossy_reads_it(cp1252_csv: Path) -> None:
     assert df.columns == ["name", "amount", "city"]
 
 
+class _FailingFrame:
+    def collect(self) -> pl.DataFrame:
+        raise pl.exceptions.ComputeError("conversion from `str` to `i64` failed")
+
+
 def test_other_compute_errors_are_not_reworded(tmp_path: Path) -> None:
-    lf = pl.LazyFrame({"a": ["x"]}).select(pl.col("a").cast(pl.Int64, strict=True))
-    with pytest.raises(pl.exceptions.InvalidOperationError):
-        collect_frame(lf, tmp_path / "unused.csv")
+    with pytest.raises(pl.exceptions.ComputeError, match="conversion from"):
+        collect_frame(cast("pl.LazyFrame", _FailingFrame()), tmp_path / "data.csv")

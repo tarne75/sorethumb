@@ -113,3 +113,11 @@ def test_a_drive_relative_path_is_a_clear_error(tmp_path) -> None:
 
     with pytest.raises(SourceError, match="relative to drive C:"):
         resolve_source(SourceConfig(uri="C:data.csv"), tmp_path)
+
+
+def test_a_unc_share_root_is_one_identity_with_or_without_a_trailing_separator() -> None:
+    keys = {
+        canonical_source_key(u) for u in ["\\\\Server\\Share\\", "\\\\server\\share", "file://server/share/"]
+    }
+    assert keys == {"//server/share"}
+    assert canonical_source_key("C:\\") == "c:/"

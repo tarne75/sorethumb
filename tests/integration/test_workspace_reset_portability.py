@@ -112,3 +112,8 @@ def test_guards_hold_for_windows_roots_and_home() -> None:
     for target in (Path("C:\\"), Path.home().resolve(), Path(Path.home().anchor)):
         with pytest.raises(typer.Exit):
             _guard_reset_target(target)
+
+
+def test_typed_confirmation_rejects_text_that_is_not_a_path(project: tuple[Path, Path]) -> None:
+    _, workdir = project
+    assert not _confirmation_matches(f"{workdir.resolve()}\x00", workdir.resolve())
