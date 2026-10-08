@@ -81,7 +81,7 @@ import httpx
 
 from sorethumb_ml._atomic import promote_durably
 from sorethumb_ml.config import SourceConfig
-from sorethumb_ml.errors import SourceError
+from sorethumb_ml.errors import FileInUseError, SourceError
 from sorethumb_ml.io.fingerprint import content_fingerprint
 from sorethumb_ml.io.readers import _FORMAT_EXTENSIONS
 
@@ -108,6 +108,10 @@ class _CacheMeta(TypedDict):
 # URL scheme ("c"), rejecting every Windows absolute path as an unsupported
 # scheme.
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+# "C:data.csv" -- relative to drive C:'s current directory (no separator after the colon).
+_WINDOWS_DRIVE_RELATIVE_RE = re.compile(r"^[A-Za-z]:(?![\\/])")
+# A drive letter where a file:// URI's host would be ("file://C:/data/x.csv").
+_WINDOWS_DRIVE_NETLOC_RE = re.compile(r"^[A-Za-z]:$")
 
 # Query parameter names (case-insensitive) that commonly carry a signed-URL
 # token, API key, or other bearer secret -- stripped by redact_source_uri.
@@ -182,6 +186,13 @@ def resolve_source(
     if _WINDOWS_DRIVE_RE.match(uri):
         return _resolve_local(uri)
 
+    if _WINDOWS_DRIVE_RELATIVE_RE.match(uri):
+        raise SourceError(
+            f"Source path '{uri}' is relative to drive {uri[:2]}'s current directory, which "
+            f"sorethumb can't resolve reliably. Use an absolute path ('{uri[:2]}\\...') or a "
+            "path relative to the current directory."
+        )
+
     parsed = urlparse(uri)
 
     if parsed.scheme == "file":
@@ -205,6 +216,11 @@ def _file_uri_to_path(parsed: ParseResult) -> str:
     followed the third slash (``file:///C:/...``).
     """
     netloc = parsed.netloc
+    if _WINDOWS_DRIVE_NETLOC_RE.match(netloc):
+        # "file://C:/data/x.csv" -- two slashes, so the drive letter parsed as
+        # the host. Malformed, but common when written by hand and accepted by
+        # browsers; it can only mean a local drive path.
+        return f"{netloc}{url2pathname(parsed.path)}"
     if netloc and netloc != "localhost":
         # file://server/share/path -> a UNC path.
         return f"\\\\{netloc}{url2pathname(parsed.path)}"
@@ -377,7 +393,14 @@ def _resolve_http(
             # every call, and never a fingerprint-keyed cache dir (so no
             # validators are ever recorded for it either -- there is no cache
             # entry a conditional request could reuse).
-            uncached_file = cache_dir / f"uncached_data{ext}"
+            # A unique name per call, never one shared file replaced each time:
+            # a second concurrent run would otherwise swap the file under the
+            # first run's reader (and on Windows the replace fails outright
+            # while that reader has it open).
+            _remove_stale_uncached(cache_dir)
+            fd, uncached_name = tempfile.mkstemp(dir=str(cache_dir), prefix="uncached_data-", suffix=ext)
+            os.close(fd)
+            uncached_file = Path(uncached_name)
             _promote(tmp_path, uncached_file)
             logger.info("Source not cached (source.cache=False): %s", uncached_file)
             return uncached_file
@@ -396,13 +419,39 @@ def _resolve_http(
             return cached_file
 
         cached_dir.mkdir(parents=True, exist_ok=True)
-        _promote(tmp_path, cached_file)
+        try:
+            _promote(tmp_path, cached_file)
+        except (OSError, FileInUseError):
+            # Lost a race: another process cached the same bytes between the
+            # exists() check above and this promotion, and (on Windows) holds
+            # the file open, so it can't be replaced. Content-addressed, so the
+            # winner's copy is the one we wanted -- verify that, then use it.
+            if cached_file.exists() and content_fingerprint(cached_file) == fp:
+                logger.info("Source cached concurrently by another process (fp=%s); using it.", fp[:8])
+                tmp_path.unlink(missing_ok=True)
+                return cached_file
+            raise
         logger.info("Source downloaded and cached (fp=%s): %s", fp[:8], cached_file)
         return cached_file
     except BaseException:
         with contextlib.suppress(OSError):
             tmp_path.unlink()
         raise
+
+
+# How old an uncached download must be before a later call deletes it.
+_STALE_UNCACHED_SECONDS = 3600
+
+
+def _remove_stale_uncached(cache_dir: Path) -> None:
+    """Delete ``source.cache = false`` downloads older than an hour; skip any still in use."""
+    cutoff = time.time() - _STALE_UNCACHED_SECONDS
+    for old in cache_dir.glob("uncached_data*"):
+        try:
+            if old.is_file() and old.stat().st_mtime < cutoff:
+                old.unlink()
+        except OSError:
+            continue  # in use by another run (Windows), or already gone
 
 
 def _promote(tmp_path: Path, dest: Path) -> None:

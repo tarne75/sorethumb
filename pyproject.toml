@@ -32,6 +32,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
@@ -248,9 +249,19 @@ filterwarnings = [
 
 # ── Coverage ─────────────────────────────────────────────────────────────────
 [tool.coverage.run]
-source = ["src/sorethumb_ml"]
+# A package name, not a directory, so CLI subprocesses started from another
+# working directory still measure the same code.
+source_pkgs = ["sorethumb_ml"]
 branch = true
 omit = ["tests/*"]
+# Also measure `sorethumb` processes the tests start (the CLI contract and
+# integration tests run it as a real subprocess).
+patch = ["subprocess"]
+
+[tool.coverage.paths]
+# CI combines data from Linux, macOS and Windows runners; map every checkout
+# location onto the repository-relative src/ path.
+source = ["src/", "*/src/", "*\\src\\"]
 
 [tool.coverage.report]
 show_missing = true

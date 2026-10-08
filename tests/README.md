@@ -38,7 +38,9 @@ CI (`.github/workflows/`) runs the same lanes: `ci.yml` for pull requests,
 `release-validation.yml` (reusable) for the full pre-release set, and
 `scripts/release.sh` locally before a tag. `ci.yml` also gates the changed lines
 with diff coverage rather than a global coverage threshold, because a global
-threshold rewarded padding tests over meaningful ones.
+threshold rewarded padding tests over meaningful ones. That coverage is
+combined from Linux, macOS and Windows runs, so platform-specific code counts
+where it actually runs.
 
 ## Conventions
 

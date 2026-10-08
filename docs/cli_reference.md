@@ -44,6 +44,25 @@ These options appear on most commands and behave identically everywhere:
 |----------|-----------------|-------|
 | `SORETHUMB_CONFIG` | `--config` | Path to `sorethumb.toml`. |
 
+Setting a variable for the current session (the same applies to the variable
+named by `source.auth_env_var`):
+
+```bash
+export SORETHUMB_CONFIG=/path/to/sorethumb.toml       # bash, zsh
+```
+
+```powershell
+$env:SORETHUMB_CONFIG = "C:\path\to\sorethumb.toml"  # PowerShell
+```
+
+```bat
+rem cmd.exe
+set SORETHUMB_CONFIG=C:\path\to\sorethumb.toml
+```
+
+`~` in a path given to `--config`, `--workdir` or `init` is expanded by
+sorethumb itself, so it also works in cmd.exe, which doesn't expand it.
+
 ---
 
 ## Log files
@@ -105,6 +124,28 @@ If a `sorethumb.db` exists in the current directory (a workspace made under the
 older default of `.`) and nothing names a workspace, sorethumb refuses to guess:
 pass `--workdir .` to keep using it, or move its contents into
 `./sorethumb-workspace/`.
+
+### Long workspace paths on Windows
+
+Windows limits a path to 260 characters unless long-path support is enabled
+(the `LongPathsEnabled` setting; Microsoft's "Maximum Path Length Limitation"
+page explains it). sorethumb creates files up to about 112 characters below the
+workspace directory, more with a long third-party detector name, so a workspace
+path longer than roughly 145 characters — easy to reach under a OneDrive
+`Documents` folder — can't hold them. `init`, `run` and `score` check this
+before doing any work and stop with exit code 2, saying how many characters
+too long the path is. Use a shorter `--workdir` or enable long paths.
+
+### Network drives and synced folders
+
+Keep the workspace on a local drive. Its SQLite database runs in WAL mode,
+which is not reliable over SMB/CIFS or NFS, and file-sync clients (OneDrive,
+Dropbox, Google Drive, iCloud) lock and re-upload files mid-write. Either shows
+up as intermittent "database is locked" or "file is open in another program"
+errors. sorethumb prints one warning when it detects a workspace on a network
+filesystem, a mapped network drive or UNC path, or a sync client's folder
+(including a OneDrive-redirected `Documents`); it doesn't stop the command.
+Your *data* can live anywhere: only the workspace needs local storage.
 
 ### What is in a workspace — and why it is executable
 
@@ -675,7 +716,13 @@ Only what sorethumb creates is deleted: `sorethumb.db` (with any
 directory is kept — so a `--workdir` pointed at a directory that already held
 your own files leaves them in place — and is listed. The directory itself is
 removed only when nothing else remains in it (exit 0 either way). A symlink
-among those entries is removed, never followed.
+or Windows directory junction among those entries is removed, never followed,
+and read-only files are deleted too.
+
+The confirmation prompt shows the exact path to type. Any spelling of the same
+directory is accepted: surrounding quotes (as Windows Explorer's "Copy as path"
+adds), a trailing separator, `~`, and on Windows a different letter case or
+forward slashes.
 
 Refuses outright, regardless of `--yes`, unless the target actually opens
 as a real sorethumb workspace (has a `sorethumb.db` marker) — and always

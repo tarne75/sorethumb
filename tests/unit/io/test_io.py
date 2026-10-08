@@ -619,10 +619,27 @@ def test_resolve_source_file_uri_decodes_percent_escapes(tmp_path: Path) -> None
 
     p = tmp_path / "has space.csv"
     p.write_text("a,b\n1,2\n")
-    uri = "file://" + str(p.resolve()).replace(" ", "%20")
+    uri = p.resolve().as_uri()  # "file:///tmp/.../has%20space.csv", "file:///C:/.../has%20space.csv"
+    assert "%20" in uri
     cfg = SourceConfig(uri=uri)
     resolved = resolve_source(cfg, tmp_path / "cache")
     assert resolved == p.resolve()
+
+
+def test_file_uri_with_a_drive_letter_as_host_is_a_local_drive_path() -> None:
+    """With two slashes, "file://C:/data/x.csv" parses the drive letter as the host.
+
+    Malformed but common when typed by hand; it must resolve as the drive path,
+    not as a UNC share named "C:" (\\\\C:\\data\\...).
+    """
+    from urllib.parse import urlparse
+
+    from sorethumb_ml.io.source import _file_uri_to_path
+
+    path = _file_uri_to_path(urlparse("file://C:/data/has%20space.csv"))
+    assert path.startswith("C:")
+    assert "has space.csv" in path
+    assert not path.startswith("\\\\")
 
 
 # ---------------------------------------------------------------------------

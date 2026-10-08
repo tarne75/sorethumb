@@ -402,9 +402,9 @@ def test_history_defaults_to_report_rolling_windows(tmp_path: Path, monkeypatch:
     toml = tmp_path / "sorethumb.toml"
     toml.write_text(
         "[source]\n"
-        f'uri = "{csv}"\nformat = "csv"\n'
+        f'uri = {json.dumps(str(csv))}\nformat = "csv"\n'
         "[run]\n"
-        f'workdir = "{workdir}"\nseed = 0\n'
+        f"workdir = {json.dumps(str(workdir))}\nseed = 0\n"
         '[columns]\nid_column = "id"\n'
         "[report]\nrolling_windows = [3, 9]\n",
         encoding="utf-8",

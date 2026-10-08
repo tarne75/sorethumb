@@ -28,6 +28,8 @@ def code_revision(repo_root: Path) -> str:
             cwd=repo_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
             timeout=10,
         ).stdout.strip()
@@ -41,6 +43,8 @@ def code_revision(repo_root: Path) -> str:
                 cwd=repo_root,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=True,
                 timeout=10,
             ).stdout.strip()

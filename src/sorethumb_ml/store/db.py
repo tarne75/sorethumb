@@ -110,8 +110,14 @@ class Store:
         # Set before anything else: switching journal mode can itself need the
         # lock, and this is what turns a concurrent run's "database is locked"
         # into a bounded wait instead of an instant failure.
-        self._conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
-        self._init_schema_with_retry()
+        try:
+            self._conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+            self._init_schema_with_retry()
+        except BaseException:
+            # A failed open must not leak a handle to sorethumb.db: on Windows
+            # it would block deleting or replacing the file until exit.
+            self._conn.close()
+            raise
 
     def _init_schema_with_retry(self) -> None:
         """Switch to WAL, enable foreign keys, and migrate.

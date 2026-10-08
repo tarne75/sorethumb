@@ -39,7 +39,6 @@ from sorethumb_ml import (
     build_feature_plan,
     list_detectors,
     load_dataset,
-    render_report_for_run,
     run_detection,
     score_forward,
 )
@@ -50,7 +49,7 @@ err_console = Console(stderr=True)
 
 # Rich parses "[...]" in any printed string as markup, so a column named
 # "[/x]" crashed the CLI with MarkupError and "amt [usd]" or a hint like
-# "pip install 'sorethumb-ml[explain]'" lost its brackets. Everything not
+# 'pip install "sorethumb-ml[explain]"' lost its brackets. Everything not
 # written by us -- column names, group labels, category values, reasons,
 # paths, URIs, exception and warning messages -- goes through one of these.
 def _e(value: object) -> str:
@@ -79,7 +78,93 @@ _TYPER_EXCEPTION_SETTINGS: dict[str, Any] = {
     "pretty_exceptions_short": True,
 }
 
-app = typer.Typer(
+
+def _configure_output_streams(streams: tuple[Any, ...] | None = None) -> None:
+    """Make stdout/stderr unable to abort a command over an unencodable character.
+
+    A console already gets UTF-8 on every platform (Windows has used the
+    console's Unicode API since Python 3.6). A pipe or file does not: on Windows
+    it gets the ANSI code page (usually cp1252), so a column name like "温度" or
+    an arrow in our own text raised UnicodeEncodeError mid-command. So:
+
+    - a stream that is not a TTY switches to UTF-8, unless PYTHONIOENCODING
+      says otherwise or it already is UTF-8 -- the encoding Python itself makes
+      the default from 3.15 (PEP 686), and what a script reading our output
+      should expect;
+    - stdout's error handler becomes "replace" (stderr already uses
+      "backslashreplace"), so an explicitly chosen narrow encoding degrades to
+      "?" instead of crashing.
+
+    --json output is unaffected either way: it is pure ASCII.
+    """
+    import os  # noqa: PLC0415
+
+    targets = streams if streams is not None else (sys.stdout, sys.stderr)
+    for stream in targets:
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        changes: dict[str, str] = {}
+        encoding = (getattr(stream, "encoding", None) or "").lower().replace("_", "-")
+        try:
+            is_tty = bool(stream.isatty())
+        except (OSError, ValueError):
+            is_tty = False
+        errors = getattr(stream, "errors", None) or "strict"
+        if not is_tty and encoding not in ("utf-8", "utf8") and not os.environ.get("PYTHONIOENCODING"):
+            changes["encoding"] = "utf-8"
+        # Always pass errors alongside a new encoding: reconfigure(encoding=...)
+        # on its own resets the handler to "strict".
+        if errors == "strict" or changes:
+            changes["errors"] = "replace" if errors == "strict" else errors
+        if changes:
+            try:
+                reconfigure(**changes)
+            except (OSError, ValueError):  # a stream that can't be reconfigured now: leave it
+                continue
+
+
+def _stdin_is_interactive() -> bool:
+    """Return True only when stdin is an interactive terminal someone can answer.
+
+    ``isatty()`` alone is wrong on Windows: it is True for any character
+    device, including ``NUL`` -- what ``< NUL``, ``subprocess.DEVNULL`` and a
+    Task Scheduler job give a process -- so a prompt there would read EOF and
+    abort. On Windows the handle must also be a real console (GetConsoleMode
+    succeeds only for one).
+    """
+    try:
+        if sys.stdin is None or not sys.stdin.isatty():
+            return False
+    except (OSError, ValueError):  # closed or detached stdin
+        return False
+    if sys.platform == "win32":
+        import ctypes  # noqa: PLC0415
+        import msvcrt  # noqa: PLC0415
+
+        try:
+            handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+        except (OSError, ValueError):
+            return False
+        mode = ctypes.c_uint32()
+        return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+    return True
+
+
+class _SorethumbTyper(typer.Typer):
+    """Typer app that configures the output streams before running a command.
+
+    Done in ``__call__`` (the console script and ``python -c "...; app()"``),
+    not at import, so importing this module -- or invoking it in-process with
+    Click's CliRunner -- never touches the caller's streams.
+    """
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        _configure_output_streams()
+        return super().__call__(*args, **kwargs)
+
+
+app = _SorethumbTyper(
     name="sorethumb",
     no_args_is_help=True,
     **_TYPER_EXCEPTION_SETTINGS,
@@ -164,7 +249,8 @@ def _version_callback(value: bool) -> None:
 
 @app.callback()
 def main(
-    version: bool = typer.Option(
+    ctx: typer.Context,
+    version: bool = typer.Option(  # noqa: ARG001 -- handled by the eager _version_callback
         False,
         "--version",
         "-V",
@@ -174,6 +260,9 @@ def main(
     ),
 ) -> None:
     """Unsupervised anomaly detection for tabular data."""
+    # Whatever log file a command opens is closed when it finishes, so nothing
+    # outlives the invocation (Windows can't delete or rotate an open file).
+    ctx.call_on_close(_detach_file_handlers)
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +442,9 @@ def _load_config(
 
     if config_path is None:
         config_path = Path("sorethumb.toml")
+    # "~" is expanded by POSIX shells but not by cmd.exe (or inside quotes),
+    # so a path given on the command line is expanded here too.
+    config_path = config_path.expanduser()
 
     raw: dict[str, Any]
     if not config_path.exists():
@@ -378,7 +470,7 @@ def _load_config(
     # Apply flag overrides (flags beat TOML, which beats env)
     run_section: dict[str, Any] = raw.setdefault("run", {})
     if workdir is not None:
-        run_section["workdir"] = str(workdir)
+        run_section["workdir"] = str(workdir.expanduser())
     elif "workdir" not in run_section:
         _guard_legacy_dot_workspace(json_output=json_output)
         run_section["workdir"] = _DEFAULT_WORKDIR
@@ -403,6 +495,7 @@ def _load_config(
         _fail(json_output, "Configuration errors: " + "; ".join(lines), ExitCode.PREFLIGHT)
 
     _add_file_handler(Path(cfg.run.workdir), cfg.run.log_level)
+    _warn_about_storage(Path(cfg.run.workdir))
     return cfg
 
 
@@ -436,10 +529,12 @@ def _resolve_workdir(
     if workdir is None:
         _guard_legacy_dot_workspace(json_output=json_output)
         workdir = Path(_DEFAULT_WORKDIR)
+    workdir = workdir.expanduser()  # cmd.exe doesn't expand "~"
     # Log to the workspace only when it already exists: a read-only command
     # pointed at a path with no workspace must not create one there.
     if workdir.is_dir():
         _add_file_handler(workdir, log_level or "INFO")
+        _warn_about_storage(workdir)
     return workdir, None
 
 
@@ -493,23 +588,70 @@ def _setup_logging(level: str) -> None:
     )
 
 
-def _add_file_handler(workdir: Path, level: str) -> None:
-    """Add a rotating file handler to the sorethumb_ml logger.
+class _WorkspaceLogHandler(logging.handlers.RotatingFileHandler):
+    """The per-command file handler writing {workdir}/logs/sorethumb.log.
 
-    Writes to {workdir}/logs/sorethumb.log, rotating at 10 MB, keeping 5 backups.
-    Safe to call multiple times — skips if a file handler already exists.
+    Opened lazily (``delay=True``) and closed when the command finishes (see
+    ``_add_file_handler``): Windows can't delete or rotate a file another
+    handle still holds, so a handler left open blocks ``workspace reset`` and
+    pins a workspace's log for the rest of an in-process session.
+
+    Rotation renames the open log file, which fails on Windows while another
+    sorethumb process has the same log open. Losing that race must not cost
+    any log records, so a failed rollover keeps appending to the current file
+    and is retried on a later record.
     """
-    sorethumb_logger = logging.getLogger("sorethumb_ml")
-    if any(isinstance(h, logging.handlers.RotatingFileHandler) for h in sorethumb_logger.handlers):
-        return
 
-    log_dir = workdir / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    handler = logging.handlers.RotatingFileHandler(
-        log_dir / "sorethumb.log",
+    def doRollover(self) -> None:  # noqa: N802 -- logging's API name
+        try:
+            super().doRollover()
+        except OSError:
+            # Leave rotation for a later record. The stream may have been closed
+            # by the base implementation before the rename failed; reopen it.
+            if self.stream is None or self.stream.closed:
+                self.stream = self._open()
+
+    def shouldRollover(self, record: logging.LogRecord) -> bool:  # noqa: N802 -- logging's API name
+        try:
+            return bool(super().shouldRollover(record))
+        except OSError:
+            return False
+
+
+def _detach_file_handlers() -> None:
+    """Close and remove every workspace log handler from the sorethumb_ml logger."""
+    sorethumb_logger = logging.getLogger("sorethumb_ml")
+    for handler in list(sorethumb_logger.handlers):
+        if isinstance(handler, _WorkspaceLogHandler):
+            sorethumb_logger.removeHandler(handler)
+            handler.close()
+
+
+def _add_file_handler(workdir: Path, level: str) -> None:
+    """Log this command to {workdir}/logs/sorethumb.log, rotating at 10 MB, keeping 5 backups.
+
+    One handler per command: the root callback (``main``) registers
+    ``_detach_file_handlers`` to run when the command's context closes (normal
+    exit, typer.Exit, or an exception), and a handler left over
+    for a *different* workspace -- an earlier in-process invocation -- is
+    replaced rather than reused, so records always land in the workspace the
+    current command is using.
+    """
+    log_path = (workdir / "logs" / "sorethumb.log").resolve()
+    sorethumb_logger = logging.getLogger("sorethumb_ml")
+    for handler in sorethumb_logger.handlers:
+        if isinstance(handler, _WorkspaceLogHandler) and Path(handler.baseFilename) == log_path:
+            handler.setLevel(getattr(logging, level.upper(), logging.INFO))
+            return
+    _detach_file_handlers()
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handler = _WorkspaceLogHandler(
+        log_path,
         maxBytes=10 * 1024 * 1024,
         backupCount=5,
         encoding="utf-8",
+        delay=True,
     )
     handler.setLevel(getattr(logging, level.upper(), logging.INFO))
     handler.setFormatter(
@@ -519,6 +661,27 @@ def _add_file_handler(workdir: Path, level: str) -> None:
         )
     )
     sorethumb_logger.addHandler(handler)
+
+
+_STORAGE_WARNED: set[str] = set()
+
+
+def _warn_about_storage(workdir: Path) -> None:
+    """Warn once per workspace if it sits on network or cloud-synced storage."""
+    from sorethumb_ml.store.storage import detect_risky_storage  # noqa: PLC0415
+
+    key = str(workdir)
+    if key in _STORAGE_WARNED:
+        return
+    _STORAGE_WARNED.add(key)
+    reason = detect_risky_storage(workdir)
+    if reason is not None:
+        err_console.print(
+            f"[yellow]Warning:[/yellow] the workspace {_e(workdir)} is on {_e(reason)}. SQLite and "
+            "atomic file replacement aren't reliable there (expect 'database is locked' or "
+            "'file is open in another program' errors); a folder on a local, non-synced drive is "
+            "recommended."
+        )
 
 
 def _redact_config(config: Config) -> dict[str, Any]:
@@ -720,6 +883,7 @@ def init(
     sorethumb.toml to point at your dataset, then run `sorethumb inspect`
     to see how your data will be profiled before any models are trained.
     """
+    path = path.expanduser()  # cmd.exe doesn't expand "~"
     toml_path = path / "sorethumb.toml"
     if toml_path.exists():
         err_console.print(f"[yellow]sorethumb.toml already exists:[/yellow] {_e(toml_path)}")
@@ -728,6 +892,13 @@ def init(
     from sorethumb_ml.io.toml_write import render_toml_value  # noqa: PLC0415
 
     ws_dir = path / _DEFAULT_WORKDIR
+    from sorethumb_ml.errors import PathTooLongError  # noqa: PLC0415
+    from sorethumb_ml.store.workspace import check_path_length  # noqa: PLC0415
+
+    try:
+        check_path_length(ws_dir, list_detectors())
+    except PathTooLongError as exc:
+        _fail(False, f"{exc} Nothing was written.", ExitCode.PREFLIGHT)
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -746,7 +917,8 @@ def init(
         _fail(False, f"Cannot write {toml_path}: {exc}. Nothing was written.", ExitCode.RUNTIME)
 
     try:
-        Workspace.init(ws_dir)
+        with Workspace.init(ws_dir):
+            pass
     except Exception as exc:  # noqa: BLE001
         # Partial result, stated explicitly: the config file exists but the
         # workspace it points at does not. No success banner, non-zero exit.
@@ -992,7 +1164,7 @@ def _maybe_save_zero_config(
     if save_config is None:
         if json_output:
             return
-        if not sys.stdin.isatty():
+        if not _stdin_is_interactive():
             err_console.print(
                 "Not saving settings (stdin is not a terminal). Run `sorethumb init` to create "
                 "sorethumb.toml, or pass --save-config.",
@@ -1093,6 +1265,7 @@ def report(
 
     ws_path, cfg = _resolve_workdir(config, workdir, log_level)
     formats = cfg.report.formats if cfg is not None else ReportConfig().formats
+    csv_bom = cfg.report.csv_bom if cfg is not None else None
 
     try:
         ws_cm = Workspace.open(ws_path)
@@ -1110,9 +1283,15 @@ def report(
 
         n_groups = len(ws.store.all_run_groups(run_id))
         console.print(f"Re-rendering report for [cyan]{_e(run_id)}[/cyan] ({_e(n_groups)} groups)…")
-        path = render_report_for_run(ws, run_id, formats=formats)
+        from sorethumb_ml._pipeline import _render_report_or_reason  # noqa: PLC0415
+
+        path, reason = _render_report_or_reason(ws, run_id, formats=formats, csv_bom=csv_bom)
         if path is None:
-            _fail(False, f"Could not render report for {run_id}. See the log for details.", ExitCode.RUNTIME)
+            _fail(
+                False,
+                f"Could not render report for {run_id}: {reason}. See the log for details.",
+                ExitCode.RUNTIME,
+            )
         console.print(f"[green]Report written:[/green] {_e(path)}")
 
 
@@ -1538,7 +1717,10 @@ def anomalies(
     if json_output:
         display = ["_group", "rank", "composite_score", "attribution_kind", *reason_cols]
         present = [c for c in display if c in all_rows.columns]
-        typer.echo(all_rows.select(present).rename({"_group": "group"}).write_json())
+        # Re-encoded through json.dumps (ensure_ascii) like every other --json
+        # output: polars writes non-ASCII as raw characters, which a narrow
+        # output encoding (PYTHONIOENCODING=cp1252) would turn into "?".
+        typer.echo(json.dumps(json.loads(all_rows.select(present).rename({"_group": "group"}).write_json())))
         return
 
     table = Table(
@@ -1626,7 +1808,7 @@ def explain_plan(
             _fail(json_output, str(exc), _classify_error(exc))
 
     if json_output:
-        typer.echo(plan.to_json())
+        typer.echo(json.dumps(json.loads(plan.to_json())))  # ASCII-escaped, like every --json output
         return
 
     table = Table(title="Feature plan", show_header=True, header_style="bold cyan")
@@ -1977,6 +2159,84 @@ def _guard_reset_target(ws_path: Path) -> None:
         raise typer.Exit(int(ExitCode.PREFLIGHT))
 
 
+def _is_link_like(path: Path) -> bool:
+    """Return True for a symlink or a Windows directory junction.
+
+    A junction is not ``is_symlink()``, so without this it would be treated as
+    a real directory -- and shutil.rmtree refuses junctions outright.
+    """
+    if path.is_symlink():
+        return True
+    is_junction = getattr(path, "is_junction", None)  # Python 3.12+
+    if is_junction is not None:
+        return bool(is_junction())
+    import os  # noqa: PLC0415
+    import stat  # noqa: PLC0415
+
+    mount_point = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", None)  # Windows only
+    if mount_point is None:
+        return False
+    try:
+        return bool(getattr(os.lstat(path), "st_reparse_tag", 0) == mount_point)
+    except OSError:
+        return False
+
+
+def _remove_link(path: Path) -> None:
+    """Remove a symlink or junction itself, never what it points to."""
+    from sorethumb_ml._atomic import unlink_with_retry  # noqa: PLC0415
+
+    try:
+        unlink_with_retry(path)
+    except (IsADirectoryError, PermissionError):
+        # A directory symlink or junction on Windows is removed with rmdir,
+        # which unlinks the link without touching its target.
+        path.rmdir()
+
+
+def _rmtree_clearing_read_only(path: Path) -> None:
+    """``shutil.rmtree`` that also deletes read-only files.
+
+    Windows refuses to delete a file with the read-only attribute set (common
+    for anything copied from a read-only share or touched by a sync tool), so
+    on failure the attribute is cleared and the deletion retried once.
+    """
+    import os  # noqa: PLC0415
+    import shutil  # noqa: PLC0415
+    import stat  # noqa: PLC0415
+
+    def _retry(func: Callable[..., Any], target: str, _exc: object) -> None:
+        os.chmod(target, stat.S_IWRITE)  # noqa: PTH101 -- receives a str path from rmtree
+        func(target)
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_retry)
+    else:  # pragma: no cover - exercised on the 3.11 CI legs
+        shutil.rmtree(path, onerror=_retry)
+
+
+def _confirmation_matches(typed: str, ws_path: Path) -> bool:
+    """Return True if *typed* names *ws_path*, however the user spelled it.
+
+    Accepts surrounding whitespace, one pair of matching quotes (what Windows
+    Explorer's "Copy as path" adds), a trailing separator, ``~``, and any
+    spelling that resolves to the same directory -- on Windows that includes a
+    different letter case, forward slashes and a mapped drive letter for a
+    path that resolve() reports in its UNC form.
+    """
+    text = typed.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    if not text:
+        return False
+    if text == str(ws_path):
+        return True
+    try:
+        return Path(text).expanduser().resolve() == ws_path
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
 @workspace_app.command(name="reset")
 def workspace_reset(
     config: _CONFIG_OPT = None,
@@ -2022,13 +2282,14 @@ def workspace_reset(
     owned = [
         ws_path / name
         for name in owned_entry_names()
-        if (ws_path / name).is_symlink() or (ws_path / name).exists()
+        if _is_link_like(ws_path / name) or (ws_path / name).exists()
     ]
     console.print(f"[red bold]This will destroy sorethumb's data in:[/red bold] {_e(ws_path)}")
     for entry in owned:
-        console.print(f"  - {_e(entry.name)}{'/' if entry.is_dir() and not entry.is_symlink() else ''}")
+        console.print(f"  - {_e(entry.name)}{'/' if entry.is_dir() and not _is_link_like(entry) else ''}")
     if not yes:
         console.print("Type the full workspace path to confirm (Ctrl-C to abort):")
+        console.print(f"  {_e(ws_path)}", highlight=False)
         try:
             typed = input("> ").strip()
         except EOFError:
@@ -2036,20 +2297,25 @@ def workspace_reset(
             # traceback -- same outcome as typing the wrong path: abort.
             err_console.print("[red]No input available (stdin closed). Aborting.[/red]")
             raise typer.Exit(int(ExitCode.RUNTIME)) from None
-        if typed != str(ws_path):
+        if not _confirmation_matches(typed, ws_path):
             err_console.print("[red]Path did not match. Aborting.[/red]")
             raise typer.Exit(int(ExitCode.RUNTIME))
 
-    import shutil  # noqa: PLC0415
+    from sorethumb_ml._atomic import unlink_with_retry  # noqa: PLC0415
 
+    # This command's own log handler holds logs/sorethumb.log open; Windows
+    # refuses to delete an open file, so close it before deleting anything.
+    _detach_file_handlers()
     try:
         for entry in owned:
-            # A symlink is removed itself, never followed; rmtree never follows
-            # symlinks inside the directories it deletes either.
-            if entry.is_symlink() or not entry.is_dir():
-                entry.unlink()
+            # A symlink or junction is removed itself, never followed; rmtree
+            # never follows links inside the directories it deletes either.
+            if _is_link_like(entry):
+                _remove_link(entry)
+            elif not entry.is_dir():
+                unlink_with_retry(entry)
             else:
-                shutil.rmtree(entry)
+                _rmtree_clearing_read_only(entry)
         remaining = sorted(ws_path.iterdir())
         if not remaining:
             ws_path.rmdir()

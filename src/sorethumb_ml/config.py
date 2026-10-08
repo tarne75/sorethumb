@@ -32,7 +32,9 @@ class SourceConfig(BaseModel):
             "(appended rows, corrections, the file moving to a new path). All history "
             "-- periods, per-group totals, runs -- is keyed on it. When unset it is "
             "derived from 'uri'; set it explicitly so a change of path does not orphan "
-            "prior history. Allowed characters: letters, digits, '.', '_', '-' (max 128)."
+            "prior history. Spellings of one Windows path that differ only in letter "
+            "case, separators or a file:// prefix derive the same id. Allowed "
+            "characters: letters, digits, '.', '_', '-' (max 128)."
         ),
     )
     format: Literal["auto", "csv", "tsv", "parquet", "json", "jsonl", "tsf"] = Field(
@@ -556,6 +558,13 @@ class ReportConfig(BaseModel):
         False,
         description="Open the HTML report in the default browser after generation.",
     )
+    csv_bom: bool = Field(
+        False,
+        description=(
+            "Start each CSV report with a UTF-8 byte-order mark. Excel on Windows needs it "
+            "to read non-ASCII column names and values correctly; other tools don't."
+        ),
+    )
     rolling_windows: list[int] = Field(
         default_factory=lambda: [1, 7, 14, 28],
         description="Rolling window sizes (in periods) shown by `sorethumb history`.",
@@ -603,6 +612,13 @@ class Config(BaseModel):
         # data itself -- exclude it for the same reason.
         for key in ("dataset_id", "max_download_bytes"):
             d.get("source", {}).pop(key, None)
+        # Every spelling of one Windows path is one source (NTFS is
+        # case-insensitive and takes either separator); anything else is hashed
+        # exactly as given -- see io/uri.py.
+        from sorethumb_ml.io.uri import canonical_source_key  # noqa: PLC0415
+
+        if isinstance(d.get("source", {}).get("uri"), str):
+            d["source"]["uri"] = canonical_source_key(d["source"]["uri"])
         d.pop("report", None)
         serialised = json.dumps(d, sort_keys=True, default=str)
         return hashlib.sha256(serialised.encode()).hexdigest()[:32]

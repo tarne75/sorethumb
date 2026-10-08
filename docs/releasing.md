@@ -5,6 +5,10 @@ index (`docs/index.md`), since it has nothing to do with using the library.
 
 ## Cutting a real release
 
+Releases are cut from macOS or Linux (or WSL on Windows): `scripts/release.sh`
+is a bash script that also uses `unzip`, `grep` and `awk`. The library and its
+tests run natively on Windows; only this maintainer script doesn't.
+
 `scripts/release.sh VERSION` is the only sanctioned path — see that script's
 own header comment for the full step-by-step. In short: it runs every check
 `release-validation.yml` runs (plus version/changelog consistency), builds

@@ -69,6 +69,8 @@ def _check_python(body: str) -> str | None:
             cwd=td,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=900,
             check=False,
         )

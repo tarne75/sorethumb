@@ -11,14 +11,25 @@ against the real code.
 from __future__ import annotations
 
 import re
+import tomllib
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-from sorethumb_ml.cli import _DEFAULT_WORKDIR, _load_config, app
+from sorethumb_ml.cli import _DEFAULT_WORKDIR, _detach_file_handlers, _load_config, app
 
 pytestmark = pytest.mark.repo_check
+
+
+@pytest.fixture(autouse=True)
+def _close_logs_opened_outside_a_command() -> Iterator[None]:
+    # Some tests call _load_config directly, outside a CLI command, so no
+    # command context is there to close the log handler it attaches.
+    yield
+    _detach_file_handlers()
+
 
 _ROOT = Path(__file__).resolve().parents[2]
 _DOCS = [
@@ -116,7 +127,8 @@ def test_init_creates_the_documented_layout(tmp_path: Path) -> None:
     assert (target / "sorethumb.toml").is_file()
     workspace = target / _DEFAULT_WORKDIR
     assert (workspace / "sorethumb.db").is_file()
-    assert f'workdir = "{workspace}"' in (target / "sorethumb.toml").read_text(encoding="utf-8")
+    written = tomllib.loads((target / "sorethumb.toml").read_text(encoding="utf-8"))
+    assert written["run"]["workdir"] == str(workspace)  # parsed: a Windows path is escaped in the file
 
 
 def test_init_does_nothing_when_a_config_already_exists(tmp_path: Path) -> None:

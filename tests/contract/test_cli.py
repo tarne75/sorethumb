@@ -209,19 +209,35 @@ def test_init_unusable_target_path_fails_before_writing_anything(tmp_path: Path)
     assert target.read_text(encoding="utf-8") == "a file, not a directory"
 
 
-def test_init_unwritable_config_location_fails_without_a_success_banner(tmp_path: Path):
-    # A read-only target directory makes the config write fail.
+def test_init_unwritable_config_location_fails_without_a_success_banner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # A target directory that refuses writes makes the config write fail.
     import os
+    import sys
 
-    if os.geteuid() == 0:  # pragma: no cover - root ignores directory permissions
-        return
     locked = tmp_path / "locked"
     locked.mkdir()
-    locked.chmod(0o500)
-    try:
+    if sys.platform == "win32":
+        # A directory's read-only attribute doesn't stop writes on Windows;
+        # refuse the write itself, as a deny-write ACL would.
+        real_write_text = Path.write_text
+
+        def _denied(self: Path, *args, **kwargs):
+            if self.parent == locked:
+                raise PermissionError(13, "Access is denied (simulated)", str(self))
+            return real_write_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", _denied)
         result = runner.invoke(app, ["init", str(locked)])
-    finally:
-        locked.chmod(0o700)
+    else:
+        if os.geteuid() == 0:  # pragma: no cover - root ignores directory permissions
+            pytest.skip("root ignores directory permissions")
+        locked.chmod(0o500)
+        try:
+            result = runner.invoke(app, ["init", str(locked)])
+        finally:
+            locked.chmod(0o700)
     assert result.exit_code == 1
     _assert_no_success_output(result)
     assert "Nothing was written" in _flat(result)
@@ -960,6 +976,8 @@ def _run_json_subprocess(args: list[str], *, timeout: float = 30.0) -> subproces
         stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
         check=False,
     )

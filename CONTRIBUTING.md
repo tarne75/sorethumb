@@ -28,6 +28,24 @@ uv run pytest -m property
 uv run pytest -m repo_check
 ```
 
+### Developing on Windows
+
+The same steps work in PowerShell, with two differences:
+
+- Install uv with `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
+  instead of the `curl` line.
+- `uv run ...` needs no activated virtualenv. To activate one anyway, it is
+  `.venv\Scripts\Activate.ps1` (PowerShell may first need
+  `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`).
+
+Clone onto a local drive, not inside a OneDrive or other synced folder: sync
+clients lock files mid-write, which shows up as intermittent "file is open in
+another program" failures. The repository is checked out with LF line endings
+on every platform (`.gitattributes`), whatever your `core.autocrlf` setting.
+
+`scripts/release.sh` is a bash script for maintainers cutting a release; run it
+from macOS, Linux or WSL. Everything else in this guide works natively.
+
 If you changed `pyproject.toml`'s dependencies, run `uv lock` to update
 `uv.lock` and commit both together — CI runs `uv lock --check` and will fail
 a PR where they've drifted apart.
@@ -76,8 +94,10 @@ uv run pytest -m benchmark
 # Every required-PR-lane test in one invocation (matches CI's coverage job).
 uv run pytest -m "unit or contract or integration or property or repo_check"
 
-# With coverage
-uv run pytest --cov=sorethumb_ml --cov-report=term-missing
+# With coverage. Start coverage.py before pytest: pytest's own startup imports
+# sorethumb_ml, so `pytest --cov` reports every import-time line as untested.
+# `combine` merges in the CLI subprocesses the tests start.
+uv run coverage run -m pytest && uv run coverage combine && uv run coverage report
 ```
 
 ## Adding a detector
@@ -133,7 +153,7 @@ Your detector should appear in the list alongside the built-ins.
 
 ## Code standards
 
-- ruff for linting and formatting (`uv run ruff check --fix src/ && uv run ruff format src/`)
+- ruff for linting and formatting (`uv run ruff check --fix src/`, then `uv run ruff format src/`)
 - mypy strict on `src/` (`uv run mypy src/`)
 - No `print` in `src/sorethumb_ml/` — use `logging.getLogger(__name__)`
 - No literal thresholds in modules other than `config.py`

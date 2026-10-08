@@ -27,6 +27,9 @@ workdir = "./workspace"
 
 The token is never written to the config file — it is read from the named
 environment variable at runtime.
+Set it in the shell that runs sorethumb: `export DATA_API_TOKEN=...` (bash,
+zsh), `$env:DATA_API_TOKEN = "..."` (PowerShell) or `set DATA_API_TOKEN=...`
+(cmd.exe).
 
 ```toml
 [source]

@@ -124,8 +124,9 @@ The short version; every point is expanded under [Honest limitations](#honest-li
   or heuristic, labelled as such, and a missing `explain` extra downgrades some.
 - **A workspace is executable, not just data.** Persisted models are pickles; open
   only a workspace you created or fully trust.
-- **Linux and macOS only, one machine.** Windows is not tested, and it is built for
-  roughly ten thousand to a few million rows.
+- **One machine, local storage.** It runs on Linux, macOS and Windows, keeps its
+  workspace on a local drive (not a network share or a synced folder), and is
+  built for roughly ten thousand to a few million rows.
 
 ---
 
@@ -155,7 +156,7 @@ Databricks, or any cloud vendor.
 ## Is it the right tool?
 
 Use it where a ranked shortlist for a person to review is the goal: on a
-single machine (Linux or macOS, see [Supported platforms](#supported-platforms)),
+single machine (Linux, macOS or Windows, see [Supported platforms](#supported-platforms)),
 over data that fits [the scale guide](#scale-guide), with someone able to judge
 whether a flagged record is actually interesting.
 
@@ -182,18 +183,27 @@ whether a flagged record is actually interesting.
 
 ## Supported platforms
 
-Tested and supported: **Linux and macOS**, Python 3.11–3.13. CI runs the full
-suite — including workspace/SQLite, CLI subprocess, and report-rendering
-integration tests, not just unit tests — on both `ubuntu-latest` and
-`macos-latest` for every change (`.github/workflows/release-validation.yml`).
+| OS | Python | Tested in CI on every change |
+| --- | --- | --- |
+| Linux (x86-64) | 3.11–3.13 | unit, contract, integration, property, packaging (`ubuntu-latest`) |
+| macOS (Apple silicon) | 3.11–3.13 | unit, contract, integration (`macos-latest`) |
+| Windows 10/11 (x64) | 3.11–3.13 | unit, contract, integration, and installing the built wheel and running it from PowerShell (`windows-latest`) |
 
-**Windows is not currently tested or supported.** A one-off run of the
-integration suite on `windows-latest` failed broadly (most `sorethumb run`/
-`backfill`/`report` CLI paths hit `OSError: [Errno 9] Bad file descriptor`,
-plus a console-encoding mismatch mangling non-ASCII output) — real,
-unresolved compatibility work, not a formality away from working. Tracked as
-a deliberate gap, not an oversight — see
-[SECURITY.md](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md#supported-platforms).
+The integration suite exercises a real workspace, SQLite, the CLI as a
+subprocess and report rendering on all three
+(`.github/workflows/release-validation.yml`). On Windows, the CLI works the
+same in PowerShell, Windows PowerShell 5.1 and cmd.exe.
+
+Not supported:
+
+- **A workspace on a network share or in a synced folder** (SMB/NFS, a mapped
+  drive, OneDrive, Dropbox, Google Drive, iCloud) on any OS. Its SQLite
+  database and atomic file replacement need a local drive; sorethumb warns
+  when it detects one. Your data can be anywhere.
+- **Native Windows on ARM.** pyarrow publishes no Windows ARM64 wheel; an x64
+  Python under emulation works.
+- **Very deep workspace paths on Windows** without long-path support enabled:
+  sorethumb stops before running and says how much shorter the path must be.
 
 ---
 
@@ -207,6 +217,16 @@ a deliberate gap, not an oversight — see
 | JSON | `.json`, `.json.gz` | Full document loaded eagerly (not streamed) |
 | JSONL / NDJSON | `.jsonl`, `.ndjson`, `.jsonl.gz`, `.ndjson.gz` | Streamed line-by-line |
 | TSF | `.tsf` | [Monash Time Series Forecasting](https://github.com/rakshitha123/TSForecasting/tree/master/utils) format — each series becomes one row; `@attribute` columns preserved, series observations expand to `value_0`, `value_1`, … |
+
+**Text encoding.** CSV, TSV and JSON sources must be UTF-8 (a byte-order mark
+is fine). Excel's plain "CSV" format on Windows writes cp1252 instead, which
+fails with a message pointing here. Re-save it as "CSV UTF-8 (Comma delimited)",
+or convert it once, in PowerShell 7 with
+`Get-Content data.csv -Encoding windows-1252 | Set-Content data-utf8.csv -Encoding utf8`
+or with Python:
+`python -c "open('data-utf8.csv', 'w', encoding='utf-8').write(open('data.csv', encoding='cp1252').read())"`.
+As a last resort, `read_options = { encoding = "utf8-lossy" }` reads the file
+with undecodable characters replaced.
 
 Format is auto-detected from the file extension. Set `source.format` explicitly when the extension is ambiguous:
 

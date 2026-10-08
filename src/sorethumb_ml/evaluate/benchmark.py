@@ -3,7 +3,7 @@
 Produces a Markdown and CSV comparison table of ROC-AUC, average precision,
 precision@k, recall@k, F1, and wall-clock fit/score times per detector per dataset.
 
-Requires the ``[benchmark]`` extra (``pip install sorethumb-ml[benchmark]``).
+Requires the ``[benchmark]`` extra (``pip install "sorethumb-ml[benchmark]"``).
 Run via ``pytest -m benchmark`` or ``scripts/run_benchmark.py``.
 
 Design principles

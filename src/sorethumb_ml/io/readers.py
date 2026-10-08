@@ -65,6 +65,29 @@ def read_frame(path: Path, config: SourceConfig) -> pl.LazyFrame:
     return lf
 
 
+def collect_frame(lf: pl.LazyFrame, path: Path) -> pl.DataFrame:
+    """Collect a LazyFrame from :func:`read_frame`, explaining a non-UTF-8 source.
+
+    Polars reads CSV/TSV/JSON as UTF-8 only, and a file in another encoding
+    (cp1252 is what Excel's plain "CSV" format writes on Windows) only fails
+    when the rows are read, as ``ComputeError: invalid utf-8 sequence``. That
+    becomes a SourceError saying what's wrong and how to fix it.
+    """
+    try:
+        return lf.collect()
+    except pl.exceptions.ComputeError as exc:
+        if "utf-8" not in str(exc).lower() and "utf8" not in str(exc).lower():
+            raise
+        msg = (
+            f"'{path}' is not valid UTF-8 ({exc}). sorethumb reads text files as UTF-8; "
+            "a file saved by Excel as plain 'CSV' on Windows is usually cp1252. Re-save it as "
+            "'CSV UTF-8', convert it once (see the README's 'Supported file formats'), or set "
+            'source.read_options = { encoding = "utf8-lossy" } to read it with undecodable '
+            "characters replaced."
+        )
+        raise SourceError(msg) from exc
+
+
 def _detect_format(path: Path, config: SourceConfig) -> str:
     if config.format != "auto":
         return config.format

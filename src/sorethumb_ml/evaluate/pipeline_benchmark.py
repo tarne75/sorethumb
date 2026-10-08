@@ -190,7 +190,13 @@ def _ci95(values: list[float]) -> float:
 
 
 def _peak_memory_mb() -> float | None:
-    """Return this process's peak RSS so far, in MB, or None where unavailable (Windows)."""
+    """Return this process's peak resident memory so far, in MB, or None where unavailable.
+
+    POSIX: ``getrusage(RUSAGE_SELF).ru_maxrss``. Windows: the peak working set
+    from ``GetProcessMemoryInfo`` (the Windows counterpart of peak RSS).
+    """
+    if sys.platform == "win32":
+        return _windows_peak_working_set_mb()
     try:
         import resource  # noqa: PLC0415
     except ImportError:
@@ -199,6 +205,39 @@ def _peak_memory_mb() -> float | None:
     # POSIX ru_maxrss units are platform-defined: Linux reports KB, macOS bytes.
     divisor = 1024.0 * 1024.0 if sys.platform == "darwin" else 1024.0
     return max_rss / divisor
+
+
+def _windows_peak_working_set_mb() -> float | None:
+    """Return this process's PeakWorkingSetSize in MB via psapi, or None if the call fails."""
+    if sys.platform != "win32":  # keeps mypy's Windows-only ctypes names out of POSIX checks
+        return None
+    import ctypes  # noqa: PLC0415
+    from ctypes import wintypes  # noqa: PLC0415
+
+    class _ProcessMemoryCounters(ctypes.Structure):
+        _fields_ = (
+            ("cb", wintypes.DWORD),
+            ("PageFaultCount", wintypes.DWORD),
+            ("PeakWorkingSetSize", ctypes.c_size_t),
+            ("WorkingSetSize", ctypes.c_size_t),
+            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+            ("PagefileUsage", ctypes.c_size_t),
+            ("PeakPagefileUsage", ctypes.c_size_t),
+        )
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    get_info = kernel32.K32GetProcessMemoryInfo
+    get_info.argtypes = (wintypes.HANDLE, ctypes.POINTER(_ProcessMemoryCounters), wintypes.DWORD)
+    get_info.restype = wintypes.BOOL
+    counters = _ProcessMemoryCounters()
+    counters.cb = ctypes.sizeof(counters)
+    if not get_info(kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
+        return None
+    return float(counters.PeakWorkingSetSize) / (1024.0 * 1024.0)
 
 
 # ---------------------------------------------------------------------------

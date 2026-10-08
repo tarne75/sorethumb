@@ -44,15 +44,10 @@ pytestmark = pytest.mark.benchmark
 
 
 def _peak_memory_mb() -> float | None:
-    """Return this process's peak RSS so far, in MB, or None where unavailable (Windows)."""
-    try:
-        import resource
-    except ImportError:
-        return None
-    max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    # POSIX ru_maxrss units are platform-defined: Linux reports KB, macOS bytes.
-    divisor = 1024.0 * 1024.0 if sys.platform == "darwin" else 1024.0
-    return max_rss / divisor
+    """Peak resident memory of this process in MB (POSIX ru_maxrss, Windows peak working set)."""
+    from sorethumb_ml.evaluate.pipeline_benchmark import _peak_memory_mb as measure
+
+    return measure()
 
 
 def _run_isolated(target: Any, args: tuple[Any, ...]) -> dict[str, Any]:
@@ -155,11 +150,11 @@ def test_multi_group_run_completes_with_sane_peak_memory(tmp_path_factory) -> No
     assert result["n_succeeded"] == _MG_N_GROUPS
 
     peak = result["peak_memory_mb"]
-    if peak is not None:  # None on platforms without `resource` (Windows)
-        # Observed ~1570MB for this dataset shape (500,000 rows x 100 cols,
-        # 5 groups) on 2026-09-27; ceiling leaves wide headroom above that
-        # for CI variance while still catching a genuine multi-GB blowup.
-        assert peak < 3000, f"peak RSS {peak:.1f}MB far exceeds the expected order of magnitude"
+    assert peak is not None, "peak memory must be measurable on every supported platform"
+    # Observed ~1570MB for this dataset shape (500,000 rows x 100 cols,
+    # 5 groups) on 2026-09-27; ceiling leaves wide headroom above that
+    # for CI variance while still catching a genuine multi-GB blowup.
+    assert peak < 3000, f"peak RSS {peak:.1f}MB far exceeds the expected order of magnitude"
 
 
 # ---------------------------------------------------------------------------

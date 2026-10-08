@@ -90,7 +90,7 @@ def tree_shap_attributions(
         warnings.warn(
             f"shap is not installed; TreeSHAP attributions for group {group_name!r} are "
             "unavailable. Falling back to gradient/marginal-deviation attributions (heuristic). "
-            "Install with: pip install 'sorethumb-ml[explain]'.",
+            'Install with: pip install "sorethumb-ml[explain]".',
             FallbackAttributionWarning,
             stacklevel=2,
         )
