@@ -55,31 +55,89 @@ jobs:
       - run: uv sync --all-extras --frozen
       - run: uv run pytest tests/benchmark/test_accuracy_floors.py -m benchmark
 
-  # Informational overall branch coverage + required >=85% diff coverage on
-  # changed lines. Replaces the old global --cov-fail-under merge gate,
-  # which incentivised padding (assertion-free importlib.reload tests) more
-  # than it caught real regressions — see tests/README.md.
-  coverage:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+  # Coverage data from every supported OS, so platform-specific code (Windows
+  # console, path and file-locking handling; macOS mount parsing) is credited
+  # where it actually runs. Python versions are spread across the legs so
+  # version-specific branches (the pre-3.12 junction fallback) are measured too.
+  # `coverage run -m pytest`, not pytest-cov: pytest imports sorethumb_ml while
+  # reading `filterwarnings`, before a pytest plugin could start measuring, which
+  # left every import-time line reported as untested.
+  coverage-data:
+    name: coverage-data (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
     env:
       HYPOTHESIS_PROFILE: ci
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.12"
+            lanes: "unit or contract or integration or property or repo_check"
+          - os: macos-latest
+            python: "3.13"
+            lanes: "unit or contract or integration"
+          - os: windows-latest
+            python: "3.11"
+            lanes: "unit or contract or integration"
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv lock --check
+      - run: uv sync --all-extras --frozen
+      - run: uv run coverage run -m pytest -m "${{ matrix.lanes }}"
+      - name: Combine this runner's data (main process + CLI subprocesses)
+        run: |
+          uv run coverage combine
+          mkdir -p coverage-data
+          mv .coverage "coverage-data/.coverage.${{ runner.os }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-data-${{ runner.os }}
+          path: coverage-data/
+          include-hidden-files: true
+          if-no-files-found: error
+
+  # Informational overall branch coverage + required >=85% diff coverage on
+  # changed lines, over the combined data from every OS. Replaces the old
+  # global --cov-fail-under merge gate, which incentivised padding
+  # (assertion-free importlib.reload tests) more than it caught real
+  # regressions — see tests/README.md. Runs even when a coverage-data leg
+  # fails and then fails itself: a skipped required check counts as passing.
+  coverage:
+    needs: coverage-data
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Every OS produced coverage data
+        if: needs.coverage-data.result != 'success'
+        run: |
+          echo "coverage-data result: ${{ needs.coverage-data.result }}"
+          exit 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: "3.12"
-      - run: uv lock --check
       - run: uv sync --all-extras --frozen
-      - name: Run behavioural lanes with branch coverage (informational)
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: coverage-data-*
+          path: coverage-data
+          merge-multiple: true
+      - name: Combine every OS and report overall coverage (informational)
         run: |
-          uv run pytest \
-            -m "unit or contract or integration or property or repo_check" \
-            --cov=sorethumb_ml \
-            --cov-report=xml \
-            --cov-report=term
+          uv run coverage combine coverage-data
+          uv run coverage xml -o coverage.xml
+          uv run coverage report
       - uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}

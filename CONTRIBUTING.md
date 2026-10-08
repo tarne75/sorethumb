@@ -94,8 +94,10 @@ uv run pytest -m benchmark
 # Every required-PR-lane test in one invocation (matches CI's coverage job).
 uv run pytest -m "unit or contract or integration or property or repo_check"
 
-# With coverage
-uv run pytest --cov=sorethumb_ml --cov-report=term-missing
+# With coverage. Start coverage.py before pytest: pytest's own startup imports
+# sorethumb_ml, so `pytest --cov` reports every import-time line as untested.
+# `combine` merges in the CLI subprocesses the tests start.
+uv run coverage run -m pytest && uv run coverage combine && uv run coverage report
 ```
 
 ## Adding a detector
