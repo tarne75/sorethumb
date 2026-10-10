@@ -6,89 +6,6 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added
-
-- **Windows support** (Windows 10/11 x64, Python 3.11–3.13): every command,
-  the Python API and reports work on Windows as on Linux and macOS, from
-  PowerShell, Windows PowerShell 5.1 or cmd.exe, and CI runs the unit,
-  contract and integration suites on `windows-latest` for every change, plus
-  an install of the built wheel. The entries below list the fixes and
-  behaviour this involved.
-- **Windows path-length preflight**: without long-path support Windows caps a
-  path at 260 characters, and sorethumb creates files about 112 characters
-  below the workspace directory. `init`, `run` and `score` now stop before
-  doing any work (exit code 2, `PathTooLongError`) when the workspace is too
-  deep, instead of failing with a bare "file not found" minutes into a run.
-- **Warning for workspaces on network or synced storage**: a workspace on a
-  network filesystem, a mapped network drive or UNC path, or in a OneDrive,
-  Dropbox, Google Drive or iCloud folder gets a one-line warning, since SQLite
-  and atomic file replacement aren't reliable there.
-- **`report.csv_bom`** (default off): start report CSVs with a UTF-8
-  byte-order mark, which Excel on Windows needs to show non-ASCII column
-  names and values correctly.
-- **Non-UTF-8 sources**: a CSV saved as cp1252 (Excel's plain "CSV" on
-  Windows) now fails with a message saying the file isn't UTF-8 and how to
-  fix it, instead of polars' bare "invalid utf-8 sequence"; the README shows
-  how to convert one.
-
-### Changed
-
-- **Windows source paths**: spellings of one Windows file that differ only
-  in letter case, separators or a `file://` prefix (`C:\Data\x.csv`,
-  `c:/data/x.csv`, `file:///C:/Data/x.csv`) are now one dataset for history
-  and one configuration for run ids and model reuse. Paths on Linux and
-  macOS, relative paths and URLs are identified exactly as before. A
-  drive-relative path such as `C:data.csv` is now rejected with a clear
-  message instead of "Unsupported URI scheme 'c'".
-- **Commands that work in every shell**: install hints now say
-  `pip install "sorethumb-ml[explain]"` (single quotes fail in cmd.exe), `~`
-  in `--config`, `--workdir` and `init` paths is expanded by sorethumb itself
-  (cmd.exe never expands it), and the docs show how to set environment
-  variables in PowerShell and cmd.exe as well as bash.
-
-### Fixed
-
-- **Windows**: every write of a model, result, report or downloaded source
-  failed with `OSError: [Errno 9] Bad file descriptor`, because the file was
-  flushed to disk through a read-only handle, which Windows rejects.
-- **Redirected output**: a command whose output went to a pipe or file could
-  stop with `UnicodeEncodeError` when the text included a character outside
-  the stream's encoding (for example a column named `温度` on Windows, where
-  pipes default to cp1252). Redirected output is now UTF-8 unless
-  `PYTHONIOENCODING` says otherwise, an unencodable character is replaced
-  rather than aborting, and every `--json` output is ASCII-escaped, so it is
-  lossless under any output encoding.
-- **Files held open by another program** (Windows): replacing a report, model
-  or downloaded file that a spreadsheet, a file-sync client or antivirus
-  software has open is retried briefly, then fails with a `FileInUseError`
-  naming the file, and a failed report now says why in the run summary
-  instead of only "see the log". `workspace reset` and `workspace prune`
-  retry deletions the same way.
-- **Concurrent downloads and prune**: two runs downloading the same content
-  no longer fail when one has the cached file open (the other's identical
-  copy is used); `source.cache = false` downloads get a file of their own
-  per run instead of sharing one that each run replaced (stale ones are
-  removed after an hour); and `workspace prune` deletes everything it can
-  when one file is locked, keeps that one indexed for the next prune, and
-  reports it with a non-zero exit.
-- **Log and database handles** no longer outlive the command that opened
-  them, so `workspace reset` can delete `logs/` on Windows, in-process
-  callers no longer keep logging into the first workspace they used, and a
-  log rotation that loses a race with another process keeps logging instead
-  of reporting "--- Logging error ---" for every later record.
-- **Prompts on Windows**: `sorethumb run data.csv` started with stdin from
-  `NUL` (`< NUL`, a scheduled task, `subprocess.DEVNULL`) offered to save a
-  config, read end-of-file and aborted; Windows reports the null device as a
-  terminal. Only a real console is now treated as interactive.
-- **`file://C:/...` URIs** (two slashes, as often typed by hand) resolve to
-  the drive path instead of an invalid `\\C:\...` share path.
-- **`workspace reset`** removes a directory junction inside the workspace
-  without following it (it used to stop halfway), deletes read-only files,
-  and accepts the typed confirmation however the path is spelled: quoted (as
-  Windows Explorer's "Copy as path" gives it), with a trailing separator, or
-  on Windows in a different letter case or with forward slashes. The prompt
-  now shows the exact path to type.
-
 ## [0.1.0] - 2026-09-21
 
 First public release.
@@ -98,8 +15,8 @@ First public release.
 - **Names**: install the `sorethumb-ml` distribution (`pip install sorethumb-ml`;
   `sorethumb` on PyPI is an unrelated package), import `sorethumb_ml`, and run
   the `sorethumb` command. Third-party detectors register through the
-  `sorethumb_ml.detectors` entry-point group. Python 3.11–3.13 on Linux and
-  macOS; the package ships `py.typed`.
+  `sorethumb_ml.detectors` entry-point group. Python 3.11–3.13 on Linux,
+  macOS and Windows (x64); the package ships `py.typed`.
 - **Pipeline**: profile every column, encode, impute and derive features, fit
   an ensemble of detectors, percentile-calibrate their scores, combine them into
   a ranking and a flag decision, and explain each flagged row in terms of the
@@ -138,6 +55,34 @@ First public release.
   the exact configuration that produced each period.
 - **Reports**: self-contained HTML plus CSV and JSON, re-renderable from
   persisted state with `sorethumb report`.
+- **Windows** (10/11 x64): every command, the Python API and reports work as
+  on Linux and macOS, from PowerShell, Windows PowerShell 5.1 or cmd.exe; CI
+  runs the unit, contract and integration suites on `windows-latest` for
+  every change, plus an install of the built wheel. Spellings of one Windows
+  file that differ only in letter case, separators or a `file://` prefix
+  (`C:\Data\x.csv`, `c:/data/x.csv`, `file:///C:/Data/x.csv`) are one dataset
+  for history and one configuration for run ids and model reuse; a
+  drive-relative path such as `C:data.csv` is rejected with a clear message.
+  `~` in `--config`, `--workdir` and `init` paths is expanded by sorethumb
+  itself, so it works in cmd.exe too, and a command started with stdin from
+  `NUL` (a scheduled task, `subprocess.DEVNULL`) never prompts.
+- **Files held open by another program** (a spreadsheet, a file-sync client,
+  antivirus): replacing or deleting a report, model or downloaded file is
+  retried briefly, then fails with a `FileInUseError` naming the file.
+  `sorethumb workspace prune` deletes everything else it can, keeps a locked
+  file indexed for the next prune, and exits non-zero.
+- **Workspace checks before a run**: without Windows long-path support, `init`,
+  `run` and `score` stop before doing any work (exit code `2`,
+  `PathTooLongError`) when the workspace is too deep for the 260-character
+  path limit. A workspace on a network filesystem, a mapped drive or UNC
+  path, or in a OneDrive, Dropbox, Google Drive or iCloud folder gets a
+  one-line warning.
+- **Text encodings**: a CSV that isn't UTF-8 (Excel's plain "CSV" on Windows
+  writes cp1252) fails with a message saying so and how to fix it.
+  `report.csv_bom` starts report CSVs with the byte-order mark Excel needs to
+  show non-ASCII text. Output redirected to a pipe or file is UTF-8 unless
+  `PYTHONIOENCODING` says otherwise, and every `--json` output is
+  ASCII-escaped, so it is lossless under any output encoding.
 - **Extras**: `explain` (shap, numba) for TreeSHAP and KernelSHAP attributions;
   `benchmark` (datasets, pandas) for the benchmark harnesses.
 - **Docs**: `docs/stability.md` sets out the pre-1.0 API and stability policy;
@@ -150,7 +95,11 @@ First public release.
   sorethumb workspace, and always refuses a filesystem root, the home
   directory, the current directory, a git repository root or a very shallow
   path. It deletes only the entries sorethumb creates, so other files in the
-  directory are kept.
+  directory are kept, and removes a symlink or Windows directory junction
+  among them without following it. The typed confirmation accepts the path
+  however it is spelled: quoted (as Windows Explorer's "Copy as path" gives
+  it), with a trailing separator, or on Windows in a different letter case
+  or with forward slashes.
 - Credentials are never sent over plaintext HTTP. `source.auth` or
   `user:password@` in an `http://` `source.uri` is rejected at config load, and
   a credentialed request is refused before it is sent on every hop, including
@@ -190,8 +139,10 @@ First public release.
   the other way (mildly reduced sensitivity).
 - Real-dataset benchmark figures (KDDCup99, Covtype) are capped at 20,000 rows
   for CI runtime, as `docs/benchmarks.md` states where the tables appear.
-- **Windows is untested and known to fail** across most CLI paths; see the
-  README's and SECURITY.md's Supported platforms sections.
+- **Platforms**: native Windows on ARM is not supported (pyarrow publishes no
+  Windows ARM64 wheel; an x64 Python under emulation works), and on any OS a
+  workspace needs a local drive, not a network share or synced folder. See
+  the README's Supported platforms section.
 
 [Unreleased]: https://github.com/tarne75/sorethumb/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/tarne75/sorethumb/releases/tag/v0.1.0
