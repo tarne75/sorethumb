@@ -50,6 +50,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 
+from sorethumb_ml.detectors._protocol import score_and_flag
 from sorethumb_ml.evaluate.scenarios import (
     SCENARIOS,
     Scenario,
@@ -332,8 +333,7 @@ def _fit_score_one_seed_pipeline(
     for name in ablation.detector_names:
         det = registry[name]()
         det.fit(train_space.matrix.astype(np.float64), seed=seed)
-        raw = det.score_samples(train_space.matrix.astype(np.float64))
-        natural_flags_train[name] = det.natural_flag(raw)
+        raw, natural_flags_train[name] = score_and_flag(det, train_space.matrix.astype(np.float64))
         cal = Calibrator()
         cal.fit(raw)
         calibrated_train[name] = cal.transform(raw)
@@ -346,8 +346,7 @@ def _fit_score_one_seed_pipeline(
     calibrated_holdout: dict[str, np.ndarray] = {}
     natural_flags_holdout: dict[str, np.ndarray] = {}
     for name, det in detectors.items():
-        raw = det.score_samples(holdout_space.matrix.astype(np.float64))
-        natural_flags_holdout[name] = det.natural_flag(raw)
+        raw, natural_flags_holdout[name] = score_and_flag(det, holdout_space.matrix.astype(np.float64))
         calibrated_holdout[name] = calibrators[name].transform(raw)
     score_seconds = time.perf_counter() - t0
 

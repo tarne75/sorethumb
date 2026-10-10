@@ -10,6 +10,10 @@ Every entry must satisfy the Detector protocol (``check_protocol`` is called at
 registration time). The dict key is ``cls.name`` — the canonical string used in
 FeaturePlan and manifest JSON.
 
+Every ``score_samples`` / ``natural_flag`` result is validated on use (finite
+1-D numeric scores, 1-D ``bool`` flags, one per input row); see the output
+contract in ``_protocol.py`` and docs/models.md ("Writing a detector plugin").
+
 Usage
 -----
     from sorethumb_ml.detectors import registry, register

@@ -406,6 +406,7 @@ def _run_pair_over_seeds(
     see ``evaluate_scores``) doesn't poison the mean over the other seeds;
     if every seed was single-class the result is NaN, not silently 0.0.
     """
+    from sorethumb_ml.detectors._protocol import score_samples_checked  # noqa: PLC0415
     from sorethumb_ml.evaluate.metrics import evaluate_scores  # noqa: PLC0415
     from sorethumb_ml.scoring.calibrate import Calibrator  # noqa: PLC0415
 
@@ -424,7 +425,7 @@ def _run_pair_over_seeds(
             fit_secs = time.perf_counter() - t0
 
             t1 = time.perf_counter()
-            raw_scores = det.score_samples(X_seed)
+            raw_scores = score_samples_checked(det, X_seed)
             score_secs = time.perf_counter() - t1
 
             # Calibrate: higher = more anomalous

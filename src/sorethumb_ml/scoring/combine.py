@@ -128,6 +128,7 @@ from typing import Any
 import numpy as np
 
 from sorethumb_ml.errors import AntiCorrelatedMemberWarning, ZeroAnomalyWarning
+from sorethumb_ml.scoring._finite import nonfinite_summary
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +197,63 @@ def _exact_k_flags(
     order = descending_order(scores, source_row)
     flags[order[:k]] = True
     return flags
+
+
+def _validate_inputs(
+    scores: dict[str, np.ndarray],
+    natural_flags: dict[str, np.ndarray],
+    source_row: np.ndarray | None,
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], np.ndarray | None]:
+    """Check ``combine()`` inputs so a bad caller fails here, not deep inside numpy.
+
+    ``combine`` is importable on its own, so it does not trust its callers:
+    every score array must be 1-D, real-numeric, finite and the same length;
+    ``natural_flags`` must cover exactly the same detectors with 1-D ``bool``
+    arrays of that length. Raises ``ValueError`` naming the detector.
+    """
+    if set(natural_flags) != set(scores):
+        missing = sorted(set(scores) - set(natural_flags))
+        extra = sorted(set(natural_flags) - set(scores))
+        msg = f"scores and natural_flags must name the same detectors; missing flags for {missing}, flags without scores for {extra}."
+        raise ValueError(msg)
+
+    clean: dict[str, np.ndarray] = {}
+    n: int | None = None
+    for d, arr in scores.items():
+        if not isinstance(arr, np.ndarray) or arr.dtype.kind not in "iuf":
+            got = f"ndarray {arr.dtype}" if isinstance(arr, np.ndarray) else type(arr).__name__
+            msg = f"scores[{d!r}] must be a real-numeric ndarray; got {got}."
+            raise ValueError(msg)
+        if arr.ndim != 1:
+            msg = f"scores[{d!r}] must be 1-D; got shape {arr.shape}."
+            raise ValueError(msg)
+        if n is None:
+            n = arr.shape[0]
+        elif arr.shape[0] != n:
+            msg = f"scores[{d!r}] has length {arr.shape[0]} but other detectors have {n}; all must be row-aligned."
+            raise ValueError(msg)
+        as_float = arr.astype(np.float64, copy=False)
+        bad = nonfinite_summary(as_float)
+        if bad is not None:
+            msg = f"scores[{d!r}] has non-finite values: {bad} of {arr.size}. Scores must be finite."
+            raise ValueError(msg)
+        clean[d] = as_float
+
+    for d, flags in natural_flags.items():
+        if not isinstance(flags, np.ndarray) or flags.dtype != np.bool_:
+            got = f"ndarray {flags.dtype}" if isinstance(flags, np.ndarray) else type(flags).__name__
+            msg = f"natural_flags[{d!r}] must be a bool ndarray; got {got}."
+            raise ValueError(msg)
+        if flags.ndim != 1 or flags.shape[0] != n:
+            msg = f"natural_flags[{d!r}] must be 1-D of length {n}; got shape {flags.shape}."
+            raise ValueError(msg)
+
+    if source_row is not None:
+        source_row = np.asarray(source_row)
+        if source_row.ndim != 1 or source_row.shape[0] != n:
+            msg = f"source_row must be 1-D of length {n}; got shape {source_row.shape}."
+            raise ValueError(msg)
+    return clean, natural_flags, source_row
 
 
 class ScoreEnsemble:
@@ -299,7 +357,8 @@ class ScoreEnsemble:
             msg = "scores dict is empty; need at least one detector."
             raise ValueError(msg)
 
-        n = len(next(iter(scores.values())))
+        scores, natural_flags, source_row = _validate_inputs(scores, natural_flags, source_row)
+        n = len(scores[names[0]])
 
         # Realised rate of each detector's own heuristic boundary, before any
         # weighting, guard, or combination. Surfaced so nobody mistakes the

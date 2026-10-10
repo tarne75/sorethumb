@@ -65,6 +65,8 @@ from typing import cast
 
 import numpy as np
 
+from sorethumb_ml.scoring._finite import nonfinite_summary
+
 logger = logging.getLogger(__name__)
 
 _SCHEMA_VERSION = 2
@@ -105,6 +107,23 @@ def _compress_reference(
     return out_values, out_weights
 
 
+def _as_finite_1d(scores: np.ndarray, where: str) -> np.ndarray:
+    """Return *scores* as a 1-D float64 array, or raise ValueError naming the problem."""
+    try:
+        arr = np.asarray(scores, dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        msg = f"{where} requires numeric scores; could not convert input to float64 ({exc})."
+        raise ValueError(msg) from exc
+    if arr.ndim != 1:
+        msg = f"{where} requires a 1-D score array; got shape {arr.shape}."
+        raise ValueError(msg)
+    bad = nonfinite_summary(arr)
+    if bad is not None:
+        msg = f"{where} received non-finite scores: {bad} of {arr.size}. Scores must be finite."
+        raise ValueError(msg)
+    return arr
+
+
 class Calibrator:
     """Tie-aware percentile-rank calibrator.
 
@@ -121,7 +140,7 @@ class Calibrator:
 
     def fit(self, train_scores: np.ndarray) -> None:
         """Store the reference distribution (raw scores; higher = more normal)."""
-        ref = np.asarray(train_scores, dtype=np.float64)
+        ref = _as_finite_1d(train_scores, "Calibrator.fit()")
         if len(ref) == 0:
             msg = "Cannot fit Calibrator on empty scores array."
             raise ValueError(msg)
@@ -154,7 +173,7 @@ class Calibrator:
             msg = "Calibrator.fit() must be called before transform()."
             raise RuntimeError(msg)
 
-        scores = np.asarray(scores, dtype=np.float64)
+        scores = _as_finite_1d(scores, "Calibrator.transform()")
         if len(scores) == 0:
             return np.empty(0, dtype=np.float64)
 

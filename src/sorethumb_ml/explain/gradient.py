@@ -41,6 +41,7 @@ from typing import Any
 
 import numpy as np
 
+from sorethumb_ml.detectors._protocol import score_samples_checked
 from sorethumb_ml.errors import ExplainError, FallbackAttributionWarning
 
 logger = logging.getLogger(__name__)
@@ -203,7 +204,7 @@ def gradient_attributions(
             row_minus = row.copy()
             row_minus[d] -= h
             batch = np.stack([row_plus, row_minus])
-            scores = detector.score_samples(batch)
+            scores = score_samples_checked(detector, batch)
             # (score_plus - score_minus) / (2h) → positive means dim pushes score up (more normal)
             # Negate so positive attribution = more anomalous
             attributions[i, d] = -(scores[0] - scores[1]) / (2.0 * h)

@@ -27,6 +27,7 @@ import logging
 
 import numpy as np
 
+from sorethumb_ml.detectors._protocol import score_samples_checked
 from sorethumb_ml.errors import ExplainError
 
 logger = logging.getLogger(__name__)
@@ -189,7 +190,7 @@ def permutation_importance(
         X = X[:max_rows]
 
     n_features = X.shape[1]
-    base_scores = detector.score_samples(X)  # type: ignore[attr-defined]
+    base_scores = score_samples_checked(detector, X)
     base_mean = float(np.mean(base_scores))
 
     raw_importance: dict[str, float] = {}
@@ -200,7 +201,7 @@ def permutation_importance(
             rng = np.random.default_rng(seed + repeat)
             X_perm = X.copy()
             X_perm[:, feat_idx] = rng.permutation(X_perm[:, feat_idx])
-            perm_scores = detector.score_samples(X_perm)  # type: ignore[attr-defined]
+            perm_scores = score_samples_checked(detector, X_perm)
             # More anomalous = lower score_samples → permutation that drops score hurts
             # We want importance to reflect how much permuting hurts anomaly detection
             # Use negated score so "more anomalous" = higher metric; importance = metric drop

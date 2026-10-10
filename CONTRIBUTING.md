@@ -123,12 +123,14 @@ class MyDetector:
         ...
 
     def score_samples(self, X: np.ndarray) -> np.ndarray:
-        # MUST return higher values for MORE NORMAL records
-        # (matches sklearn's score_samples convention)
+        # MUST return a finite 1-D numeric ndarray of shape (len(X),), one score
+        # per row in input order, higher = MORE NORMAL (sklearn's convention).
+        # No NaN/inf, no (n, 1) arrays, no lists.
         ...
 
     def natural_flag(self, scores: np.ndarray) -> np.ndarray:
-        # return a boolean array: True = anomaly, using the model's own boundary
+        # MUST return a 1-D ndarray of dtype bool (not int 0/1), same length as
+        # `scores`: True = anomaly, using the model's own boundary
         ...
 
     def get_params(self) -> dict[str, Any]:
@@ -150,6 +152,10 @@ sorethumb detectors
 ```
 
 Your detector should appear in the list alongside the built-ins.
+
+The exact output contract (shape, dtype, finiteness, fitted-state rules) and the
+`DetectorError` raised when it is broken are in
+[Writing a detector plugin](docs/models.md#writing-a-detector-plugin).
 
 ## Code standards
 
