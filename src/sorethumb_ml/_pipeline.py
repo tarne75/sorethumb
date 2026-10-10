@@ -31,6 +31,7 @@ import polars as pl
 
 from sorethumb_ml.config import Config, SourceConfig
 from sorethumb_ml.detectors import registry
+from sorethumb_ml.detectors._protocol import score_and_flag
 from sorethumb_ml.errors import (
     AttributionBackendWarning,
     ConfigError,
@@ -1506,10 +1507,10 @@ def _run_group(
             except StoreError:
                 cached_det = None
             if cached_det is not None:
-                raw = cached_det.score_samples(X)
+                raw, cached_flags = score_and_flag(cached_det, X)
                 det_instances[det_name] = cached_det
                 raw_scores_map[det_name] = raw
-                natural_flags_map[det_name] = cached_det.natural_flag(raw)
+                natural_flags_map[det_name] = cached_flags
                 calibrators[det_name] = cached_cal
                 logger.info(
                     "reuse_models: scored group %s with persisted %s (no refit).",
@@ -1540,8 +1541,7 @@ def _run_group(
             train_X = X[idx]
 
         det.fit(train_X, seed=config.run.seed)
-        raw = det.score_samples(X)  # higher = more normal
-        flags = det.natural_flag(raw)
+        raw, flags = score_and_flag(det, X)  # raw: higher = more normal
 
         cal = Calibrator()
         cal.fit(raw)

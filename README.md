@@ -488,6 +488,7 @@ my_detector = "my_package.detectors:MyDetector"
 ```
 
 sorethumb picks it up automatically at startup; use it in config by its `name`.
+The exact output contract is in [Writing a detector plugin](https://github.com/tarne75/sorethumb/blob/main/docs/models.md#writing-a-detector-plugin).
 
 ---
 

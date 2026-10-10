@@ -34,6 +34,7 @@ import joblib
 import numpy as np
 
 from sorethumb_ml._atomic import atomic_write, atomic_write_text
+from sorethumb_ml.detectors._protocol import score_and_flag
 from sorethumb_ml.errors import (
     ModelIntegrityError,
     ModelSchemaDriftError,
@@ -433,10 +434,10 @@ def score_with_existing(
             warnings.warn(msg, ModelSchemaDriftWarning, stacklevel=2)
             drifted = True
 
-        raw_scores = detector.score_samples(new_feature_matrix)
+        raw_scores, flags = score_and_flag(detector, new_feature_matrix)
         scores[det_name] = raw_scores
         calibrated[det_name] = calibrator.transform(raw_scores)
-        natural_flags[det_name] = detector.natural_flag(raw_scores)
+        natural_flags[det_name] = flags
         detectors[det_name] = detector
 
     return {

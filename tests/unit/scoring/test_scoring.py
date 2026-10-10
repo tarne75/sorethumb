@@ -1,5 +1,6 @@
 """Unit tests for M3: scoring (calibration and combination)."""
 
+import re
 import warnings
 
 import numpy as np
@@ -909,3 +910,105 @@ def test_single_detector_equal_weight():
     result = ens.combine({"only": a}, {"only": a > 0.8})
     np.testing.assert_allclose(result["combined_score"], a)
     assert result["weights"]["only"] == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Defensive input validation: Calibrator and ScoreEnsemble.combine()
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("bad", "kind"),
+    [
+        (np.nan, "1 NaN"),
+        (np.inf, "1 +inf"),
+        (-np.inf, "1 -inf"),
+    ],
+)
+def test_calibrator_rejects_non_finite_scores(bad, kind):
+    scores = _uniform_scores(50)
+    scores[7] = bad
+    with pytest.raises(ValueError, match=rf"Calibrator\.fit\(\).*{re.escape(kind)}.*first at index 7"):
+        Calibrator().fit(scores)
+
+    fitted = Calibrator()
+    fitted.fit(_uniform_scores(50))
+    with pytest.raises(ValueError, match=r"Calibrator\.transform\(\).*non-finite"):
+        fitted.transform(scores)
+
+
+def test_calibrator_rejects_non_1d_and_non_numeric_input():
+    c = Calibrator()
+    with pytest.raises(ValueError, match=r"1-D.*\(10, 1\)"):
+        c.fit(np.zeros((10, 1)))
+    c.fit(_uniform_scores(10))
+    with pytest.raises(ValueError, match="1-D"):
+        c.transform(np.zeros((3, 2)))
+    with pytest.raises(ValueError, match="numeric"):
+        c.transform(np.array(["a", "b"]))
+
+
+def test_calibrator_unfitted_and_empty_behaviour_is_unchanged():
+    with pytest.raises(RuntimeError, match="fit"):
+        Calibrator().transform(np.zeros(3))
+    with pytest.raises(ValueError, match="empty"):
+        Calibrator().fit(np.empty(0))
+    c = Calibrator()
+    c.fit(_uniform_scores(10))
+    assert c.transform(np.empty(0)).shape == (0,)
+
+
+def _valid_combine_inputs(n: int = 20):
+    rng = np.random.default_rng(1)
+    scores = {"a": rng.uniform(size=n), "b": rng.uniform(size=n)}
+    flags = {k: v > 0.8 for k, v in scores.items()}
+    return scores, flags
+
+
+def test_combine_accepts_valid_input():
+    scores, flags = _valid_combine_inputs()
+    out = ScoreEnsemble(contamination=0.2).combine(scores, flags)
+    assert out["combined_score"].shape == (20,)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "match"),
+    [
+        (
+            lambda s, _f: s.update(a=s["a"][:-1]),
+            r"scores\['b'\] has length 20 but other detectors have 19",
+        ),
+        (lambda s, _f: s.update(a=s["a"].reshape(-1, 1)), r"scores\['a'\] must be 1-D"),
+        (lambda s, _f: s["b"].__setitem__(3, np.nan), r"scores\['b'\] has non-finite values: 1 NaN"),
+        (lambda s, _f: s["b"].__setitem__(3, np.inf), r"scores\['b'\] has non-finite values: 1 \+inf"),
+        (
+            lambda s, _f: s.update(a=s["a"].astype(object)),
+            r"scores\['a'\] must be a real-numeric ndarray; got ndarray object",
+        ),
+        (lambda s, _f: s.update(a=list(s["a"])), r"scores\['a'\] must be a real-numeric ndarray; got list"),
+        (lambda _s, f: f.pop("b"), r"missing flags for \['b'\]"),
+        (lambda _s, f: f.update(c=f["a"]), r"flags without scores for \['c'\]"),
+        (lambda _s, f: f.update(a=f["a"][:-1]), r"natural_flags\['a'\] must be 1-D of length 20"),
+        (lambda _s, f: f.update(a=f["a"].reshape(-1, 1)), r"natural_flags\['a'\] must be 1-D of length 20"),
+        (
+            lambda _s, f: f.update(a=f["a"].astype(np.int64)),
+            r"natural_flags\['a'\] must be a bool ndarray; got ndarray int64",
+        ),
+        (
+            lambda _s, f: f.update(a=f["a"].astype(object)),
+            r"natural_flags\['a'\] must be a bool ndarray; got ndarray object",
+        ),
+        (lambda _s, f: f.update(a=None), r"natural_flags\['a'\] must be a bool ndarray; got NoneType"),
+    ],
+)
+def test_combine_rejects_malformed_input_with_a_clear_error(mutate, match):
+    scores, flags = _valid_combine_inputs()
+    mutate(scores, flags)
+    with pytest.raises(ValueError, match=match):
+        ScoreEnsemble(contamination=0.2).combine(scores, flags)
+
+
+def test_combine_rejects_misaligned_source_row():
+    scores, flags = _valid_combine_inputs()
+    with pytest.raises(ValueError, match=r"source_row must be 1-D of length 20"):
+        ScoreEnsemble(contamination=0.2).combine(scores, flags, source_row=np.arange(19))

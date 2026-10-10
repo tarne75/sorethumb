@@ -317,6 +317,51 @@ n_bins = "auto"   # "auto" uses Freedman-Diaconis bin selection per column
 
 ---
 
+## Writing a detector plugin
+
+A detector is any class that satisfies the
+[`Detector` protocol](https://github.com/tarne75/sorethumb/blob/main/src/sorethumb_ml/detectors/_protocol.py).
+Register it with an entry point (`[project.entry-points."sorethumb_ml.detectors"]`,
+see [CONTRIBUTING](../CONTRIBUTING.md#adding-a-detector)) or call
+`sorethumb_ml.detectors.register(cls)` at import time. Registration checks only
+that the class attributes and methods exist; the contract below is enforced on
+every call.
+
+| Member | Requirement |
+|---|---|
+| `name`, `supports_tree_shap`, `default_train_row_cap` | Class attributes. `name` is the string used in config, manifests and `sorethumb detectors`. |
+| `fit(X, *, seed)` | `X` is a 2-D float matrix `(n_rows, n_features)`. Must be deterministic for a given `seed`. |
+| `score_samples(X)` | Returns a **1-D `numpy.ndarray` of shape `(len(X),)`**, one score per row **in input order**. Dtype integer or float (converted to float64); `bool`, `object`, complex, string, Python lists and `(n, 1)` arrays are rejected, not reshaped. **Every value finite**: no NaN, no ±inf. **Higher = more normal** (sklearn's convention); do not flip the sign yourself. |
+| `natural_flag(scores)` | Receives the array `score_samples` returned. Returns a **1-D `ndarray` of dtype exactly `bool`**, the same length, `True` = anomalous by the model's own boundary. Integer 0/1, float, `object` arrays and `None` are rejected. |
+| `get_params()` | JSON-serialisable hyper-parameters, stored in the run manifest. |
+
+**Fitted state.** `score_samples` and `natural_flag` are called only on a fitted
+detector: straight after `fit()`, or after it has been loaded back from a saved
+model (`run.reuse_models`, `score --from-run`). So everything they read must be
+set by `fit()` and survive pickling, and they should raise, not return
+placeholder values, when called before `fit()`. They must not change the model:
+scoring the same rows twice, or through a reloaded copy, returns the same output.
+`score_samples` is called with any number of rows (explanations score small
+perturbed batches), and `natural_flag` must work on scores of rows it was not
+fitted on.
+
+**What a violation looks like.** The group fails with a `DetectorError` that
+names the detector, the condition, the contract and what was returned:
+
+```text
+DetectorError: Detector 'my_det' score_samples() output invalid: non-finite values:
+2 NaN, 1 +inf (first at index 7). Expected a finite 1-D real-numeric ndarray of
+shape (412,) (higher = more normal); got ndarray float64 shape (412,).
+```
+
+An exception raised inside your methods is wrapped the same way
+(`Detector 'my_det' score_samples() raised ValueError: ...`). A detector that
+fails the check is not saved, and the run exits non-zero. Use
+`sorethumb_ml.detectors._protocol.score_and_flag(detector, X)` in your own tests
+to apply the same check.
+
+---
+
 ## Quick reference
 
 | Detector | Default | Train cap | Best for | Main weakness | Explanations |
