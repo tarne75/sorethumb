@@ -64,15 +64,56 @@ security for the response body itself.
 the actual streamed size, so an unbounded or misconfigured response cannot
 exhaust disk space.
 
-A source URI's userinfo (`user:pass@host`) and known signed-URL/token query
-parameters are stripped before the URI is logged or persisted
-(`dataset.source_uri`, `run.config_json`) — but the *auth token itself*
-(`source.auth_env_var`) is read from the environment at call time and never
-written anywhere. If you embed a credential directly in `source.uri` in a
-form this redaction doesn't recognise, it will still reach the HTTP request
-line/headers as normal, and any *unrecognised* query parameter is not
-redacted — prefer `source.auth`/`source.auth_env_var` over embedding
-credentials in the URI itself.
+### What is recorded about a source URI
+
+`source.uri` may carry secrets (signed-URL signatures, API keys, tokens), so
+the full URI exists **only in memory**, for the HTTP request it describes.
+Everywhere it is stored, logged or reported -- `dataset.source_uri`,
+`run.config_json`, the log file, console output, `--json` output, HTML/CSV
+reports and error messages (including tracebacks) -- sorethumb uses a
+redacted display form instead:
+
+    https://host.example.com/export/data.csv?X-Amz-Signature=REDACTED&X-Amz-Date=REDACTED
+
+The scheme, host, non-default port, path and the query **key names** are kept;
+**every** query value is replaced by `REDACTED`, blank ones included (a blank
+value is indistinguishable from a redacted one, which is the point). Userinfo
+becomes `***@`, and the fragment is dropped. A query segment with no `=` is
+replaced whole, since it could itself be the secret. Redaction does not consult
+a list of "sensitive" parameter names, so `client_secret`, `jwt`, `accessKey`
+or a name nobody has thought of are protected exactly like `token`. The
+`httpx` request log line, which would otherwise print the full URL, is
+scrubbed the same way. There is no setting that turns redaction off or restores
+the raw values.
+
+To tell two sources that differ only in a query value apart, sorethumb also
+records `source_digest` (on `dataset` and `run`, and in `run --json`): a
+SHA-256 of the canonical full URI. It cannot be reversed, but it is an
+*unsalted* hash, so a secret with little entropy (a short numeric PIN, say)
+could be confirmed by someone who has the database and can guess it. Treat the
+workspace as you would any file derived from your data.
+
+Known limits:
+
+- **Secrets in the URI path** (`https://host/<token>/data.csv`) are not
+  recognised and are stored as written. Put credentials in the query string,
+  `source.auth` or `source.auth_env_var`.
+- The `source.auth_env_var` token is read from the environment at call time and
+  never written anywhere.
+- Workspaces created by an earlier version held query values in clear text.
+  Opening one runs migration 009, which irreversibly rewrites the stored
+  `dataset.source_uri` and `run.config_json` to the redacted form. Copies of the
+  old database (backups, snapshots) and SQLite free pages are outside its reach;
+  rotate any credential that was ever stored.
+
+Dataset identity is unaffected by redaction. The logical dataset id derived
+from a URI ignores the query, so refreshing a signed URL keeps one dataset's
+history together. Because that also means two URIs differing only in a query
+value look like one dataset, a run is **refused** when `source.dataset_id` is
+unset and the set of query key names differs from the dataset's previous run;
+set `source.dataset_id` to say explicitly what is, or is not, the same dataset.
+`config_hash` (and so the run id) still covers the full URI, so a refreshed
+signature starts a new run rather than silently reusing the old one's models.
 
 ## Supported Platforms
 

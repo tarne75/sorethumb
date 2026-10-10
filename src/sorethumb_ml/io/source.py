@@ -52,11 +52,15 @@ since been deleted.
 
 Redaction
 ---------
-:func:`redact_source_uri` strips URI userinfo (``user:pass@``) and known
-sensitive query parameters (signed-URL tokens, API keys, ...) before a
-source URI is logged, persisted (``dataset.source_uri``, ``run.config_json``),
-or rendered into a report. Called at every one of those call sites; nothing
-downstream needs to remember to do it.
+The full URI (userinfo, every query value, any fragment) lives only in the
+in-memory config and in the request it describes. Every log line, error message,
+persisted row (``dataset.source_uri``, ``run.config_json``) and report goes through
+:func:`sorethumb_ml.io.uri.display_source_uri`, which keeps scheme, host, port,
+path and query key names and replaces *every* query value with ``REDACTED`` -- no
+name list, no option to turn it off. Exception text from the HTTP layer and
+``httpx``'s own request log line are scrubbed the same way (``_scrub_urls`` /
+``_UrlScrubFilter``). The HTTP cache index is keyed by a SHA-256 of the full URL, so
+it holds no readable URL at all.
 """
 
 from __future__ import annotations
@@ -74,7 +78,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import TypedDict
-from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import ParseResult, urlparse
 from urllib.request import url2pathname
 
 import httpx
@@ -84,8 +88,36 @@ from sorethumb_ml.config import SourceConfig
 from sorethumb_ml.errors import FileInUseError, SourceError
 from sorethumb_ml.io.fingerprint import content_fingerprint
 from sorethumb_ml.io.readers import _FORMAT_EXTENSIONS
+from sorethumb_ml.io.uri import display_source_uri
 
 logger = logging.getLogger(__name__)
+
+_URL_IN_TEXT_RE = re.compile(r"https?://[^\s'\"<>]+")
+
+
+def _scrub_urls(text: str, url: str | None = None) -> str:
+    """Replace every URL in *text* (and the exact *url*, if given) with its display form."""
+    if url:
+        text = text.replace(url, display_source_uri(url))
+    return _URL_IN_TEXT_RE.sub(lambda m: display_source_uri(m.group(0)), text)
+
+
+class _UrlScrubFilter(logging.Filter):
+    """Redact URLs in a log record before any handler sees it.
+
+    ``httpx`` logs ``HTTP Request: GET <full url> ...`` at INFO for every request,
+    which would put signed-URL query values into the console and workspace log.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = _scrub_urls(record.getMessage())
+        record.args = None
+        return True
+
+
+_httpx_logger = logging.getLogger("httpx")
+if not any(isinstance(f, _UrlScrubFilter) for f in _httpx_logger.filters):
+    _httpx_logger.addFilter(_UrlScrubFilter())
 
 _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 _MAX_ATTEMPTS = 3
@@ -112,55 +144,6 @@ _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 _WINDOWS_DRIVE_RELATIVE_RE = re.compile(r"^[A-Za-z]:(?![\\/])")
 # A drive letter where a file:// URI's host would be ("file://C:/data/x.csv").
 _WINDOWS_DRIVE_NETLOC_RE = re.compile(r"^[A-Za-z]:$")
-
-# Query parameter names (case-insensitive) that commonly carry a signed-URL
-# token, API key, or other bearer secret -- stripped by redact_source_uri.
-_SENSITIVE_QUERY_KEYS = frozenset(
-    {
-        "sig",
-        "signature",
-        "x-amz-signature",
-        "x-amz-credential",
-        "x-amz-security-token",
-        "x-goog-signature",
-        "x-ms-signature",
-        "token",
-        "access_token",
-        "api_key",
-        "apikey",
-        "password",
-        "secret",
-        "auth",
-        "key",
-    }
-)
-
-
-def redact_source_uri(uri: str) -> str:
-    """Strip URI userinfo and known sensitive query parameters from *uri*.
-
-    Applied before a source URI is logged, persisted (dataset.source_uri,
-    run.config_json), or rendered into a report -- a signed download URL or
-    one with embedded ``user:pass@`` credentials must never end up at rest
-    in a database, a log file, or an HTML report handed to someone else.
-    Local paths (no recognisable userinfo or query string) pass through
-    unchanged.
-    """
-    parsed = urlparse(uri)
-    if not parsed.scheme or not parsed.netloc:
-        return uri  # a local path, not a URL -- nothing to redact
-
-    netloc = parsed.netloc
-    if "@" in netloc:
-        netloc = "***@" + netloc.rsplit("@", 1)[1]
-
-    query = urlencode(
-        [
-            (k, "REDACTED" if k.lower() in _SENSITIVE_QUERY_KEYS else v)
-            for k, v in parse_qsl(parsed.query, keep_blank_values=True)
-        ]
-    )
-    return urlunparse(parsed._replace(netloc=netloc, query=query))
 
 
 def resolve_source(
@@ -204,7 +187,7 @@ def resolve_source(
     if parsed.scheme in ("http", "https"):
         return _resolve_http(config, cache_dir, transport=transport)
 
-    raise SourceError(f"Unsupported URI scheme '{parsed.scheme}' in '{redact_source_uri(config.uri)}'")
+    raise SourceError(f"Unsupported URI scheme '{parsed.scheme}' in '{display_source_uri(config.uri)}'")
 
 
 def _file_uri_to_path(parsed: ParseResult) -> str:
@@ -311,7 +294,7 @@ def _conditional_request_candidate(cache_dir: Path, url: str, ext: str) -> tuple
     if not candidate.exists():
         logger.debug(
             "Cache index for '%s' names a cache entry that no longer exists; requesting unconditionally.",
-            redact_source_uri(url),
+            display_source_uri(url),
         )
         return None, {}
     return candidate, _conditional_request_headers(prior)
@@ -335,7 +318,7 @@ def _save_cache_meta_if_validated(cache_dir: Path, url: str, fp: str, meta_out: 
         logger.info(
             "No caching validators (ETag/Last-Modified) from origin for '%s': "
             "every future read of this URL will require a full download too.",
-            redact_source_uri(url),
+            display_source_uri(url),
         )
 
 
@@ -369,7 +352,7 @@ def _resolve_http(
     tmp_path = Path(tmp_name)
 
     try:
-        logger.debug("Downloading source: %s", redact_source_uri(url))
+        logger.debug("Downloading source: %s", display_source_uri(url))
         meta_out: dict[str, object] = {}
         _download_to(
             url,
@@ -507,11 +490,11 @@ def _assert_host_is_safe(url: httpx.URL) -> None:
         except ValueError:
             # Can't parse it -- fail closed rather than assume it's safe.
             raise SourceError(
-                f"Refusing to fetch '{redact_source_uri(str(url))}': host {host!r} resolved to unparseable {addr!r}."
+                f"Refusing to fetch '{display_source_uri(str(url))}': host {host!r} resolved to unparseable {addr!r}."
             ) from None
         if ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_reserved or ip.is_multicast:
             raise SourceError(
-                f"Refusing to fetch '{redact_source_uri(str(url))}': host {host!r} resolves to {addr} "
+                f"Refusing to fetch '{display_source_uri(str(url))}': host {host!r} resolves to {addr} "
                 "(loopback/link-local/private/reserved/multicast), which looks like "
                 "an internal or cloud-metadata target rather than a public dataset host."
             )
@@ -559,22 +542,29 @@ def _download_to(
             except httpx.TransportError as exc:
                 if attempt < _MAX_ATTEMPTS - 1:
                     wait = _BACKOFF_BASE**attempt
-                    logger.warning("Network error (%s); retrying in %.0fs", exc, wait)
+                    logger.warning(
+                        "Network error (%s: %s); retrying in %.0fs",
+                        type(exc).__name__,
+                        _scrub_urls(str(exc), url),
+                        wait,
+                    )
                     time.sleep(wait)
                     continue
+                # `from None`: a chained exception would print the unscrubbed message in a traceback.
                 raise SourceError(
-                    f"Failed to download '{redact_source_uri(url)}' after {_MAX_ATTEMPTS} attempts: {exc}"
-                ) from exc
+                    f"Failed to download '{display_source_uri(url)}' after {_MAX_ATTEMPTS} attempts: "
+                    f"{type(exc).__name__}: {_scrub_urls(str(exc), url)}"
+                ) from None
             except _RetryableStatusError as retry:
                 if attempt < _MAX_ATTEMPTS - 1:
                     wait = _BACKOFF_BASE**attempt
                     logger.warning(
-                        "HTTP %s from %s; retrying in %.0fs", retry.status_code, redact_source_uri(url), wait
+                        "HTTP %s from %s; retrying in %.0fs", retry.status_code, display_source_uri(url), wait
                     )
                     time.sleep(wait)
                     continue
                 raise SourceError(
-                    f"HTTP {retry.status_code} downloading '{redact_source_uri(url)}'"
+                    f"HTTP {retry.status_code} downloading '{display_source_uri(url)}'"
                 ) from None
 
 
@@ -612,7 +602,7 @@ def _refuse_plaintext_credentials(request: httpx.Request) -> None:
     if "authorization" in request.headers or request.url.userinfo:
         raise SourceError(
             f"Refusing to send credentials over plaintext http to "
-            f"'{redact_source_uri(str(request.url))}'. Use an https:// URL, or remove "
+            f"'{display_source_uri(str(request.url))}'. Use an https:// URL, or remove "
             f"source.auth and any user:password@ from the URL."
         )
 
@@ -648,7 +638,7 @@ def _declared_content_length(raw: str | None, url: str) -> int | None:
         logger.warning(
             "Ignoring malformed Content-Length %r from '%s'; the streaming size limit still applies.",
             raw[:64],
-            redact_source_uri(url),
+            display_source_uri(url),
         )
         return None
     if len(value) > 18:
@@ -717,13 +707,13 @@ def _download_once(
                 next_url = resp.headers.get("location")
                 if not next_url:
                     raise SourceError(
-                        f"HTTP {resp.status_code} redirect from '{redact_source_uri(url)}' had no Location header."
+                        f"HTTP {resp.status_code} redirect from '{display_source_uri(url)}' had no Location header."
                     )
                 target = request.url.join(next_url)
                 if request.url.scheme == "https" and target.scheme == "http":
                     raise SourceError(
                         f"Refusing HTTPS -> HTTP downgrade redirect while fetching "
-                        f"'{redact_source_uri(url)}' (from {request.url.scheme}://{request.url.host} "
+                        f"'{display_source_uri(url)}' (from {request.url.scheme}://{request.url.host} "
                         f"to {target.scheme}://{target.host})."
                     )
                 next_headers = (
@@ -735,12 +725,12 @@ def _download_once(
             if resp.status_code in _RETRYABLE_STATUS:
                 raise _RetryableStatusError(resp.status_code)
             if resp.status_code >= 400:
-                raise SourceError(f"HTTP {resp.status_code} downloading '{redact_source_uri(url)}'")
+                raise SourceError(f"HTTP {resp.status_code} downloading '{display_source_uri(url)}'")
 
             declared = _declared_content_length(resp.headers.get("content-length"), url)
             if declared is not None and declared > max_bytes:
                 raise SourceError(
-                    f"Refusing to download '{redact_source_uri(url)}': declared size "
+                    f"Refusing to download '{display_source_uri(url)}': declared size "
                     f"{declared:,} bytes exceeds source.max_download_bytes={max_bytes:,}."
                 )
 
@@ -750,7 +740,7 @@ def _download_once(
                     written += len(chunk)
                     if written > max_bytes:
                         raise SourceError(
-                            f"Refusing to download '{redact_source_uri(url)}': streamed size "
+                            f"Refusing to download '{display_source_uri(url)}': streamed size "
                             f"exceeded source.max_download_bytes={max_bytes:,}."
                         )
                     fh.write(chunk)
@@ -761,7 +751,7 @@ def _download_once(
         finally:
             resp.close()
 
-    raise SourceError(f"Too many redirects (> {_MAX_REDIRECTS}) fetching '{redact_source_uri(url)}'.")
+    raise SourceError(f"Too many redirects (> {_MAX_REDIRECTS}) fetching '{display_source_uri(url)}'.")
 
 
 def _extension_from_url(url: str, config: SourceConfig) -> str:

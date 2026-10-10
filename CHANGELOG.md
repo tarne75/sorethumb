@@ -123,6 +123,17 @@ First public release.
   to a loopback, link-local, private or reserved address.
 - An unexpected CLI crash never prints local variables, so a traceback cannot
   reveal the download credential.
+- Source URI query values are never stored, logged or reported. The persisted
+  and displayed form keeps the scheme, host, non-default port, path and query
+  key names and replaces every query value with `REDACTED` (no name list, so
+  `client_secret`, `jwt`, `accessKey` and unlisted names are covered); userinfo
+  becomes `***@` and the fragment is dropped. This covers `dataset.source_uri`,
+  `run.config_json`, `RunResult.dataset_uri`, `run --json`, `show`, reports,
+  the `httpx` request log line and download errors, with no opt-out. A new
+  `source_digest` (SHA-256 of the canonical full URI) on `dataset` and `run`
+  keeps query-differing sources distinguishable. Migration 009 irreversibly
+  scrubs values stored by earlier versions. Without `source.dataset_id`, a run
+  whose query key set differs from the dataset's previous run is refused.
 - **Persisted-model trust boundary**: a workspace's fitted models are
   `joblib`/pickle files, and `score --from-run` and `run.reuse_models` unpickle
   them with no sandboxing. That is arbitrary code execution, not safe data

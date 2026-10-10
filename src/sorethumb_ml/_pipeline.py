@@ -57,7 +57,8 @@ from sorethumb_ml.io.fingerprint import (
 )
 from sorethumb_ml.io.nested import unnest_all
 from sorethumb_ml.io.readers import collect_frame, read_frame
-from sorethumb_ml.io.source import redact_source_uri, resolve_source
+from sorethumb_ml.io.source import resolve_source
+from sorethumb_ml.io.uri import display_source_uri, query_key_names, source_digest
 from sorethumb_ml.profiling.plan import FeaturePlan, build_feature_plan
 from sorethumb_ml.report.html import GroupSection, RunMeta, render_report
 from sorethumb_ml.scoring.calibrate import Calibrator
@@ -116,16 +117,40 @@ def _strict_warnings(strict: bool) -> Iterator[None]:
         yield
 
 
-def _redacted_config_json(config: Config) -> str:
-    """Serialise *config* for persistence with source.uri redacted.
+def _assert_query_shape_unchanged(ws: Workspace, config: Config, dataset_fp: str) -> None:
+    """Refuse to merge two differently-parameterised sources under one derived dataset id.
 
-    run.config_json is kept forever; a source URI with embedded userinfo
-    (``user:pass@host``) or a signed-download token in its query string must
-    never end up at rest there, on top of the live URI itself (used for the
-    actual download elsewhere, before this is called).
+    Without ``source.dataset_id`` the logical id deliberately ignores the query string,
+    so a signed URL can refresh without orphaning history. The price is that sources
+    differing only in their query (``?table=sales`` vs ``?report=costs``) share an id.
+    The stored display URI keeps the query key names, so a changed key set is
+    detectable -- and a refresh, which re-signs the same keys, never trips this.
+    """
+    if config.source.dataset_id:
+        return
+    existing = ws.store.get_dataset(dataset_fp)
+    if existing is None:
+        return
+    before = query_key_names(existing["source_uri"])
+    after = query_key_names(config.source.uri)
+    if before != after:
+        raise ConfigError(
+            f"Dataset '{dataset_fp}' was recorded with source query parameters {sorted(before)}, but "
+            f"this run's source.uri has {sorted(after)}. Without source.dataset_id the dataset id "
+            "ignores the query string, so the two would be merged into one history. Set "
+            "source.dataset_id to a label for this dataset (a different one per distinct source)."
+        )
+
+
+def _redacted_config_json(config: Config) -> str:
+    """Serialise *config* for persistence with source.uri reduced to its display form.
+
+    run.config_json is kept forever; the userinfo and every query value of the source
+    URI must never end up at rest there (see ``io.uri.display_source_uri``). The full
+    URI exists only on the in-memory config used for the download.
     """
     redacted = config.model_copy(
-        update={"source": config.source.model_copy(update={"uri": redact_source_uri(config.source.uri)})}
+        update={"source": config.source.model_copy(update={"uri": display_source_uri(config.source.uri)})}
     )
     return redacted.model_dump_json()
 
@@ -356,6 +381,9 @@ class RunResult:
     # Content+schema fingerprint of the snapshot this run saw. dataset_fp is the
     # stable logical id; snapshot_fp versions it.
     snapshot_fp: str = ""
+    # One-way digest of the full source URI (query values included), as stored on the
+    # dataset and run rows; dataset_uri carries only the redacted display form.
+    source_digest: str | None = None
     # "success": report_path names a real, just-(re)rendered artifact.
     # "failed": a report was requested and every group succeeded, but
     #   rendering itself raised -- report_path is None despite there being
@@ -672,9 +700,11 @@ def run_detection(
         dataset_fp = logical_dataset_id(config.source.dataset_id, config.source.uri)
         snapshot_fp = snapshot_fingerprint(content_fp, schema_fp)
 
+        _assert_query_shape_unchanged(ws, config, dataset_fp)
         ws.store.upsert_dataset(
             dataset_fp=dataset_fp,
-            source_uri=redact_source_uri(config.source.uri),
+            source_uri=display_source_uri(config.source.uri),
+            source_digest=source_digest(config.source.uri),
             schema_fingerprint=schema_fp,
             content_fingerprint=content_fp,
             n_rows=len(df_raw),
@@ -712,6 +742,7 @@ def run_detection(
             seed=config.run.seed,
             config_hash=config.config_hash(),
             library_version=_st.__version__,
+            source_digest=source_digest(config.source.uri),
         )
 
         if dry_run:
@@ -726,9 +757,10 @@ def run_detection(
             )
             return RunResult(
                 run_id=run_id,
-                dataset_uri=config.source.uri,
+                dataset_uri=display_source_uri(config.source.uri),
                 dataset_fp=dataset_fp,
                 snapshot_fp=snapshot_fp,
+                source_digest=source_digest(config.source.uri),
                 config_hash=config.config_hash(),
                 period_label=period_label,
                 workspace_path=ws_path,
@@ -877,9 +909,10 @@ def run_detection(
         finished_at = datetime.now(UTC).isoformat()
         return RunResult(
             run_id=run_id,
-            dataset_uri=config.source.uri,
+            dataset_uri=display_source_uri(config.source.uri),
             dataset_fp=dataset_fp,
             snapshot_fp=snapshot_fp,
+            source_digest=source_digest(config.source.uri),
             config_hash=config.config_hash(),
             period_label=period_label,
             workspace_path=ws_path,
@@ -1081,9 +1114,11 @@ def score_forward(
         schema_fp = schema_fingerprint(df_raw)
         dataset_fp = logical_dataset_id(config.source.dataset_id, config.source.uri)
         snapshot_fp = snapshot_fingerprint(content_fp, schema_fp)
+        _assert_query_shape_unchanged(ws, config, dataset_fp)
         ws.store.upsert_dataset(
             dataset_fp=dataset_fp,
-            source_uri=redact_source_uri(config.source.uri),
+            source_uri=display_source_uri(config.source.uri),
+            source_digest=source_digest(config.source.uri),
             schema_fingerprint=schema_fp,
             content_fingerprint=content_fp,
             n_rows=len(df_raw),
@@ -1118,6 +1153,7 @@ def score_forward(
             config_hash=config.config_hash(),
             source_run_id=source_run_id,
             library_version=_st.__version__,
+            source_digest=source_digest(config.source.uri),
         )
         logger.info("score-forward run %s from source %s", new_run_id, source_run_id)
 
@@ -1179,9 +1215,10 @@ def score_forward(
 
         return RunResult(
             run_id=new_run_id,
-            dataset_uri=config.source.uri,
+            dataset_uri=display_source_uri(config.source.uri),
             dataset_fp=dataset_fp,
             snapshot_fp=snapshot_fp,
+            source_digest=source_digest(config.source.uri),
             config_hash=config.config_hash(),
             period_label=period_label,
             workspace_path=ws_path,
@@ -2205,7 +2242,7 @@ def _render_report_or_reason(
         config = Config.model_validate_json(run_row["config_json"])
         meta = RunMeta(
             run_id=run_id,
-            dataset_uri=config.source.uri,
+            dataset_uri=display_source_uri(config.source.uri),
             dataset_fp=run_row.get("dataset_fp") or "",
             config_hash=run_row.get("config_hash") or config.config_hash(),
             seed=int(run_row.get("seed") or config.run.seed),
