@@ -151,6 +151,11 @@ First public release.
   directory, the current directory, a git repository root or a very shallow
   path. It deletes only the entries sorethumb creates, so other files in the
   directory are kept.
+- Credentials are never sent over plaintext HTTP. `source.auth` or
+  `user:password@` in an `http://` `source.uri` is rejected at config load, and
+  a credentialed request is refused before it is sent on every hop, including
+  the first request of an HTTP-to-HTTPS redirect. There is no loopback
+  exception.
 - Authenticated HTTP(S) downloads (`source.auth`) send the `Authorization`
   header only to the configured origin: never across a redirect to another host
   or port. An HTTPS-to-HTTP redirect is refused, and so is a request or redirect

@@ -761,7 +761,7 @@ def test_auth_header_flows_from_env_var_to_actual_request(
     from sorethumb_ml.io.source import _build_auth_headers, _download_to
 
     monkeypatch.setenv("BEARER_TOKEN", "real-secret-token")
-    cfg = SourceConfig(uri="http://198.51.100.1/data.csv", auth="bearer", auth_env_var="BEARER_TOKEN")
+    cfg = SourceConfig(uri="https://198.51.100.1/data.csv", auth="bearer", auth_env_var="BEARER_TOKEN")
     headers = _build_auth_headers(cfg)
 
     seen_auth: list[str | None] = []
@@ -773,6 +773,163 @@ def test_auth_header_flows_from_env_var_to_actual_request(
     dest = tmp_path / "out.csv"
     _download_to(cfg.uri, headers, dest, max_bytes=10_000, transport=httpx.MockTransport(handler))
     assert seen_auth == ["Bearer real-secret-token"]
+
+
+# ---------------------------------------------------------------------------
+# Credentials are never sent over plaintext http
+# ---------------------------------------------------------------------------
+
+
+def _recording_transport(seen: list[str], redirect_to: str | None = None):
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if redirect_to is not None and request.url.scheme == "http":
+            return httpx.Response(302, headers={"location": redirect_to})
+        return httpx.Response(200, content=b"a,b\n1,2\n")
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.parametrize(
+    ("uri", "headers"),
+    [
+        ("http://example.com/d.csv", {"Authorization": "Bearer tok"}),
+        ("http://example.com/d.csv", {"Authorization": "Basic dTpw"}),
+        ("HTTP://example.com/d.csv", {"Authorization": "Bearer tok"}),
+        ("http://localhost:8080/d.csv", {"Authorization": "Bearer tok"}),
+        ("http://alice:pw@example.com/d.csv", {}),
+    ],
+)
+def test_credentials_over_http_refused_before_any_request(
+    tmp_path: Path, uri: str, headers: dict[str, str]
+) -> None:
+    from sorethumb_ml.errors import SourceError
+    from sorethumb_ml.io.source import _download_to
+
+    seen: list[str] = []
+    with pytest.raises(SourceError, match="plaintext http") as exc:
+        _download_to(uri, headers, tmp_path / "o.csv", max_bytes=10_000, transport=_recording_transport(seen))
+    assert seen == []
+    assert "pw@" not in str(exc.value)
+
+
+def test_http_to_https_redirect_does_not_leak_on_first_hop(tmp_path: Path) -> None:
+    from sorethumb_ml.errors import SourceError
+    from sorethumb_ml.io.source import _download_to
+
+    seen: list[str] = []
+    transport = _recording_transport(seen, redirect_to="https://example.com/d.csv")
+    with pytest.raises(SourceError, match="plaintext http"):
+        _download_to(
+            "http://example.com/d.csv",
+            {"Authorization": "Bearer tok"},
+            tmp_path / "o.csv",
+            max_bytes=10_000,
+            transport=transport,
+        )
+    assert seen == []
+
+
+def test_redirect_target_with_userinfo_over_http_refused(tmp_path: Path) -> None:
+    import httpx
+
+    from sorethumb_ml.errors import SourceError
+    from sorethumb_ml.io.source import _download_to
+
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(302, headers={"location": "http://bob:pw@8.8.8.8/d.csv"})
+
+    with pytest.raises(SourceError, match="plaintext http"):
+        _download_to(
+            "http://example.com/d.csv",
+            {},
+            tmp_path / "o.csv",
+            max_bytes=10_000,
+            transport=httpx.MockTransport(handler),
+        )
+    assert seen == ["http://example.com/d.csv"]
+
+
+def test_unsafe_host_refusal_does_not_echo_userinfo(tmp_path: Path) -> None:
+    import httpx
+
+    from sorethumb_ml.errors import SourceError
+    from sorethumb_ml.io.source import _download_to
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "https://bob:s3cret-pw@198.51.100.2/d.csv"})
+
+    with pytest.raises(SourceError, match="Refusing to fetch") as exc:
+        _download_to(
+            "https://example.com/d.csv",
+            {},
+            tmp_path / "o.csv",
+            max_bytes=10_000,
+            transport=httpx.MockTransport(handler),
+        )
+    assert "s3cret-pw" not in str(exc.value)
+
+
+def test_https_with_credentials_still_sent(tmp_path: Path) -> None:
+    from sorethumb_ml.io.source import _download_to
+
+    seen: list[str] = []
+    _download_to(
+        "https://example.com/d.csv",
+        {"Authorization": "Bearer tok"},
+        tmp_path / "o.csv",
+        max_bytes=10_000,
+        transport=_recording_transport(seen),
+    )
+    assert seen == ["https://example.com/d.csv"]
+
+
+@pytest.mark.parametrize("uri", ["http://example.com/d.csv", "http://localhost:8080/d.csv"])
+def test_plain_http_without_credentials_still_works(tmp_path: Path, uri: str) -> None:
+    from sorethumb_ml.io.source import _download_to
+
+    seen: list[str] = []
+    _download_to(uri, {}, tmp_path / "o.csv", max_bytes=10_000, transport=_recording_transport(seen))
+    assert seen == [uri]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"uri": "http://example.com/d.csv", "auth": "bearer", "auth_env_var": "T"},
+        {"uri": "http://example.com/d.csv", "auth": "basic", "auth_env_var": "T"},
+        {"uri": "HTTP://example.com/d.csv", "auth": "bearer", "auth_env_var": "T"},
+        {"uri": "http://alice:s3cret-pw@example.com/d.csv"},
+    ],
+)
+def test_source_config_rejects_credentials_over_http(kwargs: dict[str, str]) -> None:
+    from pydantic import ValidationError
+
+    from sorethumb_ml.config import SourceConfig
+
+    with pytest.raises(ValidationError, match="plaintext http"):
+        SourceConfig(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"uri": "https://example.com/d.csv", "auth": "bearer", "auth_env_var": "T"},
+        {"uri": "https://alice:pw@example.com/d.csv"},
+        {"uri": "http://example.com/d.csv"},
+        {"uri": "http://localhost:8080/export.csv"},
+        {"uri": "/tmp/d.csv", "auth": "bearer", "auth_env_var": "T"},
+    ],
+)
+def test_source_config_accepts_safe_combinations(kwargs: dict[str, str]) -> None:
+    from sorethumb_ml.config import SourceConfig
+
+    SourceConfig(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -924,12 +1081,12 @@ def test_download_preserves_authorization_on_same_origin_redirect(tmp_path: Path
     def handler(request: httpx.Request) -> httpx.Response:
         seen_auth.append(request.headers.get("authorization"))
         if request.url.path == "/data.csv":
-            return httpx.Response(302, headers={"location": "http://198.51.100.1/final.csv"})
+            return httpx.Response(302, headers={"location": "https://198.51.100.1/final.csv"})
         return httpx.Response(200, content=b"a,b\n1,2\n")
 
     dest = tmp_path / "out.csv"
     _download_to(
-        "http://198.51.100.1/data.csv",
+        "https://198.51.100.1/data.csv",
         {"Authorization": f"Bearer {_SECRET_TOKEN}"},
         dest,
         max_bytes=10_000,
@@ -952,12 +1109,12 @@ def test_download_strips_authorization_on_cross_host_redirect(tmp_path: Path) ->
     def handler(request: httpx.Request) -> httpx.Response:
         seen_auth.append(request.headers.get("authorization"))
         if request.url.host == "198.51.100.1":
-            return httpx.Response(302, headers={"location": "http://8.8.8.8/final.csv"})
+            return httpx.Response(302, headers={"location": "https://8.8.8.8/final.csv"})
         return httpx.Response(200, content=b"a,b\n1,2\n")
 
     dest = tmp_path / "out.csv"
     _download_to(
-        "http://198.51.100.1/data.csv",
+        "https://198.51.100.1/data.csv",
         {"Authorization": f"Bearer {_SECRET_TOKEN}"},
         dest,
         max_bytes=10_000,
@@ -979,12 +1136,12 @@ def test_download_strips_authorization_on_port_change_redirect(tmp_path: Path) -
     def handler(request: httpx.Request) -> httpx.Response:
         seen_auth.append(request.headers.get("authorization"))
         if request.url.port is None:
-            return httpx.Response(302, headers={"location": "http://198.51.100.1:8080/final.csv"})
+            return httpx.Response(302, headers={"location": "https://198.51.100.1:8080/final.csv"})
         return httpx.Response(200, content=b"a,b\n1,2\n")
 
     dest = tmp_path / "out.csv"
     _download_to(
-        "http://198.51.100.1/data.csv",
+        "https://198.51.100.1/data.csv",
         {"Authorization": f"Bearer {_SECRET_TOKEN}"},
         dest,
         max_bytes=10_000,
@@ -1060,13 +1217,13 @@ def test_download_cross_origin_redirect_does_not_leak_secret_via_logging(
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "198.51.100.1":
-            return httpx.Response(302, headers={"location": "http://8.8.8.8/final.csv"})
+            return httpx.Response(302, headers={"location": "https://8.8.8.8/final.csv"})
         return httpx.Response(200, content=b"a,b\n1,2\n")
 
     dest = tmp_path / "out.csv"
     with caplog.at_level(logging.DEBUG):
         _download_to(
-            "http://198.51.100.1/data.csv",
+            "https://198.51.100.1/data.csv",
             {"Authorization": f"Bearer {_SECRET_TOKEN}"},
             dest,
             max_bytes=10_000,

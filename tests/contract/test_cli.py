@@ -412,6 +412,24 @@ workdir = {json.dumps(str(tmp_path / "workdir"))}
     assert data["source"]["uri"] == "https://***@example.com/data.csv"
 
 
+def test_config_check_rejects_credentials_over_plaintext_http(tmp_path: Path):
+    """A credentialed http:// source fails at pre-flight (exit 2), and the
+    error output never echoes a password embedded in the URL."""
+    for body in (
+        'uri = "http://example.com/data.csv"\nauth = "bearer"\nauth_env_var = "T"\n',
+        'uri = "http://alice:s3cret-pw@example.com/data.csv"\n',
+    ):
+        toml_path = tmp_path / "sorethumb.toml"
+        toml_path.write_text(
+            f'[source]\n{body}format = "csv"\n\n[run]\nworkdir = {json.dumps(str(tmp_path / "wd"))}\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["config", "check", "--config", str(toml_path)])
+        assert result.exit_code == 2
+        assert "plaintext http" in result.output
+        assert "s3cret-pw" not in result.output
+
+
 def test_redact_config_does_not_mutate_environment(monkeypatch: pytest.MonkeyPatch):
     """_redact_config previously mutated os.environ in place (setting
     SORETHUMB_TOKEN/SORETHUMB_PASSWORD to the literal string "REDACTED"),

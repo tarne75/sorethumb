@@ -40,6 +40,16 @@ into. This is **not** a defence against DNS rebinding (the resolved address
 is not pinned for the actual connection) and does not sandbox the remote
 server in any other way; only fetch datasets from sources you trust.
 
+Credentials are only ever sent over HTTPS. A `source.uri` that starts with
+`http://` (in any letter case) combined with `source.auth` other than
+`none`, or with `user:password@` in the URI, is rejected when the config is
+loaded; the same check runs again before every request and redirect hop, so
+nothing credentialed leaves the process in cleartext (including via an
+HTTP-to-HTTPS redirect, whose first request would otherwise already have
+leaked it). There is no loopback exception and no override: put the endpoint
+behind TLS, or fetch it without credentials. A plain `http://` source with
+no credentials still works.
+
 If `source.auth`/`source.auth_env_var` is configured, the resulting
 `Authorization` header is sent only to the exact origin (scheme, host, and
 effective port) `source.uri` names. A redirect to any other origin — a
