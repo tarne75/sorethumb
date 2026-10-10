@@ -507,11 +507,11 @@ def _assert_host_is_safe(url: httpx.URL) -> None:
         except ValueError:
             # Can't parse it -- fail closed rather than assume it's safe.
             raise SourceError(
-                f"Refusing to fetch '{url}': host {host!r} resolved to unparseable {addr!r}."
+                f"Refusing to fetch '{redact_source_uri(str(url))}': host {host!r} resolved to unparseable {addr!r}."
             ) from None
         if ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_reserved or ip.is_multicast:
             raise SourceError(
-                f"Refusing to fetch '{url}': host {host!r} resolves to {addr} "
+                f"Refusing to fetch '{redact_source_uri(str(url))}': host {host!r} resolves to {addr} "
                 "(loopback/link-local/private/reserved/multicast), which looks like "
                 "an internal or cloud-metadata target rather than a public dataset host."
             )
@@ -598,6 +598,25 @@ def _is_same_origin(a: httpx.URL, b: httpx.URL) -> bool:
     return a.scheme == b.scheme and a.host == b.host and _effective_port(a) == _effective_port(b)
 
 
+def _refuse_plaintext_credentials(request: httpx.Request) -> None:
+    """Raise unless *request* is safe to send with respect to credentials.
+
+    A request carries a credential if it has an ``Authorization`` header or
+    userinfo in its URL (httpx turns ``user:pw@host`` into a Basic header only
+    when it sends, so the URL has to be checked too). Over ``http`` that
+    credential would cross the network in cleartext, so it is refused before
+    anything is sent. Checked on every hop, including a redirect target.
+    """
+    if request.url.scheme != "http":
+        return
+    if "authorization" in request.headers or request.url.userinfo:
+        raise SourceError(
+            f"Refusing to send credentials over plaintext http to "
+            f"'{redact_source_uri(str(request.url))}'. Use an https:// URL, or remove "
+            f"source.auth and any user:password@ from the URL."
+        )
+
+
 def _strip_authorization(headers: dict[str, str]) -> dict[str, str]:
     """Drop any Authorization header, case-insensitively.
 
@@ -657,7 +676,9 @@ def _download_once(
     conditional ``If-None-Match``/``If-Modified-Since``), in which case
     *dest* is left untouched and ``meta_out["modified"]`` is set to False.
 
-    Authorization is only ever sent to the exact origin (scheme, host,
+    Credentials (an Authorization header or URL userinfo) are never sent over
+    plaintext ``http``: such a request is refused before it is sent, on every
+    hop. Authorization is only ever sent to the exact origin (scheme, host,
     effective port) the original request targeted -- a redirect to any
     other origin gets the request without it, regardless of how "safe"
     that other host's resolved address looks. An HTTPS -> HTTP downgrade
@@ -675,6 +696,7 @@ def _download_once(
     for _hop in range(_MAX_REDIRECTS + 1):
         if request.url.host != original_host:
             _assert_host_is_safe(request.url)
+        _refuse_plaintext_credentials(request)
 
         resp = client.send(request, stream=True)
         try:
@@ -695,7 +717,7 @@ def _download_once(
                 next_url = resp.headers.get("location")
                 if not next_url:
                     raise SourceError(
-                        f"HTTP {resp.status_code} redirect from '{url}' had no Location header."
+                        f"HTTP {resp.status_code} redirect from '{redact_source_uri(url)}' had no Location header."
                     )
                 target = request.url.join(next_url)
                 if request.url.scheme == "https" and target.scheme == "http":

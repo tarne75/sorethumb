@@ -570,7 +570,7 @@
       "properties": {
         "auth": {
           "default": "none",
-          "description": "HTTP authentication scheme. Token/credentials come from auth_env_var.",
+          "description": "HTTP authentication scheme. Token/credentials come from auth_env_var. Credentials are only ever sent over https: a plaintext http:// uri combined with auth other than 'none' is rejected.",
           "enum": [
             "none",
             "bearer",

@@ -572,8 +572,9 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
   (a redirect pivoting to a cloud metadata endpoint or another internal
   host, an unbounded response), not a general-purpose sandbox for an
   untrusted remote server; a configured `Authorization` header is only ever
-  sent to the exact origin `source.uri` names, and a redirect that would
-  downgrade HTTPS to HTTP is refused outright — see
+  sent over HTTPS to the exact origin `source.uri` names (credentials with
+  an `http://` URI are rejected), and a redirect that would downgrade
+  HTTPS to HTTP is refused outright — see
   [SECURITY.md](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md).
 
 ---

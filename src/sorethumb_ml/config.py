@@ -15,14 +15,16 @@ import hashlib
 import json
 import re
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class SourceConfig(BaseModel):
     """Where the raw data lives and how to read it."""
 
-    model_config = ConfigDict(extra="forbid")
+    # hide_input_in_errors: a rejected source.uri may carry user:password@.
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     uri: str = Field(description="Local path or http(s) URL to the source file.")
     dataset_id: str | None = Field(
@@ -46,7 +48,11 @@ class SourceConfig(BaseModel):
     )
     auth: Literal["none", "bearer", "basic"] = Field(
         "none",
-        description="HTTP authentication scheme. Token/credentials come from auth_env_var.",
+        description=(
+            "HTTP authentication scheme. Token/credentials come from auth_env_var. "
+            "Credentials are only ever sent over https: a plaintext http:// uri "
+            "combined with auth other than 'none' is rejected."
+        ),
     )
     auth_env_var: str | None = Field(
         None,
@@ -96,6 +102,23 @@ class SourceConfig(BaseModel):
                 "(no spaces or path separators)"
             )
         return v
+
+    @model_validator(mode="after")
+    def _reject_plaintext_credentials(self) -> SourceConfig:
+        try:
+            parts = urlsplit(self.uri)
+            has_userinfo = parts.username is not None or parts.password is not None
+        except ValueError:
+            return self
+        if parts.scheme.lower() != "http":
+            return self
+        if self.auth != "none" or has_userinfo:
+            raise ValueError(
+                "credentials would be sent over plaintext http: use an https:// uri "
+                "(source.auth must be 'none' and the uri must not contain user:password@ "
+                "for an http:// source)"
+            )
+        return self
 
 
 class ColumnsConfig(BaseModel):
@@ -579,7 +602,8 @@ class Config(BaseModel):
     resolution in production.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    # hide_input_in_errors: a rejected source.uri may carry user:password@.
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     source: SourceConfig
     columns: ColumnsConfig = Field(default_factory=ColumnsConfig)
