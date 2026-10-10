@@ -132,8 +132,10 @@ First public release.
   the `httpx` request log line and download errors, with no opt-out. A new
   `source_digest` (SHA-256 of the canonical full URI) on `dataset` and `run`
   keeps query-differing sources distinguishable. Migration 009 irreversibly
-  scrubs values stored by earlier versions. Without `source.dataset_id`, a run
-  whose query key set differs from the dataset's previous run is refused.
+  scrubs values stored by earlier versions and compacts the database; logs and
+  reports written by earlier versions are not touched (see SECURITY.md). Without
+  `source.dataset_id`, a run whose query key set differs from the dataset's
+  previous run is refused, naming the `dataset_id` that keeps its history.
 - **Persisted-model trust boundary**: a workspace's fitted models are
   `joblib`/pickle files, and `score --from-run` and `run.reuse_models` unpickle
   them with no sandboxing. That is arbitrary code execution, not safe data

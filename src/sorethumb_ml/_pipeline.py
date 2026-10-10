@@ -125,11 +125,15 @@ def _assert_query_shape_unchanged(ws: Workspace, config: Config, dataset_fp: str
     differing only in their query (``?table=sales`` vs ``?report=costs``) share an id.
     The stored display URI keeps the query key names, so a changed key set is
     detectable -- and a refresh, which re-signs the same keys, never trips this.
+
+    A row with no ``source_digest`` was written before migration 009, whose earlier
+    redaction re-encoded key names (``filter[0]`` -> ``filter%5B0%5D``, ``flag`` ->
+    ``flag=``); its key set is not comparable, so it is not checked.
     """
     if config.source.dataset_id:
         return
     existing = ws.store.get_dataset(dataset_fp)
-    if existing is None:
+    if existing is None or existing.get("source_digest") is None:
         return
     before = query_key_names(existing["source_uri"])
     after = query_key_names(config.source.uri)
@@ -137,8 +141,9 @@ def _assert_query_shape_unchanged(ws: Workspace, config: Config, dataset_fp: str
         raise ConfigError(
             f"Dataset '{dataset_fp}' was recorded with source query parameters {sorted(before)}, but "
             f"this run's source.uri has {sorted(after)}. Without source.dataset_id the dataset id "
-            "ignores the query string, so the two would be merged into one history. Set "
-            "source.dataset_id to a label for this dataset (a different one per distinct source)."
+            "ignores the query string, so the two would be merged into one history. "
+            f'If this is the same dataset, set source.dataset_id = "{dataset_fp}" to keep its '
+            "history; if it is a different dataset, set source.dataset_id to a new label."
         )
 
 

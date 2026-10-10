@@ -610,6 +610,8 @@ sorethumb config show abc12345678 --output repro.toml   # write as reusable sore
 The default output shows a Rich table of detectors plus key settings
 (source URI, workdir, seed, scoring). `--json` returns the full stored config.
 `--output` reconstructs a minimal `sorethumb.toml` you can edit and re-run.
+The stored source URI is the redacted one (every query value is `REDACTED`),
+so put the real URL back in before re-running a signed-URL source.
 
 Exit code `3` if the run ID is not found in the workspace.
 

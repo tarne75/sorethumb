@@ -100,18 +100,33 @@ Known limits:
   `source.auth` or `source.auth_env_var`.
 - The `source.auth_env_var` token is read from the environment at call time and
   never written anywhere.
+- `sorethumb config show --output` rebuilds a config from what was stored, so its
+  `source.uri` has `REDACTED` query values and must be given the real URL again
+  before it can re-run a signed-URL source.
 - Workspaces created by an earlier version held query values in clear text.
   Opening one runs migration 009, which irreversibly rewrites the stored
-  `dataset.source_uri` and `run.config_json` to the redacted form. Copies of the
-  old database (backups, snapshots) and SQLite free pages are outside its reach;
-  rotate any credential that was ever stored.
+  `dataset.source_uri` and `run.config_json` to the redacted form and then
+  compacts the database (`VACUUM`, WAL truncated), so the overwritten values do
+  not linger in free pages. If another process has the workspace open at that
+  moment the compaction is skipped with a warning; run `VACUUM` on
+  `sorethumb.db` yourself to finish it. The migration does **not** touch files:
+  - `logs/sorethumb.log` from an earlier version contains the **full** URL of
+    every download (the HTTP client's own request log line). Delete those logs.
+  - Reports rendered by an earlier version contain any query value its
+    name-based redaction missed. Re-render them with `sorethumb report`, which
+    overwrites them from the scrubbed database.
+  Copies of the old database, logs or reports (backups, snapshots) are outside
+  its reach too; rotate any credential that was ever stored.
 
 Dataset identity is unaffected by redaction. The logical dataset id derived
 from a URI ignores the query, so refreshing a signed URL keeps one dataset's
 history together. Because that also means two URIs differing only in a query
 value look like one dataset, a run is **refused** when `source.dataset_id` is
-unset and the set of query key names differs from the dataset's previous run;
-set `source.dataset_id` to say explicitly what is, or is not, the same dataset.
+unset and the set of query key names differs from the dataset's previous run.
+The refusal names the existing dataset id: set `source.dataset_id` to that value
+if it is the same dataset (its history is kept), or to a new label if it is not.
+The check starts from a dataset's first run after upgrading, since earlier
+versions stored key names in a different encoding.
 `config_hash` (and so the run id) still covers the full URI, so a refreshed
 signature starts a new run rather than silently reusing the old one's models.
 

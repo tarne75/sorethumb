@@ -27,6 +27,7 @@ from sorethumb_ml.cli import _run_result_to_dict, app
 from sorethumb_ml.config import SourceConfig
 from sorethumb_ml.errors import ConfigError, SourceError
 from sorethumb_ml.io import source
+from sorethumb_ml.io.fingerprint import logical_dataset_id
 from sorethumb_ml.io.uri import display_source_uri, source_digest
 from sorethumb_ml.store.db import Store
 from sorethumb_ml.store.workspace import Workspace
@@ -259,6 +260,56 @@ def test_unsupported_scheme_error_is_redacted(tmp_path: Path) -> None:
     assert secret not in "".join(traceback.format_exception(excinfo.value))
 
 
+def test_a_redirect_to_a_presigned_url_leaks_nothing(
+    tmp_path: Path, server: FakeServer, caplog: pytest.LogCaptureFixture
+) -> None:
+    presigned = "https://bucket.s3.example.com/t.csv?X-Amz-Signature=REDIRSIG42&X-Amz-Credential=REDIRCRED42"
+    original = server.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "api.example.com":
+            server.urls.append(str(request.url))
+            return httpx.Response(302, headers={"location": presigned})
+        return original(request)
+
+    server.handler = handler  # type: ignore[method-assign]
+    caplog.set_level(logging.DEBUG)
+
+    result = run_detection(_config(tmp_path, "https://api.example.com/export.csv?api_token=APITOKEN42"))
+
+    assert result.n_succeeded == 1
+    assert presigned in server.urls, "the redirect was not followed to the presigned URL"
+    assert_clean(
+        ["REDIRSIG42", "REDIRCRED42", "APITOKEN42"],
+        workdir=tmp_path / "ws",
+        texts={"log": caplog.text, "payload": json.dumps(_run_result_to_dict(result))},
+    )
+
+
+@pytest.mark.parametrize("mode", ["forbidden", "connect_error"])
+def test_an_error_after_a_redirect_to_a_presigned_url_leaks_nothing(
+    tmp_path: Path, server: FakeServer, mode: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    presigned = "https://bucket.s3.example.com/t.csv?X-Amz-Signature=REDIRSIG43"
+    original = server.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "api.example.com":
+            return httpx.Response(302, headers={"location": presigned})
+        return original(request)
+
+    server.handler = handler  # type: ignore[method-assign]
+    server.mode = mode
+    caplog.set_level(logging.DEBUG)
+
+    with pytest.raises(SourceError) as excinfo:
+        run_detection(_config(tmp_path, "https://api.example.com/export.csv"), no_report=True)
+
+    rendered = "".join(traceback.format_exception(excinfo.value))
+    assert "REDIRSIG43" not in rendered
+    assert "REDIRSIG43" not in caplog.text
+
+
 @pytest.mark.usefixtures("server")
 def test_httpx_request_log_line_is_scrubbed(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO)
@@ -329,6 +380,60 @@ def test_changed_query_key_set_is_refused_without_a_dataset_id(tmp_path: Path) -
 
 
 @pytest.mark.usefixtures("server")
+def test_the_suggested_dataset_id_keeps_the_existing_history(tmp_path: Path) -> None:
+    first = run_detection(_config(tmp_path, f"{BASE}?table=sales"), no_report=True)
+
+    with pytest.raises(ConfigError) as excinfo:
+        run_detection(_config(tmp_path, f"{BASE}?table=sales&format=csv"), no_report=True)
+    assert f'source.dataset_id = "{first.dataset_fp}"' in str(excinfo.value)
+
+    again = run_detection(
+        _config(tmp_path, f"{BASE}?table=sales&format=csv", dataset_id=first.dataset_fp), no_report=True
+    )
+    assert again.dataset_fp == first.dataset_fp
+    with Workspace.open(tmp_path / "ws") as ws:
+        n_runs = ws.store._conn.execute(
+            "SELECT COUNT(*) FROM run WHERE dataset_fp = ?", (first.dataset_fp,)
+        ).fetchone()[0]
+    assert n_runs == 2
+
+
+@pytest.mark.usefixtures("server")
+@pytest.mark.parametrize(
+    "stored_by_old_version",
+    [
+        # Old redaction re-encoded keys through urlencode: these no longer match the
+        # key names read from the unchanged config, but the source has not changed.
+        f"{BASE}?filter%5B0%5D=a&sig=REDACTED",
+        f"{BASE}?download=&sig=REDACTED",
+    ],
+)
+def test_a_dataset_row_from_before_migration_009_is_not_checked(
+    tmp_path: Path, stored_by_old_version: str
+) -> None:
+    current = f"{BASE}?filter[0]=a&sig=b" if "filter" in stored_by_old_version else f"{BASE}?download&sig=b"
+    cfg = _config(tmp_path, current)
+    dataset_fp = logical_dataset_id(None, current)
+    with Workspace.init(tmp_path / "ws") as ws:
+        ws.store.upsert_dataset(
+            dataset_fp=dataset_fp,
+            source_uri=stored_by_old_version,
+            schema_fingerprint="s",
+            content_fingerprint="c",
+            n_rows=1,
+            n_cols=1,
+        )  # no source_digest: what migration 009 leaves on an upgraded row
+
+    result = run_detection(cfg, no_report=True)
+
+    assert result.dataset_fp == dataset_fp
+    with Workspace.open(tmp_path / "ws") as ws:
+        row = ws.store.get_dataset(dataset_fp)
+    assert row is not None
+    assert row["source_digest"] == source_digest(current)  # checked from the next run on
+
+
+@pytest.mark.usefixtures("server")
 def test_dataset_id_keeps_differently_parameterised_sources_apart(tmp_path: Path) -> None:
     a = run_detection(_config(tmp_path, f"{BASE}?table=sales", dataset_id="sales"), no_report=True)
     b = run_detection(_config(tmp_path, f"{BASE}?report=costs", dataset_id="costs"), no_report=True)
@@ -393,17 +498,73 @@ def test_migration_009_scrubs_values_stored_by_an_earlier_version(tmp_path: Path
     }
     assert odd_row["config_json"] == "not json"
     assert dataset["source_digest"] is None
-    raw_bytes = db.read_bytes()
-    for leaked in (b"OLDSECRET1", b"OLDSECRET2", b"pw-9"):
-        assert leaked not in raw_bytes or _checkpointed_clean(db, leaked)
+    for f in tmp_path.iterdir():  # the db file itself and any WAL/SHM left beside it
+        blob = f.read_bytes()
+        for leaked in (b"OLDSECRET1", b"OLDSECRET2", b"pw-9"):
+            assert leaked not in blob, f"{leaked!r} survives in {f.name}"
 
 
-def _checkpointed_clean(db: Path, leaked: bytes) -> bool:
-    """SQLite may leave freed pages in the file; after a VACUUM nothing may remain."""
+def _seed_pre_009_workspace(db: Path, rows: list[tuple[str, str]]) -> None:
+    """A workspace as an earlier version left it: migrated to 008, URIs stored as given."""
+    Store(db).close()
     conn = sqlite3.connect(str(db))
-    try:
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        conn.execute("VACUUM")
-    finally:
-        conn.close()
-    return leaked not in db.read_bytes()
+    for dataset_fp, uri in rows:
+        conn.execute(
+            "INSERT INTO dataset (dataset_fp, source_uri, schema_fingerprint, content_fingerprint,"
+            " n_rows, n_cols, first_seen, last_seen) VALUES (?, ?, 's', 'c', 1, 1, 't', 't')",
+            (dataset_fp, uri),
+        )
+    conn.execute("DELETE FROM schema_migration WHERE version = 9")
+    conn.commit()
+    conn.close()
+
+
+def test_migration_009_leaves_no_overwritten_value_in_free_pages(tmp_path: Path) -> None:
+    db = tmp_path / "big.db"
+    # Long values spill into overflow pages, which the UPDATE frees rather than reuses.
+    secret = "FREEPAGESECRET"
+    _seed_pre_009_workspace(
+        db,
+        [
+            (f"d{i}", f"https://h.example.com/t.csv?client_secret={secret}{i:04d}{'x' * 3000}")
+            for i in range(50)
+        ],
+    )
+    assert secret.encode() in db.read_bytes()
+
+    Store(db).close()
+
+    for f in tmp_path.iterdir():
+        assert secret.encode() not in f.read_bytes(), f"overwritten value survives in {f.name}"
+
+
+def test_failed_compaction_after_the_scrub_is_a_warning_not_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    db = tmp_path / "w.db"
+    _seed_pre_009_workspace(db, [("d1", "https://h.example.com/t.csv?client_secret=S")])
+    real_execute = sqlite3.Connection.execute
+
+    class _Conn(sqlite3.Connection):
+        def execute(self, sql: str, *args: object) -> sqlite3.Cursor:  # type: ignore[override]
+            if sql == "VACUUM":
+                raise sqlite3.OperationalError("database is locked")
+            return real_execute(self, sql, *args)
+
+    real_connect = sqlite3.connect
+    monkeypatch.setattr(sqlite3, "connect", lambda *a, **kw: real_connect(*a, **{**kw, "factory": _Conn}))
+    caplog.set_level(logging.WARNING)
+
+    with Store(db) as store:
+        dataset = store.get_dataset("d1")
+
+    assert dataset is not None
+    assert dataset["source_uri"] == "https://h.example.com/t.csv?client_secret=REDACTED"
+    assert "Could not compact" in caplog.text
+
+
+def test_a_fresh_workspace_is_not_compacted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[None] = []
+    monkeypatch.setattr(Store, "_compact", lambda _self: calls.append(None))
+    Store(tmp_path / "new.db").close()
+    assert calls == []
