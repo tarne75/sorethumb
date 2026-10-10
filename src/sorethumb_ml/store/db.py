@@ -22,17 +22,19 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import importlib.resources
+import json
 import logging
 import re
 import sqlite3
 import sys
 import time
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Self
 
 from sorethumb_ml.errors import StoreError
+from sorethumb_ml.io.uri import display_source_uri
 from sorethumb_ml.store.identifiers import validate_identifier
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,44 @@ _INIT_RETRY_BASE_DELAY_S = 0.05
 # cover, so a replayed migration would otherwise fail with "duplicate column
 # name" on retry. Matched against each statement in ``_execute_ddl``.
 _ALTER_ADD_COLUMN_RE = re.compile(r"^ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)", re.IGNORECASE)
+
+
+def _scrub_stored_source_uris(conn: sqlite3.Connection) -> int:
+    """Migration 009 data step: re-redact every source URI already at rest.
+
+    ``display_source_uri`` is idempotent, so a URI an earlier version redacted only
+    partially is brought to the current form and an already-clean one is untouched.
+    Returns the number of rows rewritten.
+    """
+    changed = 0
+    for row in conn.execute("SELECT dataset_fp, source_uri FROM dataset").fetchall():
+        clean = display_source_uri(row["source_uri"])
+        if clean != row["source_uri"]:
+            conn.execute("UPDATE dataset SET source_uri=? WHERE dataset_fp=?", (clean, row["dataset_fp"]))
+            changed += 1
+    for row in conn.execute("SELECT run_id, config_json FROM run").fetchall():
+        try:
+            cfg = json.loads(row["config_json"])
+        except ValueError:
+            continue
+        source = cfg.get("source") if isinstance(cfg, dict) else None
+        if not isinstance(source, dict) or not isinstance(source.get("uri"), str):
+            continue
+        clean = display_source_uri(source["uri"])
+        if clean != source["uri"]:
+            source["uri"] = clean
+            conn.execute(
+                "UPDATE run SET config_json=? WHERE run_id=?",
+                (json.dumps(cfg, separators=(",", ":"), ensure_ascii=False), row["run_id"]),
+            )
+            changed += 1
+    return changed
+
+
+# Python data steps that run inside a migration's transaction, after its SQL. Each
+# returns how many rows it overwrote; any overwrite triggers a compaction so the old
+# values do not survive in freed pages or the WAL file.
+_MIGRATION_DATA_STEPS: dict[int, Callable[[sqlite3.Connection], int]] = {9: _scrub_stored_source_uris}
 
 _UPSERT_TOTAL_SQL = """
     INSERT INTO totals
@@ -160,8 +200,23 @@ class Store:
         migration_files = self._discover_migration_files()
         self._check_schema_ceiling(migration_files)
 
-        for version, sql, checksum in migration_files:
-            self._apply_one_migration(version, sql, checksum)
+        rows_overwritten = sum(
+            self._apply_one_migration(v, sql, checksum) for v, sql, checksum in migration_files
+        )
+        if rows_overwritten:
+            self._compact()
+
+    def _compact(self) -> None:
+        """VACUUM and truncate the WAL, best effort: another open connection blocks it."""
+        try:
+            self._conn.execute("VACUUM")
+            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.OperationalError as exc:
+            logger.warning(
+                "Could not compact the workspace database after scrubbing stored source URIs (%s); "
+                "overwritten values may remain in its free pages until `VACUUM` is run on it.",
+                exc,
+            )
 
     def _bootstrap_schema_migration_table(self) -> None:
         """Create ``schema_migration`` and backfill its ``checksum`` column.
@@ -232,8 +287,11 @@ class Store:
                 "sorethumb before opening this workspace."
             )
 
-    def _apply_one_migration(self, version: int, sql: str, checksum: str) -> None:
+    def _apply_one_migration(self, version: int, sql: str, checksum: str) -> int:
         """Apply one migration file as a real atomic transaction, if not already applied.
+
+        Returns the number of existing rows its data step overwrote (0 if none, or if
+        it was already applied).
 
         ``BEGIN IMMEDIATE`` takes the write lock before the "already applied?"
         check, so that check is race-free against another process that is
@@ -248,16 +306,19 @@ class Store:
             if row is not None:
                 self._conn.execute("ROLLBACK")
                 self._verify_checksum(version, row["checksum"], checksum)
-                return
+                return 0
             logger.info("Applying migration %03d.", version)
             for stmt in _iter_sql_statements(sql):
                 self._execute_ddl(stmt)
+            data_step = _MIGRATION_DATA_STEPS.get(version)
+            overwritten = data_step(self._conn) if data_step is not None else 0
             self._conn.execute(
                 "INSERT INTO schema_migration (version, checksum) VALUES (?, ?)",
                 (version, checksum),
             )
             self._conn.execute("COMMIT")
             logger.info("Migration %03d applied.", version)
+            return overwritten
         except BaseException:
             with contextlib.suppress(sqlite3.OperationalError):
                 self._conn.execute("ROLLBACK")
@@ -308,6 +369,11 @@ class Store:
     # dataset
     # ------------------------------------------------------------------
 
+    def get_dataset(self, dataset_fp: str) -> dict[str, Any] | None:
+        """Return one dataset row or None if not found."""
+        row = self._conn.execute("SELECT * FROM dataset WHERE dataset_fp=?", (dataset_fp,)).fetchone()
+        return dict(row) if row else None
+
     def upsert_dataset(
         self,
         dataset_fp: str,
@@ -317,8 +383,13 @@ class Store:
         n_rows: int,
         n_cols: int,
         snapshot_fp: str | None = None,
+        source_digest: str | None = None,
     ) -> None:
         """Insert or update a dataset row and record the observed snapshot.
+
+        *source_uri* must already be the redacted display form
+        (``io.uri.display_source_uri``); *source_digest* is the one-way digest of the
+        full URI (``io.uri.source_digest``).
 
         *dataset_fp* is the stable logical id. *snapshot_fp* identifies the
         content+schema version seen on this call; the dataset row's
@@ -332,10 +403,11 @@ class Store:
             """
             INSERT INTO dataset
                 (dataset_fp, source_uri, schema_fingerprint, content_fingerprint,
-                 n_rows, n_cols, snapshot_fp, first_seen, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 n_rows, n_cols, snapshot_fp, first_seen, last_seen, source_digest)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(dataset_fp) DO UPDATE SET
                 source_uri = excluded.source_uri,
+                source_digest = excluded.source_digest,
                 schema_fingerprint = excluded.schema_fingerprint,
                 content_fingerprint = excluded.content_fingerprint,
                 n_rows = excluded.n_rows,
@@ -343,7 +415,18 @@ class Store:
                 snapshot_fp = excluded.snapshot_fp,
                 last_seen = excluded.last_seen
             """,
-            (dataset_fp, source_uri, schema_fingerprint, content_fingerprint, n_rows, n_cols, snap, now, now),
+            (
+                dataset_fp,
+                source_uri,
+                schema_fingerprint,
+                content_fingerprint,
+                n_rows,
+                n_cols,
+                snap,
+                now,
+                now,
+                source_digest,
+            ),
         )
         self._conn.execute(
             """
@@ -382,8 +465,12 @@ class Store:
         library_version: str = "",
         python_version: str = "",
         source_run_id: str | None = None,
+        source_digest: str | None = None,
     ) -> None:
         """Record a new run in status 'running'.
+
+        *source_digest* is the one-way digest of the run's full source URI; *config_json*
+        must already carry only the redacted display URI.
 
         *source_run_id* is set for score-forward runs (``sorethumb score
         --from-run``) and NULL for ordinary fitted runs.
@@ -415,10 +502,21 @@ class Store:
             """
             INSERT OR IGNORE INTO run
                 (run_id, dataset_fp, config_hash, config_json, seed,
-                 library_version, python_version, started_at, status, source_run_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
+                 library_version, python_version, started_at, status, source_run_id, source_digest)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
             """,
-            (run_id, dataset_fp, config_hash, config_json, seed, lib_ver, py_ver, now, source_run_id),
+            (
+                run_id,
+                dataset_fp,
+                config_hash,
+                config_json,
+                seed,
+                lib_ver,
+                py_ver,
+                now,
+                source_run_id,
+                source_digest,
+            ),
         )
         self._conn.commit()
 

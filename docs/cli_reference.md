@@ -562,8 +562,9 @@ sorethumb detectors --json
 Validate a config file and report every error at once (not just the first).
 Exit code `0` means the config is valid. `--json` prints the fully-resolved
 config (defaults, env vars, and CLI overrides all applied) instead, with
-credentials redacted — a source URI's embedded userinfo or signed-download
-token is masked the same way it is before being persisted to the database;
+credentials redacted — a source URI's userinfo and every query value are masked
+the same way they are before being persisted to the database (see
+[SECURITY.md](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md));
 an `auth_env_var` value is never included in `Config` in the first place, so
 there is nothing to redact there.
 
@@ -609,6 +610,8 @@ sorethumb config show abc12345678 --output repro.toml   # write as reusable sore
 The default output shows a Rich table of detectors plus key settings
 (source URI, workdir, seed, scoring). `--json` returns the full stored config.
 `--output` reconstructs a minimal `sorethumb.toml` you can edit and re-run.
+The stored source URI is the redacted one (every query value is `REDACTED`),
+so put the real URL back in before re-running a signed-URL source.
 
 Exit code `3` if the run ID is not found in the workspace.
 

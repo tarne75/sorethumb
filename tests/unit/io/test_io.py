@@ -968,42 +968,6 @@ def test_source_config_accepts_safe_combinations(kwargs: dict[str, str]) -> None
 
 
 # ---------------------------------------------------------------------------
-# Redaction
-# ---------------------------------------------------------------------------
-
-
-def test_redact_source_uri_strips_userinfo() -> None:
-    from sorethumb_ml.io.source import redact_source_uri
-
-    redacted = redact_source_uri("https://user:pass@example.com/data.csv")
-    assert "user" not in redacted
-    assert "pass" not in redacted
-    assert redacted == "https://***@example.com/data.csv"
-
-
-def test_redact_source_uri_strips_sensitive_query_params_keeps_others() -> None:
-    from sorethumb_ml.io.source import redact_source_uri
-
-    redacted = redact_source_uri("https://example.com/data.csv?sig=abc123&format=csv")
-    assert "abc123" not in redacted
-    assert "sig=REDACTED" in redacted
-    assert "format=csv" in redacted
-
-
-def test_redact_source_uri_local_path_passthrough() -> None:
-    from sorethumb_ml.io.source import redact_source_uri
-
-    assert redact_source_uri("/data/local/file.csv") == "/data/local/file.csv"
-
-
-def test_redact_source_uri_case_insensitive_query_key() -> None:
-    from sorethumb_ml.io.source import redact_source_uri
-
-    redacted = redact_source_uri("https://example.com/data.csv?X-Amz-Signature=deadbeef")
-    assert "deadbeef" not in redacted
-
-
-# ---------------------------------------------------------------------------
 # Download hardening: redirects, size limits, concurrency
 # ---------------------------------------------------------------------------
 

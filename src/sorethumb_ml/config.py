@@ -35,8 +35,11 @@ class SourceConfig(BaseModel):
             "-- periods, per-group totals, runs -- is keyed on it. When unset it is "
             "derived from 'uri'; set it explicitly so a change of path does not orphan "
             "prior history. Spellings of one Windows path that differ only in letter "
-            "case, separators or a file:// prefix derive the same id. Allowed "
-            "characters: letters, digits, '.', '_', '-' (max 128)."
+            "case, separators or a file:// prefix derive the same id. The query string "
+            "is ignored when deriving, so sources that differ only in query values "
+            "share one dataset; if the set of query keys changes between runs without "
+            "a dataset_id, the run is refused -- set one to say whether they are the "
+            "same dataset. Allowed characters: letters, digits, '.', '_', '-' (max 128)."
         ),
     )
     format: Literal["auto", "csv", "tsv", "parquet", "json", "jsonl", "tsf"] = Field(

@@ -1949,9 +1949,11 @@ def config_show(
         console.print(f"[green]Config written:[/green] {_e(output)}")
         return
 
+    from sorethumb_ml.io.uri import display_source_uri  # noqa: PLC0415
+
     config_hash = run_row.get("config_hash", "")
     console.print(f"[bold]Config for run:[/bold] {_e(run_id)}  [dim](hash: {_e(config_hash[:8])})[/dim]")
-    console.print(f"  Source URI: {_e(run_cfg.source.uri)}")
+    console.print(f"  Source URI: {_e(display_source_uri(run_cfg.source.uri))}")
     console.print(f"  Workdir:    {_e(run_cfg.run.workdir)}")
     console.print(f"  Seed:       {_e(run_cfg.run.seed)}")
 
@@ -2441,6 +2443,7 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
         "outcome": code.kind,
         "run_id": result.run_id,
         "dataset_uri": result.dataset_uri,
+        "source_digest": result.source_digest,
         "dataset_fp": result.dataset_fp,
         "snapshot_fp": result.snapshot_fp,
         "source_run_id": result.source_run_id,
