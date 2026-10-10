@@ -11,7 +11,8 @@ the expected anomaly rate from the data, not from a user guess.
 
 Output contract
 ---------------
-For an input matrix ``X`` of shape ``(n_rows, n_features)`` (float64, finite):
+For an input matrix ``X`` of shape ``(n_rows, n_features)`` (finite; float32 by
+default, float64 when ``features.dtype = "float64"`` or for explanations):
 
 * ``score_samples(X)`` returns a **1-D real-numeric ``numpy.ndarray`` of shape
   ``(n_rows,)``**, one score per input row in input order (row ``i`` of the
@@ -19,8 +20,8 @@ For an input matrix ``X`` of shape ``(n_rows, n_features)`` (float64, finite):
   finite (no NaN, no +/-inf). Integer or float dtypes are accepted and are
   converted to float64; bool, object, complex, string, lists and 2-D arrays
   (including ``(n_rows, 1)``) are rejected, never reshaped or coerced.
-* ``natural_flag(scores)`` receives the array ``score_samples`` just returned
-  and returns a **1-D ``numpy.ndarray`` with dtype exactly ``bool``** and the
+* ``natural_flag(scores)`` receives the validated scores (``score_samples``'s
+  output converted to float64) and returns a **1-D ``numpy.ndarray`` with dtype exactly ``bool``** and the
   same length, ``True`` = the model's own boundary calls the row anomalous.
   Integer 0/1, float, object arrays and ``None`` are rejected.
 * Both methods are valid only on a **fitted** detector: after ``fit()``, or
@@ -78,7 +79,8 @@ class Detector(Protocol):
     def natural_flag(self, scores: np.ndarray) -> np.ndarray:
         """Return a 1-D ``bool`` ndarray, same length as *scores*, True = anomalous.
 
-        *scores* is the array :meth:`score_samples` returned. The result must have
+        *scores* is :meth:`score_samples`'s output, validated and converted to
+        float64. The result must have
         dtype ``bool`` exactly (not int 0/1, not object). Valid only on a fitted
         (or loaded) detector.
 

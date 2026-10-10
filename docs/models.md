@@ -330,9 +330,9 @@ every call.
 | Member | Requirement |
 |---|---|
 | `name`, `supports_tree_shap`, `default_train_row_cap` | Class attributes. `name` is the string used in config, manifests and `sorethumb detectors`. |
-| `fit(X, *, seed)` | `X` is a 2-D float matrix `(n_rows, n_features)`. Must be deterministic for a given `seed`. |
+| `fit(X, *, seed)` | `X` is a finite 2-D float matrix `(n_rows, n_features)`: float32 by default, float64 with `features.dtype = "float64"`. Should be deterministic for a given `seed`. |
 | `score_samples(X)` | Returns a **1-D `numpy.ndarray` of shape `(len(X),)`**, one score per row **in input order**. Dtype integer or float (converted to float64); `bool`, `object`, complex, string, Python lists and `(n, 1)` arrays are rejected, not reshaped. **Every value finite**: no NaN, no ±inf. **Higher = more normal** (sklearn's convention); do not flip the sign yourself. |
-| `natural_flag(scores)` | Receives the array `score_samples` returned. Returns a **1-D `ndarray` of dtype exactly `bool`**, the same length, `True` = anomalous by the model's own boundary. Integer 0/1, float, `object` arrays and `None` are rejected. |
+| `natural_flag(scores)` | Receives `score_samples`'s output, validated and converted to float64. Returns a **1-D `ndarray` of dtype exactly `bool`**, the same length, `True` = anomalous by the model's own boundary. Integer 0/1, float, `object` arrays and `None` are rejected. |
 | `get_params()` | JSON-serialisable hyper-parameters, stored in the run manifest. |
 
 **Fitted state.** `score_samples` and `natural_flag` are called only on a fitted
@@ -356,9 +356,8 @@ shape (412,) (higher = more normal); got ndarray float64 shape (412,).
 
 An exception raised inside your methods is wrapped the same way
 (`Detector 'my_det' score_samples() raised ValueError: ...`). A detector that
-fails the check is not saved, and the run exits non-zero. Use
-`sorethumb_ml.detectors._protocol.score_and_flag(detector, X)` in your own tests
-to apply the same check.
+fails the check is not saved, and the run exits non-zero. The quickest way to
+check a plugin is a short `sorethumb run` with it as the only enabled detector.
 
 ---
 

@@ -29,12 +29,12 @@ First public release.
   the underlying scikit-learn estimator.
 - **Detector output contract**: `score_samples` must return a finite 1-D numeric
   `ndarray` with one value per input row, and `natural_flag` a 1-D `bool`
-  `ndarray` of the same length. Every call is checked immediately, for a freshly
-  fitted detector, a `run.reuse_models` model and a `score --from-run` model alike. A
-  violation fails the group with a `DetectorError` naming the detector, the
-  failing condition, the expected contract and the actual dtype/shape, and a
-  non-conforming model is never saved; so does an exception raised inside a
-  plugin. `ScoreEnsemble.combine()` and `Calibrator.fit()`/`transform()` also
+  `ndarray` of the same length. Every call is checked immediately, for a
+  freshly fitted detector, a `run.reuse_models` model and a `score --from-run`
+  model alike. A violation, or an exception raised inside a plugin's method,
+  fails the group with a `DetectorError` naming the detector, the failing
+  condition, the expected contract and the actual dtype/shape, and the model is
+  not saved. `ScoreEnsemble.combine()` and `Calibrator.fit()`/`transform()` also
   reject malformed or non-finite input themselves. See
   [Writing a detector plugin](docs/models.md#writing-a-detector-plugin).
 - **Ensemble combination**: `intersection` (the default: every configured

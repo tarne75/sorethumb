@@ -557,6 +557,7 @@ class _ConfigurableDetector:
     supports_tree_shap: ClassVar[bool] = False
     default_train_row_cap: ClassVar[int] = 10_000
     mode: ClassVar[str] = "good"
+    _thr: float | None = None
 
     def fit(self, X, *, seed):
         self._thr = float(np.percentile(-np.abs(X[:, 0]), 10))
