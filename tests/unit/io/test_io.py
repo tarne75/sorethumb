@@ -916,6 +916,41 @@ def test_source_config_rejects_credentials_over_http(kwargs: dict[str, str]) -> 
         SourceConfig(**kwargs)
 
 
+@pytest.mark.parametrize("wrap", [False, True])
+def test_rejected_config_error_does_not_echo_userinfo_password(wrap: bool) -> None:
+    from pydantic import ValidationError
+
+    from sorethumb_ml.config import Config, SourceConfig
+
+    source = {"uri": "http://alice:s3cret-pw@example.com/d.csv"}
+
+    def build() -> object:
+        if wrap:
+            return Config.model_validate({"source": source, "run": {"workdir": "/tmp/w"}})
+        return SourceConfig.model_validate(source)
+
+    with pytest.raises(ValidationError) as exc:
+        build()
+    assert "s3cret-pw" not in str(exc.value)
+
+
+def test_missing_location_error_does_not_echo_userinfo(tmp_path: Path) -> None:
+    import httpx
+
+    from sorethumb_ml.errors import SourceError
+    from sorethumb_ml.io.source import _download_to
+
+    with pytest.raises(SourceError, match="no Location header") as exc:
+        _download_to(
+            "https://bob:s3cret-pw@example.com/d.csv",
+            {},
+            tmp_path / "o.csv",
+            max_bytes=10_000,
+            transport=httpx.MockTransport(lambda _r: httpx.Response(302)),
+        )
+    assert "s3cret-pw" not in str(exc.value)
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [

@@ -23,7 +23,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 class SourceConfig(BaseModel):
     """Where the raw data lives and how to read it."""
 
-    model_config = ConfigDict(extra="forbid")
+    # hide_input_in_errors: a rejected source.uri may carry user:password@.
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     uri: str = Field(description="Local path or http(s) URL to the source file.")
     dataset_id: str | None = Field(
@@ -601,7 +602,8 @@ class Config(BaseModel):
     resolution in production.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    # hide_input_in_errors: a rejected source.uri may carry user:password@.
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     source: SourceConfig
     columns: ColumnsConfig = Field(default_factory=ColumnsConfig)

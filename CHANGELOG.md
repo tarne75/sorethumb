@@ -156,6 +156,8 @@ First public release.
   a credentialed request is refused before it is sent on every hop, including
   the first request of an HTTP-to-HTTPS redirect. There is no loopback
   exception.
+- A config validation error never echoes a `user:password@` from
+  `source.uri`, and download error messages redact it.
 - Authenticated HTTP(S) downloads (`source.auth`) send the `Authorization`
   header only to the configured origin: never across a redirect to another host
   or port. An HTTPS-to-HTTP redirect is refused, and so is a request or redirect

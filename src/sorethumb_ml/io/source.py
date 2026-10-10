@@ -717,7 +717,7 @@ def _download_once(
                 next_url = resp.headers.get("location")
                 if not next_url:
                     raise SourceError(
-                        f"HTTP {resp.status_code} redirect from '{url}' had no Location header."
+                        f"HTTP {resp.status_code} redirect from '{redact_source_uri(url)}' had no Location header."
                     )
                 target = request.url.join(next_url)
                 if request.url.scheme == "https" and target.scheme == "http":
