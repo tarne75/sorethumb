@@ -104,19 +104,89 @@ def test_package_outside_the_venv_is_reported(tmp_path: Path) -> None:
     assert "outside the venv" in cid.location_problems(str(checkout), str(venv))[0]
 
 
-def test_pyproject_for_another_project_is_rejected(tmp_path: Path) -> None:
+def test_pyproject_for_another_project_is_a_problem(tmp_path: Path) -> None:
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text('[project]\nname = "other"\nversion = "0.1.0"\n')
-    with pytest.raises(SystemExit, match="expected 'sorethumb-ml'"):
-        cid._pyproject_version(pyproject)
+    version, problems = cid.pyproject_version(pyproject)
+    assert version is None
+    assert problems == [f"{pyproject}: [project] name is 'other', expected 'sorethumb-ml'"]
 
 
-def test_main_fails_for_a_development_install(capsys: pytest.CaptureFixture[str]) -> None:
-    """The test environment is an editable install, so it is not a clean artifact install."""
-    root = Path(__file__).resolve().parents[2]
+def test_unreadable_pyproject_is_a_problem(tmp_path: Path) -> None:
+    version, problems = cid.pyproject_version(tmp_path / "missing.toml")
+    assert version is None
+    assert len(problems) == 1
+    assert problems[0].startswith("cannot read")
+
+
+_ROOT = Path(__file__).resolve().parents[2]
+_PYPROJECT = _ROOT / "pyproject.toml"
+
+
+def _current_wheel_name() -> str:
+    version, _ = cid.pyproject_version(_PYPROJECT)
+    return f"sorethumb_ml-{version}-py3-none-any.whl"
+
+
+def _run_main(capsys: pytest.CaptureFixture[str], *extra: str) -> tuple[int, str]:
     code = cid.main(
-        ["--artifact", "wheel", "--file", f"dist/{WHEEL}", "--pyproject", str(root / "pyproject.toml")]
+        [
+            "--artifact",
+            "wheel",
+            "--file",
+            f"dist/{_current_wheel_name()}",
+            "--pyproject",
+            str(_PYPROJECT),
+            *extra,
+        ]
     )
-    err = capsys.readouterr().err
+    return code, capsys.readouterr().err
+
+
+def test_main_rejects_a_development_install_for_the_right_reasons(capsys: pytest.CaptureFixture[str]) -> None:
+    """The test environment is an editable install: its versions agree, but it is not the artifact."""
+    code, err = _run_main(capsys)
     assert code == 1
-    assert "not what was built" in err
+    assert "versions disagree" not in err
+    assert "no version found" not in err
+    assert f"expected {_current_wheel_name()!r}" in err  # direct_url.json names the checkout, not a wheel
+    assert "outside the venv" in err  # imported from src/, not site-packages
+
+
+def test_main_reports_a_missing_distribution_without_a_traceback(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def not_installed(name: str) -> None:
+        raise cid.importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(cid.importlib.metadata, "distribution", not_installed)
+    code, err = _run_main(capsys)
+    assert code == 1
+    assert "sorethumb-ml is not installed" in err
+    assert "no version found from: ['installed distribution metadata']" in err
+
+
+def test_main_reports_a_failing_import_alongside_the_other_problems(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_import = cid.importlib.import_module
+
+    def broken(name: str) -> object:
+        if name == "sorethumb_ml":
+            raise ImportError("simulated")
+        return real_import(name)
+
+    monkeypatch.setattr(cid.importlib, "import_module", broken)
+    code, err = _run_main(capsys)
+    assert code == 1
+    assert "import sorethumb_ml failed: ImportError: simulated" in err
+    assert "no version found from: ['runtime sorethumb_ml.__version__']" in err
+    assert f"expected {_current_wheel_name()!r}" in err  # the direct_url check still ran
+
+
+def test_main_reports_a_console_script_that_cannot_run(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    code, err = _run_main(capsys, "--console-script", str(tmp_path / "no-such-sorethumb"))
+    assert code == 1
+    assert "could not run" in err

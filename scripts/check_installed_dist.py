@@ -16,7 +16,8 @@ It asserts that all of these agree on the version, and that the install is the
 named artifact:
 
 * the installed distribution's metadata (``importlib.metadata``);
-* the runtime ``sorethumb_ml.__version__``;
+* the runtime ``sorethumb_ml.__version__`` (read from that same metadata, so
+  this catches its ``0+unknown`` fallback or a different copy being imported);
 * ``pyproject.toml``'s ``[project] version`` in the checkout;
 * the artifact file name (``sorethumb_ml-<version>...``);
 * the console script's ``--version`` output (``sorethumb <version>``);
@@ -25,6 +26,10 @@ and that pip recorded the install as coming from this exact artifact file
 (``direct_url.json``: a ``.whl`` for ``--artifact wheel``, a ``.tar.gz`` for
 ``--artifact sdist``), that the package was imported from inside the venv, and
 that the import surface that must work with no extra installed does.
+
+Every check that can still run does, so one failure (the package not
+installed, an import error, an unreadable pyproject.toml) is reported alongside
+the rest rather than as a traceback.
 
 Exit codes: 0 consistent; 1 one or more problems (all are listed); 2 bad usage.
 """
@@ -49,7 +54,6 @@ _FILENAME_VERSION = re.compile(r"^sorethumb_ml-(?P<version>[^-]+?)(?:-[^/]*\.whl
 # Imported with no extra installed: every shap/pandas/datasets import behind
 # these is function-level, so a module-level one is a packaging regression.
 IMPORTS_WITHOUT_EXTRAS = (
-    "sorethumb_ml",
     "sorethumb_ml.explain.shap_tree",
     "sorethumb_ml.explain.gradient",
 )
@@ -105,56 +109,83 @@ def location_problems(module_file: str, prefix: str) -> list[str]:
     return []
 
 
-def _pyproject_version(path: Path) -> str | None:
-    with path.open("rb") as fh:
-        project = tomllib.load(fh).get("project", {})
+def pyproject_version(path: Path) -> tuple[str | None, list[str]]:
+    """Return ``(version, problems)`` for the checkout's ``pyproject.toml``."""
+    try:
+        with path.open("rb") as fh:
+            project = tomllib.load(fh).get("project", {})
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        return None, [f"cannot read {path}: {exc}"]
     if project.get("name") != DIST_NAME:
-        raise SystemExit(f"{path}: [project] name is {project.get('name')!r}, expected {DIST_NAME!r}")
+        return None, [f"{path}: [project] name is {project.get('name')!r}, expected {DIST_NAME!r}"]
     version = project.get("version")
-    return str(version) if version else None
+    return (str(version) if version else None), []
+
+
+def _failure(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {exc}"
 
 
 def collect_problems(args: argparse.Namespace) -> list[str]:
-    """Run every check, returning all problems rather than stopping at the first."""
+    """Run every check that can run, returning all problems rather than stopping at the first."""
     problems: list[str] = []
     artifact_file = Path(args.file)
 
-    distribution = importlib.metadata.distribution(DIST_NAME)
-    installed = distribution.version
-    runtime = importlib.import_module("sorethumb_ml").__version__
+    distribution: importlib.metadata.Distribution | None
+    try:
+        distribution = importlib.metadata.distribution(DIST_NAME)
+    except importlib.metadata.PackageNotFoundError:
+        distribution = None
+        problems.append(f"{DIST_NAME} is not installed in {sys.prefix}")
+    installed = distribution.version if distribution else None
+
+    try:
+        package = importlib.import_module("sorethumb_ml")
+    except Exception as exc:  # noqa: BLE001 -- report every failure, whatever its type
+        package = None
+        problems.append(f"import sorethumb_ml failed: {_failure(exc)}")
+    runtime = getattr(package, "__version__", None) if package else None
+
+    from_pyproject, pyproject_problems = pyproject_version(Path(args.pyproject))
+    problems += pyproject_problems
 
     problems += version_problems(
         {
             "installed distribution metadata": installed,
             "runtime sorethumb_ml.__version__": runtime,
-            "pyproject.toml": _pyproject_version(Path(args.pyproject)),
+            "pyproject.toml": from_pyproject,
             "artifact file name": artifact_version(artifact_file.name),
         }
     )
-    problems += direct_url_problems(
-        distribution.read_text("direct_url.json"), args.artifact, artifact_file.name
-    )
+    if distribution:
+        problems += direct_url_problems(
+            distribution.read_text("direct_url.json"), args.artifact, artifact_file.name
+        )
 
-    sorethumb_ml = importlib.import_module("sorethumb_ml")
-    problems += location_problems(str(sorethumb_ml.__file__), sys.prefix)
-
-    for module in IMPORTS_WITHOUT_EXTRAS:
-        try:
-            importlib.import_module(module)
-        except Exception as exc:  # noqa: BLE001 -- report every failure, whatever its type
-            problems.append(f"import {module} failed: {type(exc).__name__}: {exc}")
-    try:
-        from sorethumb_ml import Config, SourceConfig, run_detection  # noqa: F401, PLC0415
-    except Exception as exc:  # noqa: BLE001
-        problems.append(f"top-level API import failed: {type(exc).__name__}: {exc}")
+    if package:
+        problems += location_problems(str(package.__file__), sys.prefix)
+        for module in IMPORTS_WITHOUT_EXTRAS:
+            try:
+                importlib.import_module(module)
+            except Exception as exc:  # noqa: BLE001
+                problems.append(f"import {module} failed: {_failure(exc)}")
+        for name in ("Config", "SourceConfig", "run_detection"):
+            if not hasattr(package, name):
+                problems.append(f"sorethumb_ml has no top-level {name}")
 
     if args.console_script:
-        completed = subprocess.run(  # noqa: S603 -- the path is the venv's own script, given by the caller
-            [args.console_script, "--version"], capture_output=True, text=True, check=False
-        )
-        problems += console_script_problems(
-            completed.stdout + completed.stderr, completed.returncode, installed
-        )
+        try:
+            completed = subprocess.run(  # noqa: S603 -- the path is the venv's own script, given by the caller
+                [args.console_script, "--version"], capture_output=True, text=True, check=False
+            )
+        except OSError as exc:
+            problems.append(f"console script {args.console_script} could not run: {_failure(exc)}")
+        else:
+            problems += console_script_problems(
+                completed.stdout + completed.stderr,
+                completed.returncode,
+                installed or from_pyproject or "<unknown>",
+            )
 
     return problems
 

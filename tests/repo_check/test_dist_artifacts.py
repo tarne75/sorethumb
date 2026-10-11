@@ -173,8 +173,22 @@ def _sdist_names(path: Path) -> list[str]:
     return _sdist_split(path)[1]
 
 
-def _sdist_include() -> list[str]:
-    return list(_pyproject()["tool"]["hatch"]["build"]["targets"]["sdist"]["include"])
+# hatch options that add files outside ``include``; the derivation below does not model them.
+_UNMODELLED_SDIST_OPTIONS = ("only-include", "force-include")
+
+
+def _sdist_include(sdist_config: dict[str, Any] | None = None) -> list[str]:
+    """The sdist ``include`` allowlist, refusing hatch options that would add files outside it."""
+    if sdist_config is None:
+        sdist_config = _pyproject()["tool"]["hatch"]["build"]["targets"]["sdist"]
+    unmodelled = [option for option in _UNMODELLED_SDIST_OPTIONS if option in sdist_config]
+    if unmodelled:
+        pytest.fail(
+            f"[tool.hatch.build.targets.sdist] uses {unmodelled}; the expected sdist contents are "
+            f"derived from `include` alone -- extend _expected_sdist_top_level to cover them",
+            pytrace=False,
+        )
+    return list(sdist_config["include"])
 
 
 def _expected_sdist_top_level(include: list[str]) -> set[str]:
@@ -449,6 +463,12 @@ def test_a_missing_backend_added_entry_is_reported() -> None:
     members = [m for m in _SAMPLE_MEMBERS if m != "PKG-INFO"]
     problems = _sdist_layout_problems(members, _SAMPLE_INCLUDE)
     assert any("missing from the sdist" in p and "PKG-INFO" in p for p in problems)
+
+
+@pytest.mark.parametrize("option", _UNMODELLED_SDIST_OPTIONS)
+def test_sdist_options_outside_include_are_named_not_misreported(option: str) -> None:
+    with pytest.raises(pytest.fail.Exception, match=option):
+        _sdist_include({"include": ["/src"], option: {}})
 
 
 def test_the_real_allowlist_is_derivable() -> None:
