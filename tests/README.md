@@ -34,6 +34,15 @@ uv run pytest -m benchmark                     # accuracy floors; real-dataset t
 SORETHUMB_REQUIRE_NETWORK=1 uv run pytest -m benchmark   # ...or fail instead of skipping
 ```
 
+`tests/repo_check/test_dist_artifacts.py` validates the wheel and sdist that
+`uv build` leaves in `dist/`, and skips when there is nothing built. Run it
+after a build, with `SORETHUMB_REQUIRE_DIST=1` to fail instead of skipping (CI's
+`build` job does):
+
+```bash
+uv build && SORETHUMB_REQUIRE_DIST=1 uv run pytest tests/repo_check/test_dist_artifacts.py -m repo_check
+```
+
 CI (`.github/workflows/`) runs the same lanes: `ci.yml` for pull requests,
 `release-validation.yml` (reusable) for the full pre-release set, and
 `scripts/release.sh` locally before a tag. `ci.yml` also gates the changed lines

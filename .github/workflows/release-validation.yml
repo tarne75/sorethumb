@@ -215,14 +215,20 @@ jobs:
       - name: Check distribution metadata
         run: uvx twine check dist/*
       - name: Assert required paths, no unintended files, and matching metadata (wheel + sdist)
-        # A wheel-only pipeline can't catch a broken OR over-inclusive sdist
-        #: required-path presence (py.typed, SQL migrations, LICENSE,
-        # README), rejection of repository-only material/dev-tool caches
-        # (a past sdist here silently shipped .claude/ and .hypothesis/ --
-        # see tests/repo_check/test_dist_artifacts.py's module docstring),
-        # and wheel/sdist metadata agreement are all real, versioned test
+        # A wheel-only pipeline can't catch a broken OR over-inclusive sdist:
+        # required-path presence (py.typed, SQL migrations, LICENSE, README),
+        # the sdist's exact top level (derived from the hatch allowlist),
+        # rejection of repository-only material/dev-tool caches (a past sdist
+        # here silently shipped .claude/ and .hypothesis/ -- see
+        # tests/repo_check/test_dist_artifacts.py's module docstring), and
+        # wheel/sdist/pyproject metadata agreement are all real, versioned test
         # assertions, not throwaway CI-only bash -- run them the same way
         # here as anyone can locally after `uv build`.
+        # SORETHUMB_REQUIRE_DIST turns "artifact not built" from a skip (the
+        # friendly local default) into a failure, so a build step that
+        # produced nothing cannot pass this step by skipping every test.
+        env:
+          SORETHUMB_REQUIRE_DIST: "1"
         run: uv run pytest tests/repo_check/test_dist_artifacts.py -v -m repo_check
       - name: Install each artifact (wheel, sdist) into clean venvs; smoke-test core + every advertised extra
         # Both artifacts get the exact same checks -- a wheel-only
@@ -242,6 +248,12 @@ jobs:
             "$venv/bin/pip" install --upgrade pip
             "$venv/bin/pip" install "$artifact"
             "$venv/bin/sorethumb" --version
+            # Installed metadata, runtime __version__, pyproject.toml, the
+            # artifact file name and the CLI must agree, and pip must have
+            # installed this very file. -I keeps the checkout off sys.path.
+            "$venv/bin/python" -I scripts/check_installed_dist.py \
+              --artifact "$artifact_name" --file "$artifact" \
+              --pyproject pyproject.toml --console-script "$venv/bin/sorethumb"
             "$venv/bin/python" -c "
           import sorethumb_ml
           from sorethumb_ml import Config, SourceConfig, run_detection
@@ -288,13 +300,20 @@ jobs:
           name: dist
           path: dist/
 
-  # The exact built wheel, installed the way a Windows user would: pip in a
-  # fresh venv, from PowerShell (deliberately not bash), on the oldest and
-  # newest supported Python, then the console script and the README
-  # quickstart; plus the [explain] extra. The build job above only installs on
-  # Ubuntu, so this is the one place the Windows console-script entry point
-  # (sorethumb.exe) is exercised from a real install rather than a checkout.
+  # The exact built wheel AND sdist, each installed the way a Windows user
+  # would: pip in its own fresh venv, from PowerShell (deliberately not bash),
+  # on the oldest and newest supported Python, then the version-agreement
+  # check, the console script, the README quickstart and a zero-config CLI
+  # run; plus the [explain] extra on the wheel. The sdist is installed from
+  # the downloaded .tar.gz with --no-binary, so pip must build it from source
+  # (hatchling, via PEP 517 build isolation) -- the path a user without a
+  # matching wheel takes. The build job above only installs on Ubuntu, so this
+  # is the one place the Windows console-script entry point (sorethumb.exe) is
+  # exercised from a real install rather than a checkout.
+  # The explicit name keeps the wheel jobs' check names exactly what the
+  # protect-main ruleset requires; only the sdist jobs add ", sdist".
   windows-install-smoke:
+    name: windows-install-smoke (${{ matrix.python }}${{ matrix.extra != '' && format(', {0}', matrix.extra) || '' }}${{ matrix.artifact == 'sdist' && ', sdist' || '' }})
     needs: build
     runs-on: windows-latest
     timeout-minutes: 20
@@ -304,10 +323,19 @@ jobs:
         include:
           - python: "3.11"
             extra: ""
+            artifact: wheel
           - python: "3.13"
             extra: ""
+            artifact: wheel
           - python: "3.12"
             extra: "[explain]"
+            artifact: wheel
+          - python: "3.11"
+            extra: ""
+            artifact: sdist
+          - python: "3.13"
+            extra: ""
+            artifact: sdist
     defaults:
       run:
         shell: pwsh
@@ -320,28 +348,53 @@ jobs:
         with:
           name: dist
           path: dist
-      - name: Install the wheel into a clean venv
+      - name: Install the ${{ matrix.artifact }} into a clean venv
         run: |
           $ErrorActionPreference = "Stop"
-          python -m venv "$env:RUNNER_TEMP\smoke"
-          $wheel = (Get-ChildItem dist\*.whl).FullName
-          & "$env:RUNNER_TEMP\smoke\Scripts\python.exe" -m pip install --upgrade pip
-          & "$env:RUNNER_TEMP\smoke\Scripts\python.exe" -m pip install "$wheel${{ matrix.extra }}"
+          $venv = "$env:RUNNER_TEMP\smoke-${{ matrix.artifact }}"
+          $pattern = if ("${{ matrix.artifact }}" -eq "sdist") { "*.tar.gz" } else { "*.whl" }
+          $found = @(Get-ChildItem dist -Filter $pattern)
+          if ($found.Count -ne 1) { Write-Error "expected exactly one dist\$pattern, found $($found.Count)"; exit 1 }
+          $artifact = $found[0].FullName
+          "SMOKE_VENV=$venv" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "SMOKE_ARTIFACT=$artifact" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          python -m venv $venv
+          & "$venv\Scripts\python.exe" -m pip install --upgrade pip
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ("${{ matrix.artifact }}" -eq "sdist") {
+            & "$venv\Scripts\python.exe" -m pip install --no-binary sorethumb-ml --no-cache-dir "$artifact"
+          } else {
+            & "$venv\Scripts\python.exe" -m pip install "$artifact${{ matrix.extra }}"
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Installed metadata, runtime version and pyproject.toml agree
+        # Distribution metadata, sorethumb_ml.__version__, the checkout's
+        # pyproject.toml, the artifact's file name and `sorethumb --version`
+        # must all be one version, and pip's direct_url.json must name the
+        # downloaded .whl / .tar.gz (so a wheel can never stand in for the
+        # sdist). -I keeps the checkout off sys.path: this imports what pip
+        # installed. Run from the temp dir for the same reason.
+        run: |
+          $ErrorActionPreference = "Stop"
+          Push-Location $env:RUNNER_TEMP
+          & "$env:SMOKE_VENV\Scripts\python.exe" -I "$env:GITHUB_WORKSPACE\scripts\check_installed_dist.py" --artifact ${{ matrix.artifact }} --file "$env:SMOKE_ARTIFACT" --pyproject "$env:GITHUB_WORKSPACE\pyproject.toml" --console-script "$env:SMOKE_VENV\Scripts\sorethumb.exe"
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { exit $code }
       - name: Console script
         run: |
           $ErrorActionPreference = "Stop"
-          & "$env:RUNNER_TEMP\smoke\Scripts\sorethumb.exe" --version
+          & "$env:SMOKE_VENV\Scripts\sorethumb.exe" --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & "$env:RUNNER_TEMP\smoke\Scripts\sorethumb.exe" --help | Out-Null
+          & "$env:SMOKE_VENV\Scripts\sorethumb.exe" --help | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: README quickstart against the installed wheel
+      - name: README quickstart against the installed ${{ matrix.artifact }}
         run: |
           $ErrorActionPreference = "Stop"
           python docs/check_readme_snippets.py --extract-python "$env:RUNNER_TEMP\quickstart.py"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Push-Location $env:RUNNER_TEMP
-          $out = & "$env:RUNNER_TEMP\smoke\Scripts\python.exe" "$env:RUNNER_TEMP\quickstart.py" 2>&1 | Out-String
+          $out = & "$env:SMOKE_VENV\Scripts\python.exe" "$env:RUNNER_TEMP\quickstart.py" 2>&1 | Out-String
           $code = $LASTEXITCODE
           Pop-Location
           Write-Output $out
@@ -353,15 +406,15 @@ jobs:
           $ErrorActionPreference = "Stop"
           $work = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP\zero-config" -Force
           Push-Location $work
-          & "$env:RUNNER_TEMP\smoke\Scripts\python.exe" -c "import numpy as np, polars as pl; rng = np.random.default_rng(0); a = rng.normal(50, 10, 500); a[:5] = 900; pl.DataFrame({'amount': a, 'region': rng.choice(['us', 'eu'], 500), 'temp': rng.normal(20, 3, 500)}).write_csv('data.csv')"
-          cmd /c "$env:RUNNER_TEMP\smoke\Scripts\sorethumb.exe run data.csv < NUL > run.txt 2>&1"
+          & "$env:SMOKE_VENV\Scripts\python.exe" -c "import numpy as np, polars as pl; rng = np.random.default_rng(0); a = rng.normal(50, 10, 500); a[:5] = 900; pl.DataFrame({'amount': a, 'region': rng.choice(['us', 'eu'], 500), 'temp': rng.normal(20, 3, 500)}).write_csv('data.csv')"
+          cmd /c "$env:SMOKE_VENV\Scripts\sorethumb.exe run data.csv < NUL > run.txt 2>&1"
           $code = $LASTEXITCODE
           $run = Get-Content run.txt -Raw
           Write-Output $run
           if ($code -ne 0) { exit $code }
           if ($run -notmatch "succeeded=1") { Write-Error "zero-config run did not report a successful group"; exit 1 }
           if ($run -match "Aborted") { Write-Error "zero-config run prompted with stdin from NUL"; exit 1 }
-          $rows = & "$env:RUNNER_TEMP\smoke\Scripts\sorethumb.exe" anomalies --top 5 --json | Out-String
+          $rows = & "$env:SMOKE_VENV\Scripts\sorethumb.exe" anomalies --top 5 --json | Out-String
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Output $rows
           if (($rows | ConvertFrom-Json).Count -lt 1) { Write-Error "anomalies returned no rows"; exit 1 }
