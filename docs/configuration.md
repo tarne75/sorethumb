@@ -62,7 +62,7 @@ so trivial changes do not invalidate cached artefacts.
 | --- | --- | --- | --- |
 | `profiling.null_ratio_drop` | float | 0.7 | Columns with null_ratio > this are classified 'high_null' and dropped. A missing-indicator feature is still emitted when missing_indicators=True. |
 | `profiling.null_ratio_flag` | float | 0.0 | Columns with null_ratio > this (and <= null_ratio_drop) get a '<col>__is_missing' indicator feature appended. Default 0.0 means any column with at least one null emits an indicator. |
-| `profiling.near_constant_distinct` | int | 3 | A non-empty column with n_unique <= this is classified 'near_constant' and dropped (too low variance to be useful). |
+| `profiling.near_constant_distinct` | int | 2 | A non-empty column with 2 < n_unique <= this is classified 'near_constant' and dropped. Binary columns (n_unique == 2) are never dropped by this rule -- they carry signal regardless of this setting. The default (2) therefore drops nothing: a rare category is exactly the kind of signal a review tool exists to surface, so dropping on low cardinality alone is opt-in. Raise this (e.g. to 5) to drop columns with few distinct values anyway. |
 | `profiling.identifier_cardinality_ratio` | float | 0.9 | String columns with cardinality_ratio > this are candidates for identifier_like classification (subject to pattern checks). |
 | `profiling.categorical_cardinality_ratio` | float | 0.01 | String columns with cardinality_ratio <= this are classified 'categorical'. Above this threshold they go through the identifier / free-text path. |
 | `profiling.free_text_mean_length` | float | 20.0 | String columns with mean value length > this (after failing other checks) are classified 'free_text' and dropped. |

@@ -25,16 +25,20 @@ def _hash(uri: str) -> str:
     return Config.model_validate({"source": {"uri": uri}, "run": {"workdir": "ws"}}).config_hash()
 
 
-# Taken from the code before canonicalisation existed: these must never move.
+# dataset_id is taken from the code before canonicalisation existed and must never move.
+# config_hash incorporates the whole default Config -- including profiling thresholds -- so
+# it moves whenever a default changes (most recently profiling.near_constant_distinct, 3 -> 2);
+# that is an expected, one-time model-reuse invalidation, not a URI-identity regression. What
+# this test guards is that these four URI spellings keep hashing to the one *current* value.
 _PINNED = [
-    ("/data/sales/2026 Q3.csv", "2026-Q3-f8f9aa16390c", "b7d633fcc63f2a5163b85014361c3894"),
-    ("data/relative.parquet", "relative-fdeb11238495", "1b3550cf47d9dc164a6ab02d32ba4fb8"),
+    ("/data/sales/2026 Q3.csv", "2026-Q3-f8f9aa16390c", "3947beb6bff65facf74f11c5071345ad"),
+    ("data/relative.parquet", "relative-fdeb11238495", "8919f45d716b2c2f58e4ebb6f6c7efd1"),
     (
         "https://example.com/exports/daily.csv?sig=abc",
         "daily-e81dab578786",
-        "50ddc50d817b7fa0ac847496a399fe4f",
+        "a9fe415c8e57c36b0c84233a9e94caac",
     ),
-    ("file:///tmp/x%20y.csv", "x-20y-3ce4812025b2", "9d123ab29469fce0b68efc20d09604cd"),
+    ("file:///tmp/x%20y.csv", "x-20y-3ce4812025b2", "2792c7ddd0e57c7a8e357e07c983aea1"),
 ]
 
 

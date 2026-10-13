@@ -150,15 +150,78 @@ def test_read_jsonl(tmp_path: Path) -> None:
     assert result.shape[0] == 10
 
 
-def test_read_single_column_csv_raises(tmp_path: Path) -> None:
-    p = tmp_path / "bad.csv"
+def test_read_single_column_csv_is_accepted(tmp_path: Path) -> None:
+    """A genuinely one-column CSV (e.g. a single numeric measurement) is valid data on its own."""
+    p = tmp_path / "ok.csv"
     p.write_text("only_col\n1\n2\n3\n")
+
+    from sorethumb_ml.config import SourceConfig
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result.shape == (3, 1)
+
+
+def test_read_all_string_csv_is_accepted(tmp_path: Path) -> None:
+    """Several genuinely categorical columns are valid data; not every column needs a number."""
+    p = tmp_path / "cats.csv"
+    p.write_text("region,method\nus,card\neu,cash\napac,card\n")
+
+    from sorethumb_ml.config import SourceConfig
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result.shape == (3, 2)
+
+
+def test_read_single_column_csv_with_untried_delimiter_raises(tmp_path: Path) -> None:
+    """A one-column result whose header contains ';' (not the configured separator) is refused."""
+    p = tmp_path / "bad.csv"
+    p.write_text("a;b;c\n1;2;3\n4;5;6\n")
 
     from sorethumb_ml.config import SourceConfig
 
     cfg = SourceConfig(uri=str(p))
     with pytest.raises(SchemaError, match="only one column"):
         read_frame(p, cfg).collect()
+
+
+def test_read_all_string_csv_with_untried_delimiter_raises(tmp_path: Path) -> None:
+    """Two all-string columns whose header also contains '|' (not configured) are refused."""
+    p = tmp_path / "bad.csv"
+    p.write_text("a,b|c\nfoo,bar\nbaz,qux\n")
+
+    from sorethumb_ml.config import SourceConfig
+
+    cfg = SourceConfig(uri=str(p))
+    with pytest.raises(SchemaError, match="inferred as String"):
+        read_frame(p, cfg).collect()
+
+
+def test_read_single_column_parquet_is_accepted(tmp_path: Path) -> None:
+    """Parquet has no delimiter to get wrong; a narrow frame there is simply the data."""
+    import polars as pl
+
+    p = tmp_path / "ok.parquet"
+    pl.DataFrame({"amount": [1.0, 2.0, 3.0]}).write_parquet(p)
+
+    from sorethumb_ml.config import SourceConfig
+
+    cfg = SourceConfig(uri=str(p))
+    result = read_frame(p, cfg).collect()
+    assert result.shape == (3, 1)
+
+
+def test_resolve_local_rejects_a_directory(tmp_path: Path) -> None:
+    from sorethumb_ml.config import SourceConfig
+    from sorethumb_ml.errors import SourceError
+    from sorethumb_ml.io.source import resolve_source
+
+    target = tmp_path / "a-directory"
+    target.mkdir()
+    cfg = SourceConfig(uri=str(target))
+    with pytest.raises(SourceError, match="not a file"):
+        resolve_source(cfg, cache_dir=tmp_path / "cache")
 
 
 def test_read_auto_format_unknown_ext_raises(tmp_path: Path) -> None:
@@ -334,15 +397,27 @@ def test_read_json(tmp_path: Path) -> None:
     assert "x" in result.columns
 
 
-def test_read_all_string_schema_raises(tmp_path: Path) -> None:
-    """A schema where every column is String (no numeric signal at all) raises."""
+def test_read_all_string_schema_is_accepted(tmp_path: Path) -> None:
+    """A schema where every column is genuinely String (no numeric signal at all) is valid data."""
     from sorethumb_ml.config import SourceConfig
 
     p = tmp_path / "strings.csv"
     p.write_text("col_a,col_b,col_c\nfoo,bar,baz\nhello,world,test\n")
 
     cfg = SourceConfig(uri=str(p))
-    with pytest.raises(SchemaError, match="String"):
+    result = read_frame(p, cfg).collect()
+    assert result.shape == (2, 3)
+
+
+def test_read_all_string_schema_with_an_undersampled_numeric_column_raises(tmp_path: Path) -> None:
+    """A full re-scan finding a numeric column among the 'all-string' sample is still refused."""
+    p = tmp_path / "undersampled.csv"
+    _write_null_heavy_csv(p, n_null_rows=3, n_data_rows=17)
+
+    from sorethumb_ml.config import SourceConfig
+
+    cfg = SourceConfig(uri=str(p), read_options={"infer_schema_length": 3})
+    with pytest.raises(SchemaError, match="infer_schema_length"):
         read_frame(p, cfg).collect()
 
 

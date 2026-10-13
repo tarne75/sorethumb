@@ -6,6 +6,28 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Narrow and all-categorical sources**: a CSV/TSV with one column, or with
+  every column inferred as String, is no longer refused outright -- it is
+  refused only on concrete evidence of a wrong delimiter (the header contains
+  a delimiter character other than the one configured) or, for an all-string
+  schema, when a full-file re-scan finds a numeric column the sampled
+  `infer_schema_length` missed. A local source that is a directory now fails
+  with a clear `SourceError` instead of a low-level error deep in the pipeline.
+- **Low-cardinality columns are no longer dropped by default**: a column with
+  2 or 3 distinct values (a rare category, a small set of status codes) often
+  carries exactly the signal a review tool exists to surface.
+  `profiling.near_constant_distinct` now defaults to 2, which drops nothing;
+  raise it explicitly to restore the previous drop-on-low-cardinality
+  behaviour. This changes the default feature matrix and realised detector
+  rates for affected datasets.
+- **KMeans on discrete data**: with few distinct feature rows relative to the
+  row count, k now goes straight to one cluster per distinct row (bounded)
+  instead of using the elbow/silhouette heuristic, which could merge a rare
+  one-hot category into a common cluster and leave it with ~0 distance to
+  that cluster's centroid -- never flagged by the natural CBLOF boundary.
+
 ## [0.1.0] - 2026-09-21
 
 First public release.

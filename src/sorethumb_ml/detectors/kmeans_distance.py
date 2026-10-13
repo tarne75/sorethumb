@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 _SILHOUETTE_SAMPLE = 20_000
 _DEFAULT_LARGE_COVERAGE = 0.90
+_DISCRETE_K_CEILING = 50
 _CURATED = frozenset({"k", "k_min", "k_max", "n_init", "large_cluster_coverage"})
 
 
@@ -228,11 +229,34 @@ class KMeansDetector:
 
 
 def _select_k(X: np.ndarray, k_min: int, k_max: int, seed: int) -> int:
-    """Choose k by combining normalised-elbow and silhouette criteria."""
+    """Choose k by combining normalised-elbow and silhouette criteria.
+
+    Bypassed entirely when there is clear duplication -- few distinct feature
+    rows (<= ``_DISCRETE_K_CEILING``) relative to the row count (at most half
+    as many): on low-cardinality or all-categorical features, most rows
+    collapse onto a handful of distinct vectors, and the elbow/silhouette
+    heuristic (tuned for continuous data, and not immune to picking a
+    different k across floating-point environments when several k score
+    almost identically) can settle on a k well below that count. A rare
+    combination then gets folded into a common cluster, leaving it with ~0
+    distance to that cluster's centroid -- never flagged by the natural CBLOF
+    boundary. In that regime there is no heuristic left to apply: the natural
+    number of clusters *is* the number of distinct vectors, so k goes
+    straight to one cluster per distinct vector (less one, so the rarest
+    forms its own small cluster rather than blending into a neighbour). A
+    small continuous dataset with no real duplication (every row distinct)
+    must NOT take this path -- it would make nearly every row its own
+    cluster -- hence the row-count-relative half, not just the absolute cap.
+    """
+    n_distinct = len(np.unique(X, axis=0))
+    if n_distinct <= _DISCRETE_K_CEILING and n_distinct <= len(X) // 2:
+        return max(k_min, min(n_distinct - 1, len(X) - 1))
+
     from sklearn.cluster import KMeans  # noqa: PLC0415
     from sklearn.metrics import silhouette_score  # noqa: PLC0415
 
-    ks = list(range(k_min, min(k_max, len(X) - 1) + 1))
+    k_max = min(k_max, len(X) - 1)
+    ks = list(range(k_min, k_max + 1))
     if len(ks) == 1:
         return ks[0]
 
