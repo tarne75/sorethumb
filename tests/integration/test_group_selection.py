@@ -147,13 +147,14 @@ def test_valid_sparse_period_is_not_a_group_selection_error(tmp_path: Path) -> N
 def test_period_with_truly_zero_rows_raises_a_different_error_than_a_selector_mismatch(
     tmp_path: Path,
 ) -> None:
-    """A period matching *zero* rows outright hits fit_features' own
-    "encoded feature matrix has zero columns" guard (profiling a genuinely
-    empty frame classifies every column as droppable) -- a pre-existing,
-    unrelated limitation these tests do not address. The only thing they
-    care about here: this must never be misreported as -- or silently
-    swallowed into -- a group_selection_error; it is a different exception
-    entirely, raised well before group discovery even runs."""
+    """A period matching *zero* rows outright is diagnosed at the period-window filter
+    itself, naming the period, the window, the time column and the data's available
+    range -- not left to surface later as fit_features' opaque "encoded feature matrix
+    has zero columns" (every column of a genuinely empty frame profiles as droppable,
+    which says nothing about a period window being the actual cause). The only thing
+    these tests care about here: this must never be misreported as -- or silently
+    swallowed into -- a group_selection_error; it is a different exception entirely,
+    raised well before group discovery even runs."""
     parquet = tmp_path / "data.parquet"
     write_two_period_parquet(parquet)  # only 2024-01-15 and 2024-01-16 have data
 
@@ -164,9 +165,9 @@ def test_period_with_truly_zero_rows_raises_a_different_error_than_a_selector_mi
         time_column="ts",
         history_kwargs={"period_granularity": "day", "roll_non_business": False},
     )
-    from sorethumb_ml.errors import PlanError
+    from sorethumb_ml.errors import SchemaError
 
-    with pytest.raises(PlanError):
+    with pytest.raises(SchemaError, match="selected 0 of"):
         run_detection(cfg, no_report=True, period_label_override="2024-01-17")
 
 

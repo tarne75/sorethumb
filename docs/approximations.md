@@ -236,6 +236,22 @@ robust/standard scaling to stay a unit circle), and is a real new feature rather
 fix to an invalid state. If cyclical adjacency matters for a given dataset, derive
 `sin(2*pi*hour/24)`/`cos(2*pi*hour/24)`-style columns upstream before feeding data in.
 
+## Date/time-as-text detection — sampled, and ISO parsing relies on polars' own inference
+
+A String column is auto-detected as a date/time (`profiling/temporal.py`) when at
+least 99% of up to 2,000 sampled non-null values parse under one candidate format;
+the remaining up to 1% become null, same as any other missing value. A column
+whose genuine failure rate is just under that threshold can therefore still be
+accepted, with the failing tail silently nulled (a warning names the count). ISO
+dates and datetimes (`format=None`) are parsed by polars' own flexible inference
+rather than a fixed format string, so a change in polars' inference between
+versions could shift which values parse without any code change here; `uv.lock`
+pins the exact version this behaviour was verified against. Day-first vs
+month-first numeric dates (`31/01/2026`-style) are the one case this module
+resolves itself rather than delegating to polars: an ambiguous sample (every day
+and month ≤ 12) is never guessed, left as text with a warning naming
+`columns.datetime_formats` as the fix.
+
 ## `auto` contamination — median of natural flag rates
 
 When `scoring.contamination = "auto"`, the review budget is derived as the median

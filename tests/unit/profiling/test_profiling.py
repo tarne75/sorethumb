@@ -651,9 +651,10 @@ def test_build_feature_plan_with_reference_column(tmp_path: object) -> None:
     assert all(not f.startswith("ref_col") for f in plan.output_features)
 
 
-def test_build_feature_plan_non_chosen_temporal_dropped(tmp_path: object) -> None:
-    """When two temporal columns exist and neither is config.time_column, the
-    lower-cardinality one is dropped rather than both being derived."""
+def test_build_feature_plan_constant_temporal_column_dropped(tmp_path: object) -> None:
+    """A constant-valued temporal column is dropped like any other constant column --
+    by the 'constant' classification rule, which wins regardless of dtype, not because
+    it failed to be picked as config.columns.time_column."""
     from datetime import date
 
     dates_a = [date(2020, 1, 1) + timedelta(days=i) for i in range(50)]
@@ -662,14 +663,37 @@ def test_build_feature_plan_non_chosen_temporal_dropped(tmp_path: object) -> Non
     df = pl.DataFrame(
         {
             "date_a": dates_a,  # 50 unique values — will be chosen
-            "date_b": dates_b,  # 1 unique value — will be dropped
+            "date_b": dates_b,  # 1 unique value — constant, dropped regardless of chosen-ness
             "value": list(range(50)),
         }
     )
     cfg = _build_config(tmp_path)
     plan = build_feature_plan(df, cfg)
-    dropped = [d for d in plan.decisions if d.column == "date_b" and d.treatment == Treatment.drop]
-    assert dropped, "non-chosen temporal column should be dropped"
+    date_b = next(d for d in plan.decisions if d.column == "date_b")
+    assert date_b.col_class == ColumnClass.constant
+    assert date_b.treatment == Treatment.drop
+
+
+def test_build_feature_plan_derives_every_non_constant_temporal_column(tmp_path: object) -> None:
+    """Every temporal column that is not itself dropped for an unrelated reason (constant,
+    high-null, ...) gets derive_time features -- not only config.columns.time_column."""
+    from datetime import date
+
+    df = pl.DataFrame(
+        {
+            "date_a": [date(2020, 1, 1) + timedelta(days=i) for i in range(50)],
+            "date_b": [date(2021, 1, 1) + timedelta(days=i * 3) for i in range(50)],
+            "value": list(range(50)),
+        }
+    )
+    cfg = _build_config(tmp_path)
+    plan = build_feature_plan(df, cfg)
+    assert plan.chosen_time_column in ("date_a", "date_b")
+    not_chosen = "date_b" if plan.chosen_time_column == "date_a" else "date_a"
+    for col in ("date_a", "date_b"):
+        decision = next(d for d in plan.decisions if d.column == col)
+        assert decision.treatment == Treatment.derive_time
+    assert any(f.startswith(f"{not_chosen}__") for f in plan.output_features)
 
 
 # ---------------------------------------------------------------------------

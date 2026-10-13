@@ -29,6 +29,7 @@ from sorethumb_ml.profiling.classify import (
 )
 from sorethumb_ml.profiling.missing import float_nan_to_null
 from sorethumb_ml.profiling.profile import ColumnProfile, profile_columns
+from sorethumb_ml.profiling.temporal import TemporalParse
 
 _NUMERIC_BASE_TYPES = (
     pl.Int8,
@@ -152,6 +153,10 @@ class FeaturePlan:
     output_dtype: str = "float32"  # "float32" | "float64"
     # Columns demoted from one-hot to frequency encoding due to width control
     demoted_columns: set[str] = field(default_factory=set)
+    # How a date/time-as-text column was turned into a real Date/Datetime/Time value
+    # (see profiling/temporal.py); {} for plans persisted before this field existed, or
+    # for a dataset with no such column. apply_feature_plan replays this on new data.
+    parsed_temporal: dict[str, TemporalParse] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate that every output feature has a derived_to_original entry."""
@@ -197,6 +202,7 @@ class FeaturePlan:
             "scaler_type": self.scaler_type,
             "output_dtype": self.output_dtype,
             "demoted_columns": sorted(self.demoted_columns),
+            "parsed_temporal": {col: parse.to_dict() for col, parse in self.parsed_temporal.items()},
         }
         return json.dumps(d, sort_keys=True)
 
@@ -236,6 +242,9 @@ class FeaturePlan:
             scaler_type=d.get("scaler_type", "robust"),
             output_dtype=d.get("output_dtype", "float32"),
             demoted_columns=set(d.get("demoted_columns", [])),
+            parsed_temporal={
+                col: TemporalParse.from_dict(spec) for col, spec in d.get("parsed_temporal", {}).items()
+            },
         )
 
 
@@ -244,11 +253,24 @@ class FeaturePlan:
 # ------------------------------------------------------------------
 
 
-def build_feature_plan(df: pl.DataFrame, config: Config) -> FeaturePlan:
+def build_feature_plan(
+    df: pl.DataFrame,
+    config: Config,
+    parsed_temporal: dict[str, TemporalParse] | None = None,
+) -> FeaturePlan:
     """Profile *df*, classify columns, collect encoding artefacts, return a ``FeaturePlan``.
 
     The returned plan is fully fitted: applying it to any frame with the same
     schema will produce an identical feature space (before scaling / PCA).
+
+    *df* is assumed already parsed: a caller that detected date/time-as-text
+    columns (:func:`sorethumb_ml.profiling.temporal.detect_temporal_parses`)
+    must cast *df* with :func:`~sorethumb_ml.profiling.temporal.apply_temporal_parses`
+    itself before calling this, and pass the same detection result as
+    *parsed_temporal* so it is recorded on the plan for ``apply_feature_plan``
+    to replay later. Detection isn't done here because it must also run
+    before period-window filtering, which happens earlier in the pipeline
+    than this function does.
     """
     protected = _build_protected(config.columns)
 
@@ -281,10 +303,6 @@ def build_feature_plan(df: pl.DataFrame, config: Config) -> FeaturePlan:
 
     for p, col_class, reason in classified:
         treatment = treatment_for(col_class, p, config.features)
-
-        # Non-chosen temporal columns are dropped
-        if col_class == ColumnClass.temporal and p.name != chosen_time:
-            treatment = Treatment.drop
 
         # Ignored columns (id_column, reference_column, pattern matches) never emit indicators
         emit_indicator = (
@@ -328,6 +346,7 @@ def build_feature_plan(df: pl.DataFrame, config: Config) -> FeaturePlan:
         imputation_medians=medians,
         chosen_time_column=chosen_time,
         time_derivatives=list(config.features.time_derivatives),
+        parsed_temporal=dict(parsed_temporal) if parsed_temporal else {},
     )
 
 

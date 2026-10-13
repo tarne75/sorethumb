@@ -178,6 +178,14 @@ class AntiCorrelatedMemberWarning(SorethumbWarning):
     """
 
 
+class AmbiguousDateFormatWarning(SorethumbWarning):
+    """A String column parses as a date under more than one day/month order.
+
+    Auto-detection never guesses between the two; the column is left as text.
+    Set ``columns.datetime_formats[col]`` to the correct order to resolve it.
+    """
+
+
 class ZeroAnomalyWarning(SorethumbWarning):
     """A successful group's configured intersection flagged zero rows.
 

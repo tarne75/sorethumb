@@ -176,6 +176,17 @@ class ColumnsConfig(BaseModel):
             "Useful for narrowing scope without touching the source schema."
         ),
     )
+    datetime_formats: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Force a column to be parsed as a date/time, overriding auto-detection. The value is "
+            "either a strptime-style format (e.g. '%d/%m/%Y') for a String column, or 'epoch_s' / "
+            "'epoch_ms' for an integer or float column holding Unix seconds or milliseconds. "
+            "Auto-detection never guesses an ambiguous day/month order (e.g. both <= 12), and never "
+            "treats an integer column as time -- this is the only way to resolve either case. A "
+            "value that fails to parse becomes null, like any other missing value."
+        ),
+    )
 
 
 class ProfilingConfig(BaseModel):

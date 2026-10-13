@@ -69,6 +69,19 @@ Use this table to decide:
    [columns]
    time_column = "timestamp"
    ```
+   A timestamp stored as text (`"2026-01-15"`, `"2026-01-15T10:30:00"`, a
+   bare time of day, or a day/month/year date) is detected and parsed
+   automatically -- it does not need to already be a native date/time
+   column, and every such column gets temporal features, not only
+   `time_column`. An ambiguous day/month order (every value's day and month
+   both ≤ 12, so either reading would parse) is never guessed; set
+   `columns.datetime_formats` to resolve it, or to force-parse a column auto-detection
+   misses, including Unix epoch seconds/milliseconds:
+   ```toml
+   [columns.datetime_formats]
+   "order_date" = "%m/%d/%Y"   # force month-first where it would otherwise be ambiguous
+   "created_at" = "epoch_s"    # an integer column holding Unix seconds
+   ```
 
 ---
 

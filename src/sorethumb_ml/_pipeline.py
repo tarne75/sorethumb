@@ -60,6 +60,11 @@ from sorethumb_ml.io.readers import collect_frame, read_frame
 from sorethumb_ml.io.source import resolve_source
 from sorethumb_ml.io.uri import display_source_uri, query_key_names, source_digest
 from sorethumb_ml.profiling.plan import FeaturePlan, build_feature_plan
+from sorethumb_ml.profiling.temporal import (
+    apply_temporal_parses,
+    convert_durations_to_seconds,
+    detect_temporal_parses,
+)
 from sorethumb_ml.report.html import GroupSection, RunMeta, render_report
 from sorethumb_ml.scoring.calibrate import Calibrator
 from sorethumb_ml.scoring.combine import ScoreEnsemble, descending_order
@@ -560,6 +565,21 @@ def _resolve_and_filter_period(
         len(filtered),
         len(df_raw),
     )
+    if len(filtered) == 0 and len(df_raw) > 0:
+        # Everything downstream (profiling, scaler fit) runs on the full dataset before any
+        # per-group min_records check ever sees it -- a 0-row frame here doesn't fail there with
+        # "too few records", it fails much later and far less legibly (every column profiles as
+        # 'empty' with no rows at all, so build_feature_plan reports a zero-width feature matrix
+        # with no indication a period window, not the data itself, is why). Naming the actual
+        # cause -- and the available range -- here is strictly more useful than letting that happen.
+        observed = df_raw[time_col].drop_nulls()
+        available = f"{observed.min()!s} to {observed.max()!s}" if len(observed) else "no non-null values"
+        msg = (
+            f"Period {label!r}: window [{period_from}, {period_to}) selected 0 of {len(df_raw)} rows "
+            f"from {time_col!r} (available range: {available}). Pass --period, or use "
+            "`sorethumb backfill`, to pick a period that overlaps the data."
+        )
+        raise SchemaError(msg)
     return filtered, label, (period_from, period_to)
 
 
@@ -726,6 +746,15 @@ def run_detection(
         # violation -- see _validate_id_column_identity.
         id_identity_scope = _validate_id_column_identity(df_raw, config)
 
+        # A date/timestamp stored as text, or a Duration column, is cast to a
+        # real Date/Datetime/Time/numeric value here -- before period
+        # filtering (so a text columns.time_column compares correctly, not
+        # lexically) and before build_feature_plan (so every later stage sees
+        # the same temporal dtypes a native Parquet column would have had).
+        parsed_temporal = detect_temporal_parses(df_raw, config.columns)
+        df_raw = apply_temporal_parses(df_raw, parsed_temporal)
+        df_raw = convert_durations_to_seconds(df_raw)
+
         # ── 2. Period resolution + window filter ────────────────────────
         df_raw, period_label, period_window = _resolve_and_filter_period(
             df_raw, config, period_label_override
@@ -778,7 +807,7 @@ def run_detection(
 
         # ── 4. Build feature plan on full dataset ────────────────────────
         with _timed_stage("feature-fit", slow_after):
-            plan = build_feature_plan(df_raw, config)
+            plan = build_feature_plan(df_raw, config, parsed_temporal)
 
             # Fit scaler / correlation / PCA on the full frame so parameters are
             # stable across groups -- each group's matrix is a subset of this
@@ -1137,6 +1166,12 @@ def score_forward(
 
         # See run_detection for why this must happen before any filter below.
         id_identity_scope = _validate_id_column_identity(df_raw, config)
+
+        # Replay the training run's own parse (never re-detect: this plan's
+        # decisions were fixed against that parse, and detection could
+        # legitimately differ on a fresh load -- see run_detection).
+        df_raw = apply_temporal_parses(df_raw, plan.parsed_temporal)
+        df_raw = convert_durations_to_seconds(df_raw)
 
         # ── Period resolution + window filter (same rules as run_detection) ──
         # score-forward does not write history: its numbers come from a reused
