@@ -1,0 +1,170 @@
+# Benchmark budgets per anomaly type (scenario kind), version-controlled.
+#
+# A budget is a bound a *good* ensemble policy should meet on that anomaly
+# type. Budgets are set from the principles below, NOT fitted to measured
+# results -- a bound moved to make a policy pass is no budget. Change one only
+# with a reason in the commit message, and bump `version`.
+#
+#   min_average_precision     ranking: well above the ~0.03-0.05 prevalence
+#                             (chance), higher where the anomaly is easy
+#   min_flag_precision        at least 1 in 4 flagged rows is a real anomaly
+#   min_flag_recall           the flag catches at least 1 in 4 anomalies
+#   max_flag_false_positive_rate
+#                             normals flagged: no more than the review budget
+#   max_over_flag_ratio       flagged count <= 1.5x the review budget
+#   min_flag_jaccard_stability
+#                             a refit on 80% of the training rows keeps at
+#                             least half of the same flagged rows
+#   min_rank_stability        ... and the same ranking (Spearman)
+#
+# A metric that is undefined for a cell (NaN: e.g. AP on the single-class
+# swamping holdout) is not checked.
+
+version = 2
+
+[defaults]
+min_average_precision = 0.15
+min_flag_precision = 0.25
+min_flag_recall = 0.25
+max_flag_false_positive_rate = 0.05
+max_over_flag_ratio = 1.5
+min_flag_jaccard_stability = 0.5
+min_rank_stability = 0.8
+
+[kinds.point]
+min_average_precision = 0.8          # far-out points: a working ranking finds them
+
+[kinds.clustered]
+min_average_precision = 0.8          # a separate tight cluster: likewise
+
+[kinds.masking]
+max_flag_false_positive_rate = 0.15  # this scenario's review budget is 15%
+
+[kinds.local]
+
+[kinds.varying_density]
+
+[kinds.contextual]
+
+[kinds.categorical_rare]
+
+[kinds.text_timestamp]
+
+[kinds.irrelevant_columns]
+
+[kinds.all_categorical]
+
+[kinds.swamping]
+# Single-class (all-normal) holdout: only false positives are defined.
+only = ["max_flag_false_positive_rate"]
+
+# ---------------------------------------------------------------------------
+# Accepted limitations of the shipped default (intersection@1, default config)
+# ---------------------------------------------------------------------------
+# Measured on the 2026-10-14 policy matrix (10 seeds, 3 refits). Each is a
+# documented trade-off of the default, not a hidden one; see
+# docs/ensemble-policy.md and docs/benchmarks.md. Remove an entry when the
+# default meets the budget (test_policy_budgets.py fails on a stale entry).
+
+# Unanimity under-flags easy anomalies: the ranking finds them (AP 1.00 / 1.00 /
+# 0.44) but only rows every detector flags are flagged, 11-18% of the review
+# budget. The precision-first design decision, accepted.
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "point"
+bound = "min_flag_recall"
+reason = "unanimity flags ~17% of the review budget; ranking AP 1.00 -- use the ranking, or composite/union for recall"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "clustered"
+bound = "min_flag_recall"
+reason = "unanimity flags ~18% of the review budget; ranking AP 1.00 -- use the ranking, or composite/union for recall"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "masking"
+bound = "min_flag_recall"
+reason = "unanimity flags ~11% of the review budget on a self-masking block; ranking AP 0.44"
+
+# Local and varying-density anomalies: the default detectors are global methods
+# (docs/approximations.md); only union reaches recall here, at ~2x the budget.
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "local"
+bound = "min_average_precision"
+reason = "global-method weakness on locally sparse points (docs/approximations.md)"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "local"
+bound = "min_flag_precision"
+reason = "flags none of the local anomalies; only union@1 does, at ~2x the review budget"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "local"
+bound = "min_flag_recall"
+reason = "flags none of the local anomalies; only union@1 does, at ~2x the review budget"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "varying_density"
+bound = "min_average_precision"
+reason = "global distance misses density-relative anomalies (docs/approximations.md)"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "varying_density"
+bound = "min_flag_precision"
+reason = "flags none of them; only union@1 does, at ~2x the review budget"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "varying_density"
+bound = "min_flag_recall"
+reason = "flags none of them; only union@1 does, at ~2x the review budget"
+
+# Contextual anomalies are near chance under every policy (AP 0.05-0.06): a
+# pipeline limitation (the context is an ordinary feature), not a policy choice.
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "contextual"
+bound = "min_average_precision"
+reason = "every policy is near chance; encoding alone does not learn the conditional structure"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "contextual"
+bound = "min_flag_precision"
+reason = "every policy is near chance; encoding alone does not learn the conditional structure"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "contextual"
+bound = "min_flag_recall"
+reason = "every policy is near chance; encoding alone does not learn the conditional structure"
+
+# A rare level of a 3-value category: profiling.near_constant_distinct = 3 drops
+# the column, so the signal never reaches a detector. Setting it to 2 recovers the
+# ranking (AP 0.05 -> 0.20) but pushes local and varying_density below chance
+# (ROC-AUC 0.65 -> 0.31 / 0.37) when such a column is noise. 3 stays the default:
+# its failure is visible (`inspect` shows the column dropped and why); 2's is a
+# silent below-chance ranking. Remedy: near_constant_distinct = 2 where measured.
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "categorical_rare"
+bound = "min_average_precision"
+reason = "near_constant_distinct=3 drops the 3-value signal column; set it to 2 where measured to help"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "categorical_rare"
+bound = "min_flag_precision"
+reason = "near_constant_distinct=3 drops the 3-value signal column; set it to 2 where measured to help"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "categorical_rare"
+bound = "min_flag_recall"
+reason = "near_constant_distinct=3 drops the 3-value signal column; set it to 2 where measured to help"

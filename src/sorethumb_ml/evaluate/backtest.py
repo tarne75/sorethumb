@@ -10,8 +10,10 @@ on them. This module is the protocol that guards against that:
    significance level and the stability tolerance. The file's sha256 is
    recorded with the result, so it cannot be edited afterwards unnoticed.
 2. **Seed split.** Candidates are developed on :data:`DEVELOPMENT_SEEDS` (the
-   policy matrix's seeds) and judged once on the disjoint
-   :data:`CONFIRMATION_SEEDS`.
+   policy matrix's seeds) and judged once on a disjoint confirmation round
+   (:data:`CONFIRMATION_ROUNDS`). Once a round's results are published its
+   seeds have been seen, so a later round -- :data:`OPEN_ROUND`, the only one
+   that accepts new confirmations -- uses fresh seeds.
 3. **Paired statistics.** Candidate and baseline run on the same seeds, so on
    the same data and split; each hypothesis scenario's per-seed differences in
    the primary metric get a paired bootstrap estimate, and the p-values are
@@ -43,7 +45,11 @@ from sorethumb_ml.evaluate.budgets import BudgetCheck, Budgets
 from sorethumb_ml.scoring.policies import DEFAULT_POLICY_ID, policy_by_id
 
 DEVELOPMENT_SEEDS: tuple[int, ...] = tuple(range(10))
-CONFIRMATION_SEEDS: tuple[int, ...] = tuple(range(10_000, 10_020))
+CONFIRMATION_ROUNDS: dict[int, tuple[int, ...]] = {
+    1: tuple(range(10_000, 10_020)),  # closed 2026-10-14: composite-agreement-v1, discrete-composite-v1
+    2: tuple(range(20_000, 20_020)),
+}
+OPEN_ROUND = 2
 STABILITY_REFITS = 3
 
 # Primary metrics: per-seed values where higher is better.
@@ -79,6 +85,7 @@ class Preregistration:
     stability_tolerance: float
     n_resamples: int
     expected_outcome: str
+    confirmation_round: int
     sha256: str
 
 
@@ -112,6 +119,7 @@ def load_preregistration(path: Path) -> Preregistration:
         stability_tolerance=float(raw.get("stability_tolerance", 0.05)),
         n_resamples=int(raw.get("n_resamples", 10_000)),
         expected_outcome=str(raw.get("expected_outcome", "")).strip(),
+        confirmation_round=int(raw.get("confirmation_round", 1)),
         sha256=hashlib.sha256(raw_bytes).hexdigest(),
     )
     problems: list[str] = []
@@ -136,6 +144,8 @@ def load_preregistration(path: Path) -> Preregistration:
         problems.append("stability_tolerance must be >= 0")
     if prereg.n_resamples < 1000:
         problems.append("n_resamples must be >= 1000")
+    if prereg.confirmation_round not in CONFIRMATION_ROUNDS:
+        problems.append(f"confirmation_round must be one of {sorted(CONFIRMATION_ROUNDS)}")
     if not prereg.hypothesis:
         problems.append("hypothesis must be stated")
     if problems:
@@ -381,6 +391,7 @@ _PER_SEED_KEYS = (
     "flag_f1",
     "flag_false_positive_rate",
     "over_flag_ratio",
+    "false_positive_budget_ratio",
     "flag_jaccard_stability",
     "rank_stability",
     "policy_branch",

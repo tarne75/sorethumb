@@ -9,8 +9,10 @@
 #                             (chance), higher where the anomaly is easy
 #   min_flag_precision        at least 1 in 4 flagged rows is a real anomaly
 #   min_flag_recall           the flag catches at least 1 in 4 anomalies
-#   max_flag_false_positive_rate
-#                             normals flagged: no more than the review budget
+#   max_false_positive_budget_ratio
+#                             wrongly flagged rows <= the review budget in
+#                             whole rows (round(budget x holdout rows)): a
+#                             policy may spend its review budget, never more
 #   max_over_flag_ratio       flagged count <= 1.5x the review budget
 #   min_flag_jaccard_stability
 #                             a refit on 80% of the training rows keeps at
@@ -19,14 +21,22 @@
 #
 # A metric that is undefined for a cell (NaN: e.g. AP on the single-class
 # swamping holdout) is not checked.
+#
+# Previous versions are kept byte-for-byte in budgets-archive/ so a published
+# backtest stays checkable against the budgets it was judged under. v2 -> v3:
+# the false-positive bound was a rate over *normal* rows capped at the review
+# budget, a fraction of *all* rows -- a policy flagging exactly its budget,
+# rounded to whole rows, could breach it with no extra flags at all (13 of 252
+# rows flagged, all wrong: 13/240 = 0.054 > 0.05). v3 states the documented
+# principle in rows.
 
-version = 2
+version = 3
 
 [defaults]
 min_average_precision = 0.15
 min_flag_precision = 0.25
 min_flag_recall = 0.25
-max_flag_false_positive_rate = 0.05
+max_false_positive_budget_ratio = 1.0
 max_over_flag_ratio = 1.5
 min_flag_jaccard_stability = 0.5
 min_rank_stability = 0.8
@@ -38,7 +48,6 @@ min_average_precision = 0.8          # far-out points: a working ranking finds t
 min_average_precision = 0.8          # a separate tight cluster: likewise
 
 [kinds.masking]
-max_flag_false_positive_rate = 0.15  # this scenario's review budget is 15%
 
 [kinds.local]
 
@@ -56,7 +65,7 @@ max_flag_false_positive_rate = 0.15  # this scenario's review budget is 15%
 
 [kinds.swamping]
 # Single-class (all-normal) holdout: only false positives are defined.
-only = ["max_flag_false_positive_rate"]
+only = ["max_false_positive_budget_ratio"]
 
 # ---------------------------------------------------------------------------
 # Accepted limitations of the shipped default (intersection@1, default config)

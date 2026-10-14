@@ -96,12 +96,42 @@ def _print_decision(prereg_id: str, decision: dict[str, Any]) -> None:
         print(f"  - {reason}")
 
 
+def _confirmation_commits(preregs: list[tuple[Path, Any]], open_round: int) -> dict[str, str] | None:
+    """Return each pre-registration's registration commit, or None (after an error) if one may not run."""
+    commits: dict[str, str] = {}
+    for path, prereg in preregs:
+        commit = _registration_commit(path)
+        if commit is None:
+            print(
+                f"error: {path} must be committed, with no local changes, before its confirmation run.",
+                file=sys.stderr,
+            )
+            return None
+        if prereg.confirmation_round != open_round:
+            print(
+                f"error: {prereg.id} names confirmation round {prereg.confirmation_round}, which is "
+                f"closed; only round {open_round} accepts new confirmations.",
+                file=sys.stderr,
+            )
+            return None
+        if (RESULTS_DIR / f"{prereg.id}.json").exists():
+            print(
+                f"error: {prereg.id} already has a confirmation result; a revised hypothesis needs "
+                "a new pre-registration.",
+                file=sys.stderr,
+            )
+            return None
+        commits[prereg.id] = commit
+    return commits
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point; returns the process exit code."""
     import sorethumb_ml  # noqa: PLC0415
     from sorethumb_ml.evaluate.backtest import (  # noqa: PLC0415
-        CONFIRMATION_SEEDS,
+        CONFIRMATION_ROUNDS,
         DEVELOPMENT_SEEDS,
+        OPEN_ROUND,
         STABILITY_REFITS,
         backtest_scenarios,
         decide,
@@ -117,9 +147,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = _parse_args(argv)
-    paths = args.preregistrations or sorted(PREREG_DIR.glob("*.toml"))
+    # By default, every pre-registration not yet confirmed; an explicit path is taken as given.
+    paths = args.preregistrations or [
+        p for p in sorted(PREREG_DIR.glob("*.toml")) if not (RESULTS_DIR / f"{p.stem}.json").exists()
+    ]
     if not paths:
-        print("error: no pre-registration files given or found.", file=sys.stderr)
+        print("error: no unconfirmed pre-registration files given or found.", file=sys.stderr)
         return 2
     try:
         preregs = [(path, load_preregistration(path)) for path in paths]
@@ -130,24 +163,12 @@ def main(argv: list[str] | None = None) -> int:
     confirming = args.phase == "confirmation"
     commits: dict[str, str] = {}
     if confirming:
-        for path, prereg in preregs:
-            commit = _registration_commit(path)
-            if commit is None:
-                print(
-                    f"error: {path} must be committed, with no local changes, before its confirmation run.",
-                    file=sys.stderr,
-                )
-                return 2
-            if (RESULTS_DIR / f"{prereg.id}.json").exists():
-                print(
-                    f"error: {prereg.id} already has a confirmation result; a revised hypothesis needs "
-                    "a new pre-registration.",
-                    file=sys.stderr,
-                )
-                return 2
-            commits[prereg.id] = commit
+        checked = _confirmation_commits(preregs, OPEN_ROUND)
+        if checked is None:
+            return 2
+        commits = checked
 
-    seeds = CONFIRMATION_SEEDS if confirming else DEVELOPMENT_SEEDS
+    seeds = CONFIRMATION_ROUNDS[OPEN_ROUND] if confirming else DEVELOPMENT_SEEDS
     budgets = load_budgets(BUDGETS_PATH)
     kinds = backtest_scenarios()
     cache: dict[str, dict[str, list[dict[str, Any]]]] = {}

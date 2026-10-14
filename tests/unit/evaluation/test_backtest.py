@@ -11,8 +11,9 @@ import numpy as np
 import pytest
 
 from sorethumb_ml.evaluate.backtest import (
-    CONFIRMATION_SEEDS,
+    CONFIRMATION_ROUNDS,
     DEVELOPMENT_SEEDS,
+    OPEN_ROUND,
     ablation_for,
     backtest_scenarios,
     decide,
@@ -29,6 +30,7 @@ pytestmark = pytest.mark.unit
 _REPO = Path(__file__).resolve().parents[3]
 _PREREG_DIR = _REPO / "tests" / "benchmark" / "preregistrations"
 _RESULTS_DIR = _REPO / "docs" / "benchmark-results" / "backtests"
+_REPO_BUDGETS = _REPO / "tests" / "benchmark" / "budgets.toml"
 
 _PREREG = """
 candidate = "composite-agreement@1"
@@ -78,7 +80,9 @@ _KINDS = {"point": "point", "local": "local"}
 def test_development_and_confirmation_seeds_are_disjoint_and_the_matrix_uses_development() -> None:
     from sorethumb_ml.evaluate.pipeline_benchmark import policy_matrix_config
 
-    assert not set(DEVELOPMENT_SEEDS) & set(CONFIRMATION_SEEDS)
+    rounds = [set(DEVELOPMENT_SEEDS), *(set(seeds) for seeds in CONFIRMATION_ROUNDS.values())]
+    assert sum(len(r) for r in rounds) == len(set().union(*rounds))  # pairwise disjoint
+    assert max(CONFIRMATION_ROUNDS) == OPEN_ROUND
     cfg = policy_matrix_config()
     assert {cfg.seed + i for i in range(cfg.n_seeds)} <= set(DEVELOPMENT_SEEDS)
 
@@ -212,6 +216,7 @@ def test_every_policy_a_backtest_names_has_a_default_settings_ablation() -> None
     assert ablation_for("intersection@1").name == "default"
     assert ablation_for("composite-agreement@1").name == "combination_composite_agreement"
     assert ablation_for("rule:discrete-composite@1").name == "rule_discrete_composite"
+    assert ablation_for("rule:discrete-budget@1").name == "rule_discrete_budget"
     with pytest.raises(ValueError, match="no benchmark ablation"):
         ablation_for("composite-manual@1")
 
@@ -274,20 +279,50 @@ def test_every_repository_preregistration_is_valid() -> None:
         assert prereg.expected_outcome, f"{path.name}: state the expected outcome before confirming"
 
 
+def _budgets_judged_under(result: dict[str, Any]) -> Any:
+    """The budgets a published result was judged under: current, or the archived version.
+
+    An archived version must be byte-identical to the file the result recorded.
+    Within the current version only accepted limitations may have changed since,
+    and those do not enter the decision rule.
+    """
+    import hashlib
+
+    current = load_budgets(_REPO_BUDGETS)
+    version = result["metadata"]["budgets_version"]
+    if version == current.version:
+        return current
+    archived = _REPO_BUDGETS.parent / "budgets-archive" / f"v{version}.toml"
+    assert hashlib.sha256(archived.read_bytes()).hexdigest() == result["metadata"]["budgets_sha256"], archived
+    return load_budgets(archived)
+
+
 def test_every_published_result_matches_its_preregistration_and_reproduces_its_verdict() -> None:
     """A result is evidence only for the pre-registration it was run under, unedited since,
-    and its verdict must follow from its own per-seed values under the current decision rule."""
+    and its verdict must follow from its own per-seed values under the current decision rule
+    and the budgets it was judged under."""
     from sorethumb_ml.evaluate.backtest import decision_as_dict
 
-    budgets = load_budgets(_REPO / "tests" / "benchmark" / "budgets.toml")
     for path in sorted(_RESULTS_DIR.glob("*.json")):
         result = json.loads(path.read_text(encoding="utf-8"))
         prereg = load_preregistration(_REPO / result["preregistration"]["path"])
         assert prereg.sha256 == result["preregistration"]["sha256"], f"{prereg.id} edited after confirmation"
-        assert result["seeds"] == list(CONFIRMATION_SEEDS)
-        assert result["metadata"]["budgets_version"] == budgets.version, "re-confirm under the new budgets"
+        assert result["seeds"] == list(CONFIRMATION_ROUNDS[prereg.confirmation_round])
+        budgets = _budgets_judged_under(result)
         redone = decision_as_dict(decide(prereg, result["per_seed"], result["kinds"], budgets))
         assert redone == result["decision"], path.name
+
+
+def test_every_earlier_budgets_version_is_archived() -> None:
+    current = load_budgets(_REPO_BUDGETS)
+    for version in range(2, current.version):  # v1 predates published backtests
+        assert load_budgets(_REPO_BUDGETS.parent / "budgets-archive" / f"v{version}.toml").version == version
+
+
+def test_a_preregistration_naming_an_unknown_round_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="confirmation_round"):
+        _prereg(tmp_path, confirmation_round=99)
+    assert _prereg(tmp_path, confirmation_round=OPEN_ROUND).confirmation_round == OPEN_ROUND
 
 
 def test_run_policy_seeds_runs_every_scenario_and_fails_loudly(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -39,7 +39,9 @@ meets one that still is.
 
 `scoring.combination` (and `scoring.weighting` for `composite`) selects another
 registered policy: `union@1`, `composite-equal@1`, `composite-agreement@1` or
-`composite-manual@1`. Choose one on evidence, not intuition: measure the candidate
+`composite-manual@1`. Choose one on evidence, not intuition (`composite-agreement@1`
+has published backtest evidence on the synthetic suite; see
+[Round 2](#round-2-2026-10-14-budgets-v3)): measure the candidate
 against the default on labelled data that resembles yours, comparing the precision and
 recall of the actual flag decision, the ranking (average precision), stability across
 refits, and the false-positive rate, and prefer a policy only where it wins clearly
@@ -61,9 +63,11 @@ scores), is judged by a fixed protocol (`sorethumb_ml.evaluate.backtest`):
    result records the file's sha256 and commit, so it cannot be edited afterwards
    unnoticed.
 2. **Seed split.** Candidates are developed on the development seeds (the policy
-   matrix's, 0-9) and judged once on 20 disjoint confirmation seeds (10000-10019). A
-   confirmation run is refused for an uncommitted pre-registration, and refused again
-   once a result exists: a revised hypothesis is a new pre-registration.
+   matrix's, 0-9) and judged once on 20 disjoint confirmation seeds. Confirmations run in
+   rounds: once a round's results are published its seeds have been seen, so the next
+   round uses fresh ones (round 1: 10000-10019, closed; round 2: 20000-20019, open). A
+   confirmation run is refused for an uncommitted pre-registration, for a closed round,
+   and again once a result exists: a revised hypothesis is a new pre-registration.
 3. **Paired statistics.** Candidate and baseline run on the same seeds, so on the same
    data and split. Each hypothesis scenario's per-seed differences in the primary metric
    get a paired bootstrap estimate (10,000 resamples), and the p-values are
@@ -85,6 +89,8 @@ below). Candidate rules stay out of the configuration until they win.
 | pre-registration | candidate | baseline | primary metric | verdict | seeds |
 | --- | --- | --- | --- | --- | --- |
 | [`composite-agreement-v1`](benchmark-results/backtests/composite-agreement-v1.json) | `composite-agreement@1` | `intersection@1` | flag_f1 | **does not outperform** | 20 |
+| [`composite-agreement-v2`](benchmark-results/backtests/composite-agreement-v2.json) | `composite-agreement@1` | `intersection@1` | flag_f1 | **outperforms** | 20 |
+| [`discrete-budget-v1`](benchmark-results/backtests/discrete-budget-v1.json) | `rule:discrete-budget@1` | `intersection@1` | flag_f1 | **does not outperform** | 20 |
 | [`discrete-composite-v1`](benchmark-results/backtests/discrete-composite-v1.json) | `rule:discrete-composite@1` | `intersection@1` | flag_f1 | **does not outperform** | 20 |
 
 **`composite-agreement-v1`** -- Thresholding the agreement-weighted composite score at the review budget improves
@@ -105,6 +111,34 @@ Why it does not outperform:
 - budget regression on swamping_contaminated: max_flag_false_positive_rate 0.05 met by the baseline (0.0127) but not the candidate (0.0533)
 - budget regression on varying_density: max_flag_false_positive_rate 0.05 met by the baseline (0.0140) but not the candidate (0.0525)
 
+**`composite-agreement-v2`** -- Re-test of composite-agreement-v1 under budgets v3, which state the false-positive bound in
+whole rows (a policy may spend its review budget, never more) instead of a rate over normal
+rows that an exact-budget policy could breach with no extra flags. Same hypothesis: the
+agreement-weighted composite improves flag F1 over unanimity on point, clustered, masking
+and irrelevant_columns. Judged on fresh seeds, because round 1's have been seen.
+
+| hypothesis scenario | mean difference | 95% CI | p (Holm) | improved |
+| --- | --- | --- | --- | --- |
+| point | +0.4514 | [+0.3659, +0.5335] | 0.0008 | yes |
+| clustered | +0.4181 | [+0.3473, +0.4867] | 0.0008 | yes |
+| masking | +0.2362 | [+0.2070, +0.2645] | 0.0008 | yes |
+| irrelevant_columns | +0.1415 | [+0.0864, +0.1967] | 0.0008 | yes |
+
+**`discrete-budget-v1`** -- discrete-composite-v1 improved flag F1 on all-categorical data but ranked worse than the
+default (AP 0.149 vs 0.169): the gain came from where the flag threshold sits, not from the
+composite's ranking. This rule keeps the default's ranking (intersection@1's combined score
+over every detector) and on all-discrete data flags exactly the review budget's top rows by
+it. Hypothesis: flag F1 on all_categorical improves over the default with average precision
+unchanged; every other scenario runs the default unchanged.
+
+| hypothesis scenario | mean difference | 95% CI | p (Holm) | improved |
+| --- | --- | --- | --- | --- |
+| all_categorical | +0.1721 | [+0.1320, +0.2133] | 0.0002 | yes |
+
+Why it does not outperform:
+
+- stability regression on all_categorical: flag_jaccard_stability 0.6970 vs baseline 0.7600 (tolerance 0.05)
+
 **`discrete-composite-v1`** -- On data whose kept columns are all categorical or boolean, unanimity flags almost none of
 the anomalies even when the ranking is reasonable. Switching to the equal-weight composite
 there, and only there, improves flag F1 on all_categorical; on every other scenario the
@@ -119,7 +153,7 @@ Why it does not outperform:
 - budget regression on all_categorical: min_average_precision 0.15 met by the baseline (0.1693) but not the candidate (0.1490)
 <!-- backtest-results-end -->
 
-### What the confirmations show (2026-10-14)
+### Round 1 (2026-10-14, budgets v2)
 
 Neither candidate outperforms `intersection@1`, and both results came out as their
 pre-registrations predicted from the development seeds:
@@ -129,7 +163,8 @@ pre-registrations predicted from the development seeds:
   a composite always fills the review budget. Where it cannot rank the anomalies (local,
   varying density, the swamping pair), it fills the budget with normal rows, and its
   false-positive rate rises from 0.01 to 0.054, past the 0.05 budget the default meets.
-  This is the trade the default is designed not to make.
+  Most of that breach, though, is in how budgets v2 stated the bound (see the correction
+  below).
 - **`rule:discrete-composite@1`** improves flag F1 on all-categorical data (+0.11) with
   no false-positive, volume or stability cost, and is identical to the default
   everywhere else. It fails on one budget: the composite's *ranking* is slightly worse
@@ -137,6 +172,38 @@ pre-registrations predicted from the development seeds:
   budget, where the default reaches 0.169). The gain comes from where the threshold sits,
   not from a better ranking. A later candidate could test that observation under its own
   pre-registration; this result cannot be reinterpreted as a win.
+
+**Correction after round 1: budgets v3.** The documented principle is that a policy's
+wrong flags may not exceed its review budget. Budgets v2 encoded it as a false-positive
+*rate* over normal rows capped at the review budget, which is a fraction of *all* rows.
+`composite-agreement@1` flags exactly the budget, rounded to whole rows (13 of 252). Where
+none of those rows is an anomaly, its rate is 13/240 = 0.054: a breach with no extra
+flags at all. Budgets v3 states the bound in rows (`false_positive_budget_ratio` ≤ 1.0).
+The round-1 verdicts stand: they were judged under v2, which is archived byte-for-byte
+(`tests/benchmark/budgets-archive/v2.toml`). The fix is tested only through new
+pre-registrations on round 2's fresh seeds. A bound changed after seeing a result is
+exactly what this protocol guards against, so the change gets no retroactive effect.
+
+### Round 2 (2026-10-14, budgets v3)
+
+Both verdicts went against the expectations pre-registered from the development seeds,
+which is why confirmation is a separate step:
+
+- **`composite-agreement@1` outperforms `intersection@1`** (`composite-agreement-v2`).
+  Flag F1 improves by +0.14 to +0.45 on point, clustered, masking and irrelevant
+  columns, and it meets every budget the default meets, stability included. The
+  average-precision and stability dips seen on the development seeds did not recur on
+  the fresh seeds. What it trades away is unchanged: it always spends the review
+  budget, so where the ensemble cannot rank the anomalies its flags are mostly normal
+  rows, still within the budget. It is now a policy with published evidence. The
+  default stays `intersection@1` by design (see below), and choosing the composite for
+  your data should rest on evidence from data like yours.
+- **`rule:discrete-budget@1` does not outperform** (`discrete-budget-v1`). Keeping the
+  default's ranking and flagging the review budget's top rows on all-discrete data
+  improves flag F1 by +0.17 with average precision unchanged. But its flagged set is
+  less stable across refits (Jaccard 0.70 against the default's 0.76, beyond the 0.05
+  tolerance). Rows near the budget cut-off change between refits, which a unanimous
+  vote mostly avoids by flagging fewer rows.
 
 ## Versioning
 

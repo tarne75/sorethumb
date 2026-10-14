@@ -38,3 +38,17 @@ def test_discrete_composite_v1_switches_only_on_all_discrete_plans() -> None:
     mixed = all_discrete.with_columns(pl.Series("amount", [float(i % 37) for i in range(200)]))
     choice = rule.choose(_plan(mixed))  # type: ignore[arg-type]
     assert (choice.combination, choice.branch) == ("intersection", "mixed")
+
+
+def test_discrete_budget_v1_keeps_the_default_ranking_and_flags_the_budget_on_discrete_plans() -> None:
+    rule = candidate_by_id("rule:discrete-budget@1")
+    assert rule is not None
+    levels = ["a", "b", "c", "d", "e"]
+    all_discrete = pl.DataFrame(
+        {"colour": [levels[i % 5] for i in range(200)], "shape": [levels[(i * 3) % 5] for i in range(200)]}
+    )
+    choice = rule.choose(_plan(all_discrete))  # type: ignore[arg-type]
+    assert (choice.combination, choice.branch, choice.flags) == ("intersection", "discrete", "top_budget")
+    mixed = all_discrete.with_columns(pl.Series("amount", [float(i % 37) for i in range(200)]))
+    choice = rule.choose(_plan(mixed))  # type: ignore[arg-type]
+    assert (choice.combination, choice.branch, choice.flags) == ("intersection", "mixed", "policy")

@@ -30,6 +30,10 @@ class RuleChoice:
     combination: str
     weighting: str
     branch: str  # recorded with every result, so a rule's behaviour is attributable
+    # "policy": the combination's own flag decision. "top_budget": rank by the
+    # combination's combined score and flag exactly round(review_budget * n)
+    # rows, as an exact-k composite does (scoring.combine._exact_k_flags).
+    flags: str = "policy"
 
 
 @dataclass(frozen=True)
@@ -50,11 +54,23 @@ class CandidateRule:
 _DISCRETE_CLASSES = frozenset({ColumnClass.categorical, ColumnClass.boolean})
 
 
+def _all_discrete(plan: FeaturePlan) -> bool:
+    """Whether every kept input column was profiled categorical or boolean."""
+    kept = [d for d in plan.decisions if d.treatment != Treatment.drop]
+    return bool(kept) and all(d.col_class in _DISCRETE_CLASSES for d in kept)
+
+
 def _discrete_composite_v1(plan: FeaturePlan) -> RuleChoice:
     """``composite-equal@1`` when every kept input column is categorical or boolean, else the default."""
-    kept = [d for d in plan.decisions if d.treatment != Treatment.drop]
-    if kept and all(d.col_class in _DISCRETE_CLASSES for d in kept):
+    if _all_discrete(plan):
         return RuleChoice("composite", "equal", "discrete")
+    return RuleChoice("intersection", "equal", "mixed")
+
+
+def _discrete_budget_v1(plan: FeaturePlan) -> RuleChoice:
+    """On all-discrete plans, keep the default's ranking but flag the top review-budget rows."""
+    if _all_discrete(plan):
+        return RuleChoice("intersection", "equal", "discrete", flags="top_budget")
     return RuleChoice("intersection", "equal", "mixed")
 
 
@@ -67,6 +83,15 @@ CANDIDATE_RULES: tuple[CandidateRule, ...] = (
             "intersection@1 otherwise."
         ),
         choose=_discrete_composite_v1,
+    ),
+    CandidateRule(
+        name="discrete-budget",
+        version=1,
+        summary=(
+            "On all-discrete data, rank by intersection@1's combined score (every detector) and "
+            "flag exactly the review budget's top rows; intersection@1 otherwise."
+        ),
+        choose=_discrete_budget_v1,
     ),
 )
 

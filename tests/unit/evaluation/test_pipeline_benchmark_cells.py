@@ -84,6 +84,23 @@ def test_a_candidate_rule_records_the_branch_it_took() -> None:
     assert _fit_score_one_seed_pipeline("point", None, _ABLATION["default"], seed=0)["policy_branch"] is None
 
 
+def test_discrete_budget_flags_exactly_the_review_budget_on_all_categorical_data() -> None:
+    rule = _ABLATION["rule_discrete_budget"]
+    out = _fit_score_one_seed_pipeline("all_categorical", None, rule, seed=0)
+    assert out["policy_branch"] == "discrete"
+    assert out["flag_count"] == round(0.05 * out["n_holdout"])
+    default = _fit_score_one_seed_pipeline("all_categorical", None, _ABLATION["default"], seed=0)
+    assert out["average_precision"] == default["average_precision"]  # the default's ranking, unchanged
+
+
+def test_false_positive_budget_ratio_counts_wrong_flags_against_the_whole_row_budget() -> None:
+    out = _fit_score_one_seed_pipeline("point", None, _ABLATION["combination_composite"], seed=0)
+    budget_rows = round(0.05 * out["n_holdout"])
+    wrong = out["flag_count"] * (1 - out["flag_precision"])
+    assert out["false_positive_budget_ratio"] == pytest.approx(wrong / budget_rows)
+    assert out["false_positive_budget_ratio"] <= 1.0  # an exact-k policy never exceeds its budget
+
+
 def test_an_unknown_scenario_is_rejected() -> None:
     with pytest.raises(ValueError, match="Unknown scenario"):
         _fit_score_one_seed_pipeline("nope", None, _ABLATION["default"], seed=0)
