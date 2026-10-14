@@ -87,6 +87,8 @@ below). Candidate rules stay out of the configuration until they win.
 | pre-registration | candidate | baseline | primary metric | verdict | seeds |
 | --- | --- | --- | --- | --- | --- |
 | [`composite-agreement-v1`](benchmark-results/backtests/composite-agreement-v1.json) | `composite-agreement@1` | `intersection@1` | flag_f1 | **does not outperform** | 20 |
+| [`composite-agreement-v2`](benchmark-results/backtests/composite-agreement-v2.json) | `composite-agreement@1` | `intersection@1` | flag_f1 | **outperforms** | 20 |
+| [`discrete-budget-v1`](benchmark-results/backtests/discrete-budget-v1.json) | `rule:discrete-budget@1` | `intersection@1` | flag_f1 | **does not outperform** | 20 |
 | [`discrete-composite-v1`](benchmark-results/backtests/discrete-composite-v1.json) | `rule:discrete-composite@1` | `intersection@1` | flag_f1 | **does not outperform** | 20 |
 
 **`composite-agreement-v1`** -- Thresholding the agreement-weighted composite score at the review budget improves
@@ -106,6 +108,34 @@ Why it does not outperform:
 - budget regression on swamping_clean: max_flag_false_positive_rate 0.05 met by the baseline (0.0080) but not the candidate (0.0533)
 - budget regression on swamping_contaminated: max_flag_false_positive_rate 0.05 met by the baseline (0.0127) but not the candidate (0.0533)
 - budget regression on varying_density: max_flag_false_positive_rate 0.05 met by the baseline (0.0140) but not the candidate (0.0525)
+
+**`composite-agreement-v2`** -- Re-test of composite-agreement-v1 under budgets v3, which state the false-positive bound in
+whole rows (a policy may spend its review budget, never more) instead of a rate over normal
+rows that an exact-budget policy could breach with no extra flags. Same hypothesis: the
+agreement-weighted composite improves flag F1 over unanimity on point, clustered, masking
+and irrelevant_columns. Judged on fresh seeds, because round 1's have been seen.
+
+| hypothesis scenario | mean difference | 95% CI | p (Holm) | improved |
+| --- | --- | --- | --- | --- |
+| point | +0.4514 | [+0.3659, +0.5335] | 0.0008 | yes |
+| clustered | +0.4181 | [+0.3473, +0.4867] | 0.0008 | yes |
+| masking | +0.2362 | [+0.2070, +0.2645] | 0.0008 | yes |
+| irrelevant_columns | +0.1415 | [+0.0864, +0.1967] | 0.0008 | yes |
+
+**`discrete-budget-v1`** -- discrete-composite-v1 improved flag F1 on all-categorical data but ranked worse than the
+default (AP 0.149 vs 0.169): the gain came from where the flag threshold sits, not from the
+composite's ranking. This rule keeps the default's ranking (intersection@1's combined score
+over every detector) and on all-discrete data flags exactly the review budget's top rows by
+it. Hypothesis: flag F1 on all_categorical improves over the default with average precision
+unchanged; every other scenario runs the default unchanged.
+
+| hypothesis scenario | mean difference | 95% CI | p (Holm) | improved |
+| --- | --- | --- | --- | --- |
+| all_categorical | +0.1721 | [+0.1320, +0.2133] | 0.0002 | yes |
+
+Why it does not outperform:
+
+- stability regression on all_categorical: flag_jaccard_stability 0.6970 vs baseline 0.7600 (tolerance 0.05)
 
 **`discrete-composite-v1`** -- On data whose kept columns are all categorical or boolean, unanimity flags almost none of
 the anomalies even when the ranking is reasonable. Switching to the equal-weight composite
