@@ -87,12 +87,17 @@ class AblationSpec:
     weighting: str = "equal"
     # None: the shipped profiling.near_constant_distinct default.
     near_constant_distinct: int | None = None
+    # A candidate rule id (evaluate.candidates): picks combination/weighting
+    # per fitted plan, overriding the two fields above.
+    rule: str | None = None
 
     @property
     def policy_id(self) -> str:
-        """The versioned ensemble policy this ablation runs (scoring.policies)."""
+        """The versioned ensemble policy, or candidate rule, this ablation runs."""
         from sorethumb_ml.scoring.policies import resolve_policy  # noqa: PLC0415
 
+        if self.rule is not None:
+            return self.rule
         return resolve_policy(self.combination, self.weighting).id
 
 
@@ -111,6 +116,7 @@ ABLATIONS: list[AblationSpec] = [
     # Keep 3-value columns (the threshold before 2026-10-14's restore of 3) -- the
     # evidence for which profiling.near_constant_distinct default to ship.
     AblationSpec("near_constant_2", near_constant_distinct=2),
+    AblationSpec("rule_discrete_composite", rule="rule:discrete-composite@1"),
 ]
 
 # One ablation per registered ensemble policy, everything else at the shipped
@@ -354,6 +360,7 @@ def _fit_and_score(
     against the wrong labels.
     """
     from sorethumb_ml.detectors import registry  # noqa: PLC0415
+    from sorethumb_ml.evaluate.candidates import candidate_by_id  # noqa: PLC0415
     from sorethumb_ml.features.build import apply_feature_plan, fit_features  # noqa: PLC0415
     from sorethumb_ml.io.fingerprint import INTERNAL_ROW_ID_COLUMN  # noqa: PLC0415
     from sorethumb_ml.profiling.plan import build_feature_plan  # noqa: PLC0415
@@ -368,6 +375,14 @@ def _fit_and_score(
     )
     cfg = _build_pipeline_config(ablation, seed)
     plan = build_feature_plan(train_df, cfg)
+    combination, weighting, branch = ablation.combination, ablation.weighting, None
+    if ablation.rule is not None:
+        rule = candidate_by_id(ablation.rule)
+        if rule is None:
+            msg = f"Unknown candidate rule: {ablation.rule!r}"
+            raise ValueError(msg)
+        choice = rule.choose(plan)
+        combination, weighting, branch = choice.combination, choice.weighting, choice.branch
 
     t0 = time.perf_counter()
     train_space = fit_features(train_df, plan, cfg)
@@ -392,14 +407,13 @@ def _fit_and_score(
         calibrated_holdout[name] = calibrators[name].transform(raw)
     score_seconds = time.perf_counter() - t0
 
-    ensemble = ScoreEnsemble(
-        combination=ablation.combination, weighting=ablation.weighting, contamination=review_budget
-    )
+    ensemble = ScoreEnsemble(combination=combination, weighting=weighting, contamination=review_budget)
     combined = ensemble.combine(calibrated_holdout, natural_flags_holdout)
     order = np.empty(len(holdout_df), dtype=np.int64)
     order[np.asarray(holdout_space.row_ids, dtype=np.int64)] = np.arange(len(holdout_df))
     combined["combined_score"] = np.asarray(combined["combined_score"])[order]
     combined["anomaly_flag"] = np.asarray(combined["anomaly_flag"])[order]
+    combined["policy_branch"] = branch
     return combined, fit_seconds, score_seconds
 
 
@@ -496,6 +510,7 @@ def _fit_score_one_seed_pipeline(
         "over_flag_ratio": float(flag_metrics.flag_count) / budget_rows if budget_rows > 0 else float("nan"),
         "flag_jaccard_stability": float(np.mean(jaccards)) if jaccards else float("nan"),
         "rank_stability": float(np.nanmean(rank_corrs)) if rank_corrs else float("nan"),
+        "policy_branch": combined["policy_branch"],
     }
 
 
@@ -1024,15 +1039,16 @@ def policy_matrix_config(n_seeds: int = 10, n_bootstrap: int = 3) -> PipelineBen
 def suite_version(cfg: PipelineBenchmarkConfig) -> str:
     """Fingerprint of everything that defines the benchmark suite a result came from.
 
-    Covers the scenario generators, the metric definitions, this harness, the
+    Covers the scenario generators, the metric definitions, the candidate rules,
+    this harness, the
     seeds, the number of stability refits and the holdout/subsample fractions.
     Results are only comparable within one suite version: a change to any of
     these moves it, even if no number changes.
     """
-    from sorethumb_ml.evaluate import metrics, scenarios  # noqa: PLC0415
+    from sorethumb_ml.evaluate import candidates, metrics, scenarios  # noqa: PLC0415
 
     digest = hashlib.sha256()
-    for module_file in (scenarios.__file__, metrics.__file__, __file__):
+    for module_file in (scenarios.__file__, metrics.__file__, candidates.__file__, __file__):
         digest.update(Path(module_file).read_bytes())
     params = {
         "seed": cfg.seed,

@@ -126,12 +126,16 @@ def test_fmt_row_for_table_renders_nan_roc_auc_as_na():
 # ---------------------------------------------------------------------------
 
 
-def test_every_ablation_resolves_to_a_registered_policy() -> None:
+def test_every_ablation_resolves_to_a_registered_policy_or_candidate_rule() -> None:
+    from sorethumb_ml.evaluate.candidates import candidate_by_id
     from sorethumb_ml.evaluate.pipeline_benchmark import ABLATIONS
     from sorethumb_ml.scoring.policies import policy_by_id
 
     for ablation in ABLATIONS:
-        assert policy_by_id(ablation.policy_id) is not None, ablation
+        if ablation.rule is None:
+            assert policy_by_id(ablation.policy_id) is not None, ablation
+        else:
+            assert candidate_by_id(ablation.policy_id) is not None, ablation
 
 
 def test_the_policy_matrix_covers_every_policy_except_manual_weighting() -> None:

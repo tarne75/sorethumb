@@ -112,10 +112,12 @@ matrix with a missing or errored cell (`assert_complete_and_error_free`).
 
 ## Ensemble policy matrix
 
-Every scenario above, plus three that exercise recent input handling --
+Every scenario above, plus four that exercise recent input handling --
 `categorical_rare` (the anomaly is a rare level of a 3-value category),
-`text_timestamp` (unusual-hour activity in a text timestamp column) and
-`irrelevant_columns` (two signal columns among twenty noise columns) -- under
+`text_timestamp` (unusual-hour activity in a text timestamp column),
+`irrelevant_columns` (two signal columns among twenty noise columns) and
+`all_categorical` (no numeric column; anomalies are unseen combinations of
+individually common levels) -- under
 every registered [ensemble policy](ensemble-policy.md), each identified by its
 versioned id. The default policy, `intersection@1`, is a deliberate design
 decision; this matrix is the evidence any other choice should be made on.

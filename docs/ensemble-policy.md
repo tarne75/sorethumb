@@ -45,6 +45,43 @@ recall of the actual flag decision, the ranking (average precision), stability a
 refits, and the false-positive rate, and prefer a policy only where it wins clearly
 without breaching a false-positive budget the default meets.
 
+## Backtests: when a candidate may be said to outperform
+
+A benchmark matrix shows how policies behave; it cannot by itself justify switching,
+because a rule tuned while looking at those numbers will look good on them. A candidate
+policy, or a data-dependent *candidate rule* (`rule:name@version`, which picks a
+registered policy from properties of the fitted feature plan, never from labels or
+scores), is judged by a fixed protocol (`sorethumb_ml.evaluate.backtest`):
+
+1. **Pre-registration.** The comparison is written down and committed before it is run
+   on confirmation data: candidate and baseline, the primary metric, the hypothesis
+   scenarios, whether all or any of them must improve, the significance level and the
+   stability tolerance
+   ([`tests/benchmark/preregistrations/`](../tests/benchmark/preregistrations/)). The
+   result records the file's sha256 and commit, so it cannot be edited afterwards
+   unnoticed.
+2. **Seed split.** Candidates are developed on the development seeds (the policy
+   matrix's, 0-9) and judged once on 20 disjoint confirmation seeds (10000-10019). A
+   confirmation run is refused for an uncommitted pre-registration, and refused again
+   once a result exists: a revised hypothesis is a new pre-registration.
+3. **Paired statistics.** Candidate and baseline run on the same seeds, so on the same
+   data and split. Each hypothesis scenario's per-seed differences in the primary metric
+   get a paired bootstrap estimate (10,000 resamples), and the p-values are
+   Holm-corrected across the hypothesis scenarios.
+4. **Decision rule.** The candidate *outperforms* only if the required hypothesis
+   scenarios improve (positive mean difference, Holm-adjusted p ≤ alpha), it meets on
+   every scenario each budget the baseline meets, and its stability is nowhere more than
+   the tolerance below the baseline's.
+
+A candidate that outperforms is eligible to ship as a supported, versioned option with
+its evidence attached. It does not become the default by this process alone (see
+below). Candidate rules stay out of the configuration until they win.
+
+### Results
+
+<!-- backtest-results-start -->
+<!-- backtest-results-end -->
+
 ## Versioning
 
 A policy's version identifies its behaviour. Any change to which rows a policy flags or

@@ -2,8 +2,6 @@ name: CI
 
 on:
   push:
-    # windows-support: temporary, so the Windows work-in-progress branch gets CI
-    # on every push (there is no PR for it yet). Remove before merging to main.
     branches: [main]
   pull_request:
   schedule:
