@@ -474,7 +474,8 @@ class Store:
         *ensemble_policy* is the versioned id of the rule that turns detector votes
         into flags (``scoring.policies``), e.g. ``intersection@1``.
         *policy_evidence_id* is the backtest evidence a non-default policy relied
-        on (``policy_evidence``), or None.
+        on (``policy_evidence``), or None. Unlike the other columns it is updated
+        when the run row already exists: it records the latest invocation's check.
 
         *source_digest* is the one-way digest of the run's full source URI; *config_json*
         must already carry only the redacted display URI.
@@ -528,6 +529,11 @@ class Store:
                 policy_evidence_id,
             ),
         )
+        # A repeat invocation of a deterministic run_id (resume, --force) keeps the
+        # existing row, but its evidence check is fresh: a backtest recorded since
+        # the first attempt must show on the run, and evidence that no longer
+        # applies must not linger.
+        self._conn.execute("UPDATE run SET policy_evidence_id=? WHERE run_id=?", (policy_evidence_id, run_id))
         self._conn.commit()
 
     # ------------------------------------------------------------------
@@ -565,6 +571,13 @@ class Store:
                 "ORDER BY created_at DESC, rowid DESC LIMIT 1",
                 (dataset_fp, policy_id, scope_hash),
             ).fetchone()
+        return dict(row) if row else None
+
+    def get_policy_evidence(self, evidence_id: str) -> dict[str, Any] | None:
+        """Return one evidence record by id, or None."""
+        row = self._conn.execute(
+            "SELECT * FROM policy_evidence WHERE evidence_id=?", (evidence_id,)
+        ).fetchone()
         return dict(row) if row else None
 
     def list_policy_evidence(self, dataset_fp: str | None = None) -> list[dict[str, Any]]:

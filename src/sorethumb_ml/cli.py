@@ -1238,6 +1238,28 @@ def score(
 # ---------------------------------------------------------------------------
 
 
+def _default_policy_id() -> str:
+    from sorethumb_ml.scoring.policies import DEFAULT_POLICY_ID  # noqa: PLC0415
+
+    return DEFAULT_POLICY_ID
+
+
+def _evidence_line(ev: dict[str, Any]) -> str:
+    """One-line summary of a policy_evidence record."""
+    verdict = str(ev.get("verdict", "")).replace("_", " ")
+    diff = ev.get("mean_difference")
+    stats = (
+        f", flag F1 {diff:+.3f} [{ev['ci_low']:+.3f}, {ev['ci_high']:+.3f}], Holm p {ev['p_holm']:.4f}"
+        if isinstance(diff, float)
+        else ""
+    )
+    return (
+        f"{ev['evidence_id']}: {ev['policy_id']} {verdict} vs {ev['baseline_policy_id']}{stats} "
+        f"({ev['n_replicates']} replicates, review budget {ev['review_budget']:g}, "
+        f"recorded {str(ev['created_at'])[:10]})"
+    )
+
+
 def _policy_config_keys(policy_id: str) -> str:
     """Return the scoring settings that select *policy_id*, for the hint after a backtest."""
     from sorethumb_ml.scoring.policies import policy_by_id  # noqa: PLC0415
@@ -1370,6 +1392,86 @@ def backtest(
             f"To use it, set under {_e('[scoring]')}: {_e(_policy_config_keys(policy_id))}"
         )
     raise typer.Exit(0)
+
+
+@app.command()
+def evidence(
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+    all_datasets: Annotated[
+        bool, typer.Option("--all", help="List evidence for every dataset in the workspace.")
+    ] = False,
+    json_output: _JSON_OPT = False,
+) -> None:
+    """List the backtest evidence recorded in the workspace, newest first.
+
+    One row per candidate policy compared with the default by `sorethumb
+    backtest`. With a config, lists the configured dataset's records and marks
+    which apply to the current configuration (the scope a `run` checks);
+    --all lists every dataset's.
+    """
+    _setup_logging(log_level or "WARNING")
+    ws_path, loaded = _resolve_workdir(config, workdir, log_level, json_output=json_output)
+    from sorethumb_ml.io.fingerprint import logical_dataset_id  # noqa: PLC0415
+    from sorethumb_ml.scoring.policies import policy_scope_hash  # noqa: PLC0415
+
+    dataset_fp = None
+    scope = None
+    if loaded is not None:
+        scope = policy_scope_hash(loaded)
+        if not all_datasets:
+            dataset_fp = logical_dataset_id(loaded.source.dataset_id, loaded.source.uri)
+    try:
+        with Workspace.open(ws_path) as ws:
+            records = ws.store.list_policy_evidence(dataset_fp)
+    except SorethumbError as exc:
+        _fail(json_output, str(exc), _classify_error(exc))
+
+    rows = []
+    for rec in records:
+        row = {k: v for k, v in rec.items() if k != "details_json"}
+        row["applies_to_current_config"] = None if scope is None else rec["scope_hash"] == scope
+        rows.append(row)
+    if json_output:
+        typer.echo(json.dumps(rows, default=str))
+        return
+    if not rows:
+        where = f"dataset {dataset_fp}" if dataset_fp else "this workspace"
+        console.print(
+            f"[yellow]No backtest evidence recorded for {_e(where)}. Run `sorethumb backtest`.[/yellow]"
+        )
+        return
+
+    table = Table(title=f"Backtest evidence ({len(rows)})", show_header=True)
+    for col in (
+        "Evidence",
+        "Dataset",
+        "Policy",
+        "Verdict",
+        "F1 difference [95% CI]",
+        "p (Holm)",
+        "Recorded",
+        "Current config",
+    ):
+        table.add_column(col)
+    for row in rows:
+        diff = row.get("mean_difference")
+        ci = f"{diff:+.3f} [{row['ci_low']:+.3f}, {row['ci_high']:+.3f}]" if isinstance(diff, float) else "—"
+        p_holm = row.get("p_holm")
+        applies = row["applies_to_current_config"]
+        _add_row(
+            table,
+            str(row["evidence_id"]),
+            str(row["dataset_fp"])[:16],
+            str(row["policy_id"]),
+            str(row["verdict"]).replace("_", " "),
+            ci,
+            f"{p_holm:.4f}" if isinstance(p_holm, float) else "—",
+            str(row["created_at"])[:10],
+            "—" if applies is None else ("yes" if applies else "no"),
+        )
+    console.print(table)
 
 
 # ---------------------------------------------------------------------------
@@ -1750,14 +1852,18 @@ def show(
                 _fail(json_output, f"Run not found: {run_id}", ExitCode.NOT_FOUND)
 
             groups = ws.store.all_run_groups(run_id)
+            evidence_id = run_row.get("policy_evidence_id")
+            evidence = ws.store.get_policy_evidence(str(evidence_id)) if evidence_id else None
     except SorethumbError as exc:
         _fail(json_output, str(exc), _classify_error(exc))
 
     if group:
         groups = [g for g in groups if g.get("group_key") == group]
 
+    if evidence is not None:
+        evidence = {k: v for k, v in evidence.items() if k != "details_json"}
     if json_output:
-        typer.echo(json.dumps({"run": run_row, "groups": groups}, default=str))
+        typer.echo(json.dumps({"run": run_row, "groups": groups, "policy_evidence": evidence}, default=str))
         return
 
     console.print(f"[bold]Run:[/bold] {_e(run_id)}")
@@ -1768,6 +1874,10 @@ def show(
     console.print(
         f"  Policy:  {_e(run_row.get('ensemble_policy') or 'not recorded (run predates migration 010)')}"
     )
+    if evidence is not None:
+        console.print(f"  Evidence: {_e(_evidence_line(evidence))}")
+    elif run_row.get("ensemble_policy") not in (None, _default_policy_id()):
+        console.print("  Evidence: [yellow]none recorded for this run's non-default policy[/yellow]")
 
     table = Table(title=f"Groups ({len(groups)})", show_header=True)
     table.add_column("Group key")
@@ -2517,6 +2627,16 @@ def _print_run_summary(result: RunResult) -> None:
         console.print(f"  [dim]Scored forward from run {_e(result.source_run_id)} (no re-fitting).[/dim]")
     if result.ensemble_policy:
         console.print(f"  [dim]Ensemble policy: {_e(result.ensemble_policy)}[/dim]")
+        if result.policy_evidence_id:
+            console.print(
+                f"  [dim]Backtest evidence it outperforms the default: {_e(result.policy_evidence_id)} "
+                "(sorethumb evidence)[/dim]"
+            )
+        elif any("sorethumb backtest" in w for w in result.warnings_issued):
+            console.print(
+                "  [yellow]No backtest evidence that this policy outperforms the default on this data "
+                "and configuration; see `sorethumb backtest`.[/yellow]"
+            )
 
     total_rows = sum(g.n_records for g in result.groups if g.status in ("success", "skipped"))
     if result.n_anomalies or total_rows:

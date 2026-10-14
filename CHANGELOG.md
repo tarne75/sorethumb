@@ -152,7 +152,9 @@ First public release.
   `score` with a non-default policy that has no `outperforms` record for the
   dataset and configuration warns (`UnevidencedPolicyWarning`); `run.strict`
   refuses it (`UnevidencedPolicyError`, exit code 2). The evidence a run relied
-  on is recorded as `run.policy_evidence_id` and in `--json` output.
+  on is recorded as `run.policy_evidence_id` and in `--json` output, and shown by
+  `sorethumb show` and the run summary; `sorethumb evidence` lists the recorded
+  evidence and which records apply to the current configuration.
 
 ### Security
 

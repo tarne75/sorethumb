@@ -114,6 +114,7 @@ def test_a_third_party_error_subclass_defaults_to_runtime() -> None:
     [
         ["run"],
         ["backtest"],
+        ["evidence"],
         ["score", "--from-run", "r"],
         ["runs"],
         ["show", "r"],

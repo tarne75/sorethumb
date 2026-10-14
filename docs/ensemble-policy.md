@@ -60,7 +60,9 @@ types, though. Whether a policy is better on *your* data is measured by
    a flag).
 
 A `run` or `score` with a non-default policy then looks for an `outperforms` record
-in that scope and records its id on the run (`policy_evidence_id`). Without one, the
+in that scope and records its id on the run (`policy_evidence_id`, also shown by
+`sorethumb show` and the run summary; `sorethumb evidence` lists every record and
+which apply to your current configuration). Without one, the
 run warns and proceeds; under `run.strict` it refuses before anything is registered.
 The policy is never switched for you: the choice stays yours, made visible and
 checkable. Without labels, `sorethumb backtest` reports flag volume and stability

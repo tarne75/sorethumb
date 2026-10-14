@@ -406,6 +406,30 @@ Plus `--config`, `--workdir`, `--log-level`, `--seed`.
 
 ---
 
+## `sorethumb evidence`
+
+List the backtest evidence recorded in the workspace by
+[`sorethumb backtest`](#sorethumb-backtest), newest first: one row per candidate
+policy compared with the default, with its verdict, flag F1 difference and 95% CI,
+Holm-adjusted p-value and date. With a config, lists that dataset's records and
+marks which apply to the current configuration — the scope a `run` checks.
+
+```bash
+sorethumb evidence
+sorethumb evidence --all --json
+```
+
+**Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--all` | off | List every dataset's evidence, not only the configured dataset's. |
+| `--json` | off | The records as JSON, each with `applies_to_current_config` (`null` without a config). |
+
+Plus `--config`, `--workdir`, `--log-level`.
+
+---
+
 ## `sorethumb anomalies [run_id]`
 
 Print the flagged rows from a completed run, ordered by rank (1 = most
@@ -459,8 +483,10 @@ sorethumb runs --json | jq '.[] | select(.status == "failed")'
 
 ## `sorethumb show <run_id>`
 
-Show full detail for one run: status, config hash, group summary, and
-feature plan overview.
+Show full detail for one run: status, config hash, ensemble policy and, for a
+non-default policy, the [backtest evidence](#sorethumb-evidence) it relied on (or
+that it had none), group summary, and feature plan overview. `--json` includes the
+evidence record as `policy_evidence`.
 
 ```bash
 sorethumb show abc12345
