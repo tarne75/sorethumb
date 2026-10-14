@@ -225,7 +225,8 @@ class ProfilingConfig(BaseModel):
             "keeping such a column when it is noise pushed the local and varying-density "
             "rankings below chance. Set it to 2 to keep every low-cardinality column -- for "
             "example when a rare level of a 3-value category is itself the anomaly -- after "
-            "measuring that it helps on your data."
+            "measuring that it helps on your data. Evidence: docs/benchmarks.md, ensemble "
+            "policy matrix."
         ),
     )
     identifier_cardinality_ratio: float = Field(

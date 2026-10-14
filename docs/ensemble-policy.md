@@ -24,6 +24,17 @@ anomalies even when the combined ranking is reasonable. The full-pipeline benchm
 the precision above. They are not hidden, and they are not a reason to change the
 default silently.
 
+## The evidence
+
+The [ensemble policy matrix](benchmarks.md#ensemble-policy-matrix) measures every
+registered policy on every benchmark scenario: precision and recall of the actual
+flags, ranking, stability under refits, and the false-positive budget. Each cell
+is checked against versioned per-anomaly-type budgets
+([`tests/benchmark/budgets.toml`](../tests/benchmark/budgets.toml)). Every budget
+the default misses is listed there under `accepted_limitations` with its reason,
+and a scheduled CI job fails if the default misses one that is not listed, or
+meets one that still is.
+
 ## Choosing a different policy
 
 `scoring.combination` (and `scoring.weighting` for `composite`) selects another

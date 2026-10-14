@@ -80,6 +80,11 @@ _FLOORS: dict[tuple[str, str], float] = {
     ("varying_density", "combination_union"): 0.65,  # observed 0.86
     ("local", "default"): 0.55,  # observed 0.71 -- was 0.04 (worse than random) before the median-ranking fix
     ("varying_density", "default"): 0.55,  # observed 0.68 -- was 0.24 before the median-ranking fix
+    # Added 2026-10-14 with the policy matrix. text_timestamp guards the date-parsing path
+    # end to end (and the harness's row realignment: it scored 0.42 when scores were
+    # compared to labels in time-sorted order); irrelevant_columns guards dilution.
+    ("text_timestamp", "default"): 0.75,  # observed 0.91
+    ("irrelevant_columns", "default"): 0.8,  # observed 0.96
 }
 
 # Sanity-only, not "beats random": contextual anomalies genuinely sit at

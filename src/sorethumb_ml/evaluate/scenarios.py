@@ -51,6 +51,16 @@ varying_density
     unremarkable relative to the loose one. The classic case local-density
     methods (LOF) are designed for and fixed-threshold/global-distance
     methods (OneClassSVM, KMeans-distance) are not.
+categorical_rare
+    The anomaly is a rare level of a 3-value category and nothing numeric
+    differs -- exactly the column ``profiling.near_constant_distinct``
+    decides whether to drop, so it is the evidence for that default.
+text_timestamp
+    Unusual-hour activity recorded only in an ISO text timestamp column:
+    reachable only through date parsing and the derived hour.
+irrelevant_columns
+    Moderate point anomalies in two columns among twenty pure-noise
+    columns: whether the signal survives dilution.
 """
 
 from __future__ import annotations
@@ -300,6 +310,74 @@ def varying_density_anomalies(
     return _shuffle(_assemble(numeric, categorical), y, seed)
 
 
+def categorical_rare_anomalies(
+    seed: int, n_normal: int = 800, n_anomaly: int = 25, n_numeric: int = 3
+) -> tuple[pl.DataFrame, np.ndarray]:
+    """Make the anomaly a rare level of a 3-value category; numeric columns are normal for everyone.
+
+    Normal rows use "web" or "store" for ``channel``; anomalous rows, and only
+    those, use "fax". The column therefore has exactly three distinct values --
+    the case ``profiling.near_constant_distinct`` decides whether to drop -- and
+    the only signal in the dataset is which level a row has.
+    """
+    rng = np.random.default_rng(seed)
+    X = rng.multivariate_normal(np.zeros(n_numeric), np.eye(n_numeric), size=n_normal + n_anomaly)
+    y = np.concatenate([np.zeros(n_normal), np.ones(n_anomaly)]).astype(int)
+    channel = [*rng.choice(["web", "store"], size=n_normal, p=[0.6, 0.4]).tolist(), *(["fax"] * n_anomaly)]
+    numeric = {f"num_{i}": X[:, i] for i in range(n_numeric)}
+    categorical = {**_categorical_columns(rng, len(X)), "channel": channel}
+    return _shuffle(_assemble(numeric, categorical), y, seed)
+
+
+def text_timestamp_anomalies(
+    seed: int, n_normal: int = 800, n_anomaly: int = 30, n_numeric: int = 3
+) -> tuple[pl.DataFrame, np.ndarray]:
+    """Activity at an unusual hour, recorded only in a text timestamp column.
+
+    Normal rows fall in business hours (09:00-17:59) on weekdays; anomalous rows
+    at 01:00-03:59. Numeric columns are normal for everyone, so the signal is
+    reachable only by parsing ``event_time`` (ISO text) into a datetime and
+    deriving its hour.
+    """
+    rng = np.random.default_rng(seed)
+    X = rng.multivariate_normal(np.zeros(n_numeric), np.eye(n_numeric), size=n_normal + n_anomaly)
+    y = np.concatenate([np.zeros(n_normal), np.ones(n_anomaly)]).astype(int)
+    days = rng.integers(0, 20, size=n_normal + n_anomaly)  # 2026-01-05 is a Monday; 4 weeks of weekdays
+    day_offsets = days + 2 * (days // 5)
+    hours = np.concatenate([rng.integers(9, 18, size=n_normal), rng.integers(1, 4, size=n_anomaly)])
+    minutes = rng.integers(0, 60, size=n_normal + n_anomaly)
+    event_time = [
+        f"2026-01-{5 + int(d):02d}T{int(h):02d}:{int(m):02d}:00"
+        for d, h, m in zip(day_offsets, hours, minutes, strict=True)
+    ]
+    numeric = {f"num_{i}": X[:, i] for i in range(n_numeric)}
+    categorical = {**_categorical_columns(rng, len(X)), "event_time": event_time}
+    return _shuffle(_assemble(numeric, categorical), y, seed)
+
+
+def irrelevant_columns_anomalies(
+    seed: int, n_normal: int = 800, n_anomaly: int = 40, n_signal: int = 2, n_noise: int = 20
+) -> tuple[pl.DataFrame, np.ndarray]:
+    """Moderate point anomalies in two columns, diluted by many irrelevant ones.
+
+    Anomalies sit 4-5 sigma out in the two signal columns only; twenty more
+    independent Gaussian columns carry nothing. Tests whether the pipeline (and
+    each policy) keeps the signal when most of the feature space is noise.
+    """
+    rng = np.random.default_rng(seed)
+    n = n_normal + n_anomaly
+    signal = rng.normal(0.0, 1.0, size=(n, n_signal))
+    signal[n_normal:] = rng.uniform(4.0, 5.0, size=(n_anomaly, n_signal)) * rng.choice(
+        [-1, 1], size=(n_anomaly, 1)
+    )
+    noise = rng.normal(0.0, 1.0, size=(n, n_noise))
+    y = np.concatenate([np.zeros(n_normal), np.ones(n_anomaly)]).astype(int)
+    numeric = {f"signal_{i}": signal[:, i] for i in range(n_signal)}
+    numeric |= {f"noise_{i}": noise[:, i] for i in range(n_noise)}
+    categorical = _categorical_columns(rng, n)
+    return _shuffle(_assemble(numeric, categorical), y, seed)
+
+
 @dataclass(frozen=True)
 class Scenario:
     """One registered synthetic scenario."""
@@ -350,6 +428,24 @@ SCENARIOS: list[Scenario] = [
         "varying_density",
         "Two normal clusters of different spread; a fixed-distance trap for global methods.",
         varying_density_anomalies,
+    ),
+    Scenario(
+        "categorical_rare",
+        "categorical_rare",
+        "The anomaly is a rare level of a 3-value category; nothing numeric differs.",
+        categorical_rare_anomalies,
+    ),
+    Scenario(
+        "text_timestamp",
+        "text_timestamp",
+        "Unusual-hour activity visible only in a text timestamp column.",
+        text_timestamp_anomalies,
+    ),
+    Scenario(
+        "irrelevant_columns",
+        "irrelevant_columns",
+        "Point anomalies in 2 columns diluted by 20 irrelevant numeric columns.",
+        irrelevant_columns_anomalies,
     ),
 ]
 

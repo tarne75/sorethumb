@@ -35,10 +35,11 @@ pipeline at all, for comparison (PyOD is deliberately not used here — see
 [`approximations.md`](approximations.md)).
 
 **Matrix shape**: `scripts/run_benchmark.py` runs every scenario under the shipped
-*default* ablation only (plus its `sklearn:*` baselines) — 10 pipeline
+*default* ablation only (plus its `sklearn:*` baselines) — 12 pipeline
 ablations exist in total (`AblationSpec`s: PCA on, standard scaler, each
-detector alone, all six detectors, composite/union combination), but only
-`default` is committed here to keep regeneration time bounded; run
+detector alone, all six detectors, each combination policy, and
+`near_constant_2`). The comparison across ensemble policies is published
+separately, in the [ensemble policy matrix](#ensemble-policy-matrix) below; run
 `sorethumb_ml.evaluate.pipeline_benchmark.run_pipeline_benchmark` directly with
 other `ablation_names` for the rest. `flag_precision`/`flag_recall`/
 `flag_f1`/`flag_false_positive_rate`/`flag_count` describe the ensemble's
@@ -57,7 +58,8 @@ is the metric that actually demonstrates the mechanism (see
 `tests/benchmark/test_pipeline_accuracy_floors.py` locks in a ROC-AUC floor
 per guarded (scenario, ablation) cell — this is what makes the harness
 capable of rejecting a default configuration: a real accuracy regression
-fails that suite. It also documents where the *shipped default* combination
+fails that suite. It runs on every pull request (the required
+`pipeline-accuracy-floors` check), not only on a schedule. It also documents where the *shipped default* combination
 mode (`intersection`) genuinely underperforms (`local`, `varying_density` —
 see [`approximations.md`](approximations.md)) rather than asserting something the data shows
 is false. `scripts/run_benchmark.py` itself refuses to publish a
@@ -95,6 +97,69 @@ matrix with a missing or errored cell (`assert_complete_and_error_free`).
 | swamping_clean | swamping | default | 3 | 800 | 150 | n/a | n/a | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0111 | 1.7 | 0.696 | 0.007 | 249.7 |
 | swamping_contaminated | swamping | default | 3 | 880 | 150 | n/a | n/a | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0044 | 0.7 | 0.655 | 0.007 | 251.0 |
 <!-- pipeline-benchmark-results-end -->
+
+## Ensemble policy matrix
+
+Every scenario above, plus three that exercise recent input handling --
+`categorical_rare` (the anomaly is a rare level of a 3-value category),
+`text_timestamp` (unusual-hour activity in a text timestamp column) and
+`irrelevant_columns` (two signal columns among twenty noise columns) -- under
+every registered [ensemble policy](ensemble-policy.md), each identified by its
+versioned id. The default policy, `intersection@1`, is a deliberate design
+decision; this matrix is the evidence any other choice should be made on.
+
+Per cell, over every seed (mean, 95% CI where shown):
+
+- **Precision and recall** of the actual flag decision (`flag_precision`,
+  `flag_recall`), and at the fixed review budget (`precision_at_k`, `recall_at_k`).
+- **Ranking**: `average_precision` (headline) and `roc_auc`.
+- **Stability**: the pipeline is refitted on random 80% subsamples of the
+  training rows; `flag_jaccard_stability` is how much of the flagged set the
+  refits keep, `rank_stability` the Spearman correlation of their scores.
+- **False-positive budget**: `flag_false_positive_rate` on normal rows, and
+  `over_flag_ratio`, the flagged count divided by the review budget (1.0 flags
+  exactly the budget).
+
+Each cell is checked against explicit per-anomaly-type budgets in
+[`tests/benchmark/budgets.toml`](../tests/benchmark/budgets.toml), set from
+stated principles and versioned. Where the default policy misses a budget, the
+miss is listed there under `accepted_limitations` with its reason; it is a
+documented trade-off, not a hidden one, and `tests/benchmark/test_policy_budgets.py`
+fails if the default misses a budget that is not accepted, or meets one that
+is still listed as accepted. The `near_constant_2` row is the evidence for the
+`profiling.near_constant_distinct` default (see the conclusion below the table).
+
+<!-- policy-matrix-results-start -->
+<!-- policy-matrix-results-end -->
+
+### What the matrix shows (2026-10-14, 10 seeds)
+
+- **`intersection@1` (the default)** is the most conservative policy. Its
+  false-positive rate stays at or below 2%, and it flags 11-46% of the review
+  budget. Even where its ranking is excellent (`point` and `clustered`, AP 1.00),
+  its flags catch only 13-16% of the anomalies. Recall is what the
+  precision-first default gives up.
+- **`composite-equal@1` / `composite-agreement@1`** flag about the full review
+  budget (`over_flag_ratio` ≈ 1.0), with recall of 0.6-0.8 on point,
+  clustered, text-timestamp and irrelevant-column anomalies. Neither reaches
+  `local` or `varying_density`. The two weightings differ only slightly, by up
+  to 0.14 ROC-AUC on `local` and `varying_density`.
+- **`union@1`** is the only policy that flags any `local` or `varying_density`
+  anomalies (recall 0.32-0.35), but it flags 1.7-2.2x the review budget,
+  breaching the false-positive budget.
+- **`contextual`** is near chance under every policy: no ensemble rule fixes it.
+
+### `profiling.near_constant_distinct`: why 3 stays the default
+
+The `near_constant_2` row keeps 3-value columns. Against the default (3):
+`categorical_rare` improves from AP 0.05 to 0.20 (ROC-AUC 0.51 to 0.88) and
+`contextual` slightly, but `local` falls from ROC-AUC 0.65 to 0.31 and
+`varying_density` from 0.65 to 0.37, both *below chance*, because the
+scenarios' 3-level noise column is kept. Everything else is unchanged. The
+default stays 3. Its failure mode is visible: `sorethumb inspect` shows the
+column dropped as near-constant, with the reason. Setting it to 2 risks a
+silent below-chance ranking. Set it to 2 where you have measured that a 3-value
+column carries your signal.
 
 ## Real-dataset / legacy synthetic benchmark
 

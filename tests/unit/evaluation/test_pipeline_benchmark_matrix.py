@@ -119,3 +119,62 @@ def test_fmt_row_for_table_renders_nan_roc_auc_as_na():
     assert formatted["roc_auc"] == "n/a"
     assert formatted["average_precision"] == "n/a"
     assert "nan" not in formatted["roc_auc"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Policy matrix plumbing (no detectors run)
+# ---------------------------------------------------------------------------
+
+
+def test_every_ablation_resolves_to_a_registered_policy() -> None:
+    from sorethumb_ml.evaluate.pipeline_benchmark import ABLATIONS
+    from sorethumb_ml.scoring.policies import policy_by_id
+
+    for ablation in ABLATIONS:
+        assert policy_by_id(ablation.policy_id) is not None, ablation
+
+
+def test_the_policy_matrix_covers_every_policy_except_manual_weighting() -> None:
+    """composite-manual's behaviour depends on user-supplied weights, so it has no
+    data-independent benchmark; every other registered policy must be in the matrix."""
+    from sorethumb_ml.evaluate.pipeline_benchmark import ABLATIONS, POLICY_ABLATIONS
+    from sorethumb_ml.scoring.policies import POLICIES
+
+    by_name = {a.name: a for a in ABLATIONS}
+    covered = {by_name[name].policy_id for name in POLICY_ABLATIONS}
+    assert covered == {p.id for p in POLICIES} - {"composite-manual@1"}
+
+
+def test_flag_jaccard_and_rank_correlation_edge_cases() -> None:
+    import numpy as np
+
+    from sorethumb_ml.evaluate.pipeline_benchmark import _flag_jaccard, _rank_correlation
+
+    a = np.array([True, True, False, False])
+    assert _flag_jaccard(a, a) == 1.0
+    assert _flag_jaccard(a, np.array([True, False, True, False])) == 1 / 3
+    assert _flag_jaccard(np.zeros(4, bool), np.zeros(4, bool)) == 1.0  # both flag nothing: they agree
+    assert _rank_correlation(np.array([1.0, 2.0, 3.0]), np.array([10.0, 20.0, 30.0])) == 1.0
+    assert np.isnan(_rank_correlation(np.ones(3), np.array([1.0, 2.0, 3.0])))
+
+
+def test_suite_version_moves_with_the_suite_parameters() -> None:
+    from sorethumb_ml.evaluate.pipeline_benchmark import policy_matrix_config, suite_version
+
+    base = suite_version(policy_matrix_config(n_seeds=10, n_bootstrap=3))
+    assert base == suite_version(policy_matrix_config(n_seeds=10, n_bootstrap=3))
+    assert base != suite_version(policy_matrix_config(n_seeds=5, n_bootstrap=3))
+    assert base != suite_version(policy_matrix_config(n_seeds=10, n_bootstrap=0))
+
+
+def test_to_json_carries_metadata_and_turns_nan_into_null() -> None:
+    import json
+    import math
+
+    from sorethumb_ml.evaluate.pipeline_benchmark import to_json
+    from tests.factories.pipeline_benchmark_rows import make_pipeline_row
+
+    payload = json.loads(to_json([make_pipeline_row(rank_stability=math.nan)], {"suite_version": "abc"}))
+    assert payload["metadata"] == {"suite_version": "abc"}
+    assert payload["rows"][0]["rank_stability"] is None
+    assert payload["rows"][0]["policy"] == "intersection@1"
