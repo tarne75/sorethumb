@@ -1,0 +1,24 @@
+# Pre-registered 2026-10-14, before any confirmation-seed run.
+candidate = "rule:discrete-composite@1"
+baseline = "intersection@1"
+hypothesis = """
+On data whose kept columns are all categorical or boolean, unanimity flags almost none of
+the anomalies even when the ranking is reasonable. Switching to the equal-weight composite
+there, and only there, improves flag F1 on all_categorical; on every other scenario the
+rule runs the baseline unchanged.
+"""
+primary_metric = "flag_f1"
+scenarios = ["all_categorical"]
+require = "all"
+alpha = 0.05
+stability_metric = "flag_jaccard_stability"
+stability_tolerance = 0.05
+n_resamples = 10000
+expected_outcome = """
+Uncertain, decided by one borderline budget. On the development seeds flag F1 on
+all_categorical improved by +0.12 (95% CI +0.08 to +0.16, Holm p 0.0002) with no
+false-positive, over-flag or stability regression, but average precision fell from 0.166
+to 0.149 against the 0.15 budget, which the decision rule counts as a regression. Every
+other scenario is identical to the baseline by construction. If confirmation puts the
+candidate's average precision at or above 0.15, it outperforms; if not, it does not.
+"""
