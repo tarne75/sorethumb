@@ -171,9 +171,8 @@ jobs:
   # beats random" -- the checks that catch an inverted score direction or a
   # detector that scores a planted anomaly cluster as normal. It runs here, not
   # only in ci.yml, so publish.yml / publish-testpypi.yml gate on it for the
-  # exact commit being published. The expensive and network-backed suites
-  # (full pipeline-scenario floors, real-dataset smoke) stay scheduled in
-  # ci.yml's full-nightly.
+  # exact commit being published. The network-backed real-dataset smoke stays
+  # scheduled in ci.yml's full-nightly; the pipeline-scenario floors run below.
   accuracy-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -185,6 +184,25 @@ jobs:
       - run: uv lock --check
       - run: uv sync --all-extras --frozen
       - run: uv run pytest tests/benchmark/test_accuracy_floors.py -m benchmark
+
+  # Full-pipeline scenario floors: the default configuration (and the guarded
+  # ablations) through real encoding, scaling, detectors, calibration and the
+  # ensemble, on the synthetic anomaly taxonomy, against per-cell ROC-AUC
+  # floors. Network-free and seeded, about a minute. It used to run only in
+  # the weekly full-nightly job, which let a default change (profiling.
+  # near_constant_distinct 3 -> 2) merge and push two cells below their floors
+  # unnoticed for days; a default that degrades a guarded cell now fails here.
+  pipeline-accuracy-floors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.12"
+      - run: uv lock --check
+      - run: uv sync --all-extras --frozen
+      - run: uv run pytest tests/benchmark/test_pipeline_accuracy_floors.py -m benchmark
 
   # Build, twine check, package-data assertion, and clean install smoke for
   # core and every advertised extra -- for BOTH the wheel and the sdist

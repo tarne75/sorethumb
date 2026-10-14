@@ -30,9 +30,10 @@ First public release.
   re-scanned (up to 1,000,000 rows) and refused, naming
   `source.read_options['infer_schema_length']`, if a numeric column was hidden
   by blank leading rows. A source path that is a directory is rejected with a
-  clear message. Columns with only a few distinct values (a rare category, a
-  handful of status codes) are kept: `profiling.near_constant_distinct`
-  (default 2) drops nothing unless raised. `columns.include_only` restricts
+  clear message. Binary columns are always kept;
+  `profiling.near_constant_distinct` (default 3) drops a column with exactly
+  3 distinct values, and setting it to 2 keeps those too (for a rare level
+  of a 3-value category that is itself the anomaly). `columns.include_only` restricts
   the features to the listed columns plus `time_column`, `group_by`,
   `id_column` and `reference_column`; a listed name not in the dataset is a
   `ConfigError`.
