@@ -32,6 +32,7 @@ _ABLATION = {a.name: a for a in ABLATIONS}
         ("categorical_rare", "channel", pl.String),
         ("text_timestamp", "event_time", pl.String),
         ("irrelevant_columns", "noise_19", pl.Float64),
+        ("all_categorical", "device", pl.String),
     ],
 )
 def test_new_scenarios_generate_labelled_frames(name: str, column: str, dtype: type) -> None:
@@ -66,6 +67,21 @@ def test_a_cell_without_refits_reports_stability_as_nan() -> None:
     assert math.isnan(out["flag_jaccard_stability"])
     assert math.isnan(out["rank_stability"])
     assert np.isfinite(out["roc_auc"])
+
+
+def test_all_categorical_has_no_numeric_column_and_anomalies_reuse_common_levels() -> None:
+    df, y = scenario_by_name("all_categorical").generate(2)  # type: ignore[union-attr]
+    assert all(dtype == pl.String for dtype in df.schema.values())
+    normal_levels = {c: set(df[c].to_numpy()[y == 0]) for c in df.columns}
+    for c in df.columns:
+        assert set(df[c].to_numpy()[y == 1]) <= normal_levels[c]  # no rare level: only the combination is new
+
+
+def test_a_candidate_rule_records_the_branch_it_took() -> None:
+    rule = _ABLATION["rule_discrete_composite"]
+    assert _fit_score_one_seed_pipeline("all_categorical", None, rule, seed=0)["policy_branch"] == "discrete"
+    assert _fit_score_one_seed_pipeline("point", None, rule, seed=0)["policy_branch"] == "mixed"
+    assert _fit_score_one_seed_pipeline("point", None, _ABLATION["default"], seed=0)["policy_branch"] is None
 
 
 def test_an_unknown_scenario_is_rejected() -> None:
