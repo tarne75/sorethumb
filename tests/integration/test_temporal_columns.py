@@ -167,3 +167,64 @@ def test_ambiguous_date_order_is_left_as_categorical_text_end_to_end(tmp_path: P
     assert "when" not in plan.parsed_temporal
     decision = next(d for d in plan.decisions if d.column == "when")
     assert decision.col_class.value == "categorical"
+
+
+def test_grouping_by_a_text_date_column_keeps_it_as_text(tmp_path: Path) -> None:
+    """Regression: a text-date group_by column was recast to Date, changing every group key
+    and orphaning earlier runs' history and models for those groups."""
+    rng = np.random.default_rng(0)
+    n = 400
+    amount = rng.normal(50, 10, n)
+    amount[:4] = 900.0
+    csv = tmp_path / "data.csv"
+    pl.DataFrame({"amount": amount, "day": rng.choice(["2026-01-01", "2026-01-02"], n)}).write_csv(csv)
+    cfg = _cfg(tmp_path, csv, group_by=["day"])
+    cfg = cfg.model_copy(update={"scoring": cfg.scoring.model_copy(update={"min_records": 50})})
+
+    result = run_detection(cfg, no_report=True)
+    assert sorted(g.group_label for g in result.groups) == ["2026-01-01", "2026-01-02"]
+    plan = load_plan(Workspace.open(tmp_path / "ws"), result.run_id)
+    assert "day" not in plan.parsed_temporal
+
+
+def test_strict_run_with_an_ambiguous_text_date_still_succeeds(tmp_path: Path) -> None:
+    """Regression: run.strict promoted the ambiguity warning and failed a run that, before
+    temporal parsing existed, succeeded with the column as text -- as it still is."""
+    rng = np.random.default_rng(0)
+    n = 300
+    amount = rng.normal(50, 10, n)
+    amount[:3] = 900.0
+    ambiguous = [f"{rng.integers(1, 13):02d}/{rng.integers(1, 13):02d}/2026" for _ in range(n)]
+    csv = tmp_path / "data.csv"
+    pl.DataFrame({"amount": amount, "when": ambiguous}).write_csv(csv)
+    cfg = _cfg(tmp_path, csv)
+    cfg = cfg.model_copy(update={"run": cfg.run.model_copy(update={"strict": True})})
+
+    with pytest.warns(AmbiguousDateFormatWarning):
+        result = run_detection(cfg, no_report=True)
+    assert result.groups[0].status == "success"
+
+
+def test_explain_plan_parses_text_dates_like_run_does(tmp_path: Path) -> None:
+    """Regression: inspect / explain-plan built their plan from the unparsed frame, so a text
+    date showed as categorical there while `run` derived temporal features from it."""
+    import json
+
+    from typer.testing import CliRunner
+
+    from sorethumb_ml.cli import app
+
+    csv = tmp_path / "data.csv"
+    _write_mixed_temporal_csv(csv)
+    toml = tmp_path / "sorethumb.toml"
+    toml.write_text(
+        f'[source]\nuri = "{csv.as_posix()}"\n\n[run]\nworkdir = "{(tmp_path / "ws").as_posix()}"\n'
+    )
+    result = CliRunner().invoke(app, ["explain-plan", "--config", str(toml), "--json"])
+    assert result.exit_code == 0, result.stdout
+    features = json.loads(result.stdout)["output_features"]
+    assert any(f.startswith("iso_date__") for f in features), features
+
+    shown = CliRunner().invoke(app, ["inspect", "--config", str(toml)])
+    assert shown.exit_code == 0, shown.stdout
+    assert "temporal" in shown.stdout

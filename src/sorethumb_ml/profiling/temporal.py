@@ -43,6 +43,7 @@ import polars as pl
 
 from sorethumb_ml.config import ColumnsConfig
 from sorethumb_ml.errors import AmbiguousDateFormatWarning, ConfigError
+from sorethumb_ml.profiling.classify import _is_ignored
 
 logger = logging.getLogger(__name__)
 
@@ -152,13 +153,17 @@ def _detect_ambiguous_numeric_date(series: pl.Series, column: str) -> TemporalPa
     month_ok = month_first_rate >= _MIN_PARSE_RATE
 
     if day_ok and month_ok:
-        warnings.warn(
-            f"column {column!r}: values parse as a date under both day-first ({day_first!r}) and "
-            f"month-first ({month_first!r}) order -- too ambiguous to guess, left as text. Set "
-            f"columns.datetime_formats[{column!r}] to the correct one to parse it.",
-            AmbiguousDateFormatWarning,
-            stacklevel=2,
-        )
+        # Never promoted by run.strict (see AmbiguousDateFormatWarning): the outcome --
+        # the column stays text -- is exactly what every earlier version did.
+        with warnings.catch_warnings():
+            warnings.simplefilter("always", AmbiguousDateFormatWarning)
+            warnings.warn(
+                f"column {column!r}: values parse as a date under both day-first ({day_first!r}) "
+                f"and month-first ({month_first!r}) order -- too ambiguous to guess, left as text. "
+                f"Set columns.datetime_formats[{column!r}] to the correct one to parse it.",
+                AmbiguousDateFormatWarning,
+                stacklevel=2,
+            )
         return None
     if day_ok:
         return TemporalParse(kind="date", format=day_first, forced=False)
@@ -218,11 +223,45 @@ def detect_temporal_parses(df: pl.DataFrame, columns_config: ColumnsConfig) -> d
         forced = columns_config.datetime_formats.get(column)
         if forced is not None:
             parses[column] = _forced_parse(column, forced, dtype)
-        elif dtype == pl.String:
+        elif dtype == pl.String and not _excluded_from_auto_detection(column, dtype, columns_config):
             found = _detect_column(df[column], column)
             if found is not None:
                 parses[column] = found
     return parses
+
+
+def _excluded_from_auto_detection(column: str, dtype: pl.DataType, columns_config: ColumnsConfig) -> bool:
+    """Columns auto-detection must leave as text (``datetime_formats`` can still force them).
+
+    * Identity columns -- ``group_by``, ``id_column``, ``reference_column`` --
+      unless the column is also ``time_column``: their values become group
+      keys, row ids and labels, and recasting them changes those keys,
+      orphaning every earlier run's history and models for those groups.
+    * Columns an ``ignore`` pattern matches against their *original* dtype:
+      ``"type:String *"`` was written about the column as it appears in the
+      source, and must not stop matching because detection recast it.
+    """
+    if column == columns_config.time_column:
+        return False
+    identity = {c for c in (columns_config.id_column, columns_config.reference_column) if c}
+    identity |= set(columns_config.group_by)
+    if column in identity:
+        return True
+    protected = identity | ({columns_config.time_column} if columns_config.time_column else set())
+    return _is_ignored(column, str(dtype), columns_config.ignore, protected)
+
+
+def parse_temporal_columns(
+    df: pl.DataFrame, columns_config: ColumnsConfig
+) -> tuple[pl.DataFrame, dict[str, TemporalParse]]:
+    """Detect, cast and convert in one step: what every fresh (non-replay) plan build needs.
+
+    Returns the cast frame and the detection result to record on the
+    ``FeaturePlan`` (``build_feature_plan(..., parsed_temporal=...)``).
+    """
+    parsed = detect_temporal_parses(df, columns_config)
+    df = apply_temporal_parses(df, parsed)
+    return convert_durations_to_seconds(df), parsed
 
 
 def _cast_expr(column: str, parse: TemporalParse) -> pl.Expr:
@@ -238,30 +277,35 @@ def _cast_expr(column: str, parse: TemporalParse) -> pl.Expr:
     return col.str.to_time(format=parse.format, strict=False).alias(column)  # kind == "time"
 
 
-_TARGET_DTYPE_PREFIX: dict[TemporalKind, str] = {
-    "date": "Date",
-    "datetime": "Datetime",
-    "time": "Time",
-    "epoch_s": "Datetime",
-    "epoch_ms": "Datetime",
-}
+def _still_in_source_dtype(dtype: pl.DataType, kind: TemporalKind) -> bool:
+    """Whether *dtype* is what this parse reads from: text, or a number for epoch kinds.
+
+    Anything else -- already cast by an earlier call, or a column whose dtype
+    drifted since the plan was fitted -- is left alone: re-parsing is a no-op
+    in the first case, and in the second ``apply_feature_plan``'s schema
+    fingerprint check is what reports it. (An earlier prefix test,
+    ``str(dtype).startswith("Date")``, also matched ``Datetime``.)
+    """
+    if kind in ("epoch_s", "epoch_ms"):
+        return dtype.is_numeric()
+    return dtype == pl.String
 
 
 def apply_temporal_parses(df: pl.DataFrame, parsed: dict[str, TemporalParse]) -> pl.DataFrame:
     """Cast every column named in *parsed* to its target date/time dtype.
 
-    Idempotent: a column already at (or past) its target dtype is left alone,
-    so calling this twice on the same already-cast frame -- the in-process
-    pipeline casts once, early, before ``apply_feature_plan`` calls this again
-    -- is a no-op, and a fresh ``score --from-run`` load (still raw text) gets
-    cast for the first time here.
+    Idempotent: only a column still in its source dtype (text, or a number for
+    an epoch parse) is cast. Calling this twice on the same already-cast frame
+    -- the in-process pipeline casts once, early, before ``apply_feature_plan``
+    calls this again -- is therefore a no-op, and a fresh ``score --from-run``
+    load (still raw text) gets cast for the first time here.
     """
     exprs = []
     for column, parse in parsed.items():
         if column not in df.columns:
             continue  # apply_feature_plan's own schema_fingerprint check reports a missing column
-        if str(df.schema[column]).startswith(_TARGET_DTYPE_PREFIX[parse.kind]):
-            continue  # already parsed
+        if not _still_in_source_dtype(df.schema[column], parse.kind):
+            continue  # already parsed (or drifted -- see _still_in_source_dtype)
         exprs.append(_cast_expr(column, parse))
     if not exprs:
         return df

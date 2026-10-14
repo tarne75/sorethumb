@@ -16,8 +16,12 @@ Versioning: [Semantic Versioning](https://semver.org/).
   `columns.time_column` stored as text now compares correctly during
   period-window filtering instead of lexically. Every temporal column gets
   derived features now, not only the one `columns.time_column` picks for
-  sorting and history. An ambiguous day/month order is never guessed and is
-  left as text, with a warning. New `columns.datetime_formats` forces a
+  sorting and history. `group_by`, `id_column` and `reference_column`
+  columns, and columns an `ignore` pattern matches, are left as text so
+  group keys and ignore rules are unchanged; `sorethumb inspect` and
+  `explain-plan` apply the same parse as `run`. An ambiguous day/month order
+  is never guessed and is left as text, with a warning (never promoted to an
+  error by `run.strict`). New `columns.datetime_formats` forces a
   column's format (or `"epoch_s"`/`"epoch_ms"` for a Unix-timestamp
   integer/float column) where auto-detection can't or shouldn't decide.
   `Duration` columns are converted to a numeric seconds feature.

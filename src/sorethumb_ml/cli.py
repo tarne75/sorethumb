@@ -968,7 +968,11 @@ def inspect(
     df = load_dataset(cfg.source, cache_dir=cache_dir)
     console.print(f"  rows={len(df):,}  cols={_e(len(df.columns))}")
 
-    plan = build_feature_plan(df, cfg)
+    # Same parse `run` applies, so a date stored as text shows as temporal here too.
+    from sorethumb_ml.profiling.temporal import parse_temporal_columns  # noqa: PLC0415
+
+    df, parsed_temporal = parse_temporal_columns(df, cfg.columns)
+    plan = build_feature_plan(df, cfg, parsed_temporal)
 
     table = Table(title="Feature plan", show_header=True, header_style="bold cyan")
     table.add_column("Column", style="white", no_wrap=True)
@@ -1802,8 +1806,11 @@ def explain_plan(
         cache_dir = ws_path / "cache" / "datasets"
         cache_dir.mkdir(parents=True, exist_ok=True)
         try:
+            from sorethumb_ml.profiling.temporal import parse_temporal_columns  # noqa: PLC0415
+
             df = load_dataset(cfg.source, cache_dir=cache_dir)
-            plan = build_feature_plan(df, cfg)
+            df, parsed_temporal = parse_temporal_columns(df, cfg.columns)
+            plan = build_feature_plan(df, cfg, parsed_temporal)
         except SorethumbError as exc:
             _fail(json_output, str(exc), _classify_error(exc))
 

@@ -73,7 +73,10 @@ Use this table to decide:
    bare time of day, or a day/month/year date) is detected and parsed
    automatically -- it does not need to already be a native date/time
    column, and every such column gets temporal features, not only
-   `time_column`. An ambiguous day/month order (every value's day and month
+   `time_column`. Columns that identify rows or groups (`group_by`,
+   `id_column`, `reference_column`) and columns an `ignore` pattern matches
+   are left as text, so their keys and your ignore rules don't change. An
+   ambiguous day/month order (every value's day and month
    both ≤ 12, so either reading would parse) is never guessed; set
    `columns.datetime_formats` to resolve it, or to force-parse a column auto-detection
    misses, including Unix epoch seconds/milliseconds:

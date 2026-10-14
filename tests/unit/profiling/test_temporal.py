@@ -241,3 +241,73 @@ def test_convert_durations_is_a_no_op_with_none_present() -> None:
 )
 def test_temporal_parse_dict_roundtrip(parse: TemporalParse) -> None:
     assert TemporalParse.from_dict(parse.to_dict()) == parse
+
+
+# ---------------------------------------------------------------------------
+# Columns auto-detection must leave alone
+# ---------------------------------------------------------------------------
+
+_TEXT_DATES = ["2026-01-01", "2026-01-02", "2026-01-03"]
+
+
+@pytest.mark.parametrize(
+    "columns_kw",
+    [{"group_by": ["day"]}, {"id_column": "day"}, {"reference_column": "day"}],
+    ids=["group_by", "id_column", "reference_column"],
+)
+def test_identity_columns_are_never_auto_detected(columns_kw: dict[str, object]) -> None:
+    """Recasting a group/id/reference column changes its keys and orphans earlier history."""
+    df = pl.DataFrame({"day": _TEXT_DATES})
+    assert detect_temporal_parses(df, ColumnsConfig(**columns_kw)) == {}  # type: ignore[arg-type]
+
+
+def test_time_column_is_still_parsed_even_when_it_is_also_a_group_column() -> None:
+    df = pl.DataFrame({"day": _TEXT_DATES})
+    parsed = detect_temporal_parses(df, ColumnsConfig(group_by=["day"], time_column="day"))
+    assert "day" in parsed
+
+
+def test_a_forced_format_still_applies_to_an_identity_column() -> None:
+    """Auto-detection stays out; an explicit datetime_formats entry is the user's own choice."""
+    df = pl.DataFrame({"day": _TEXT_DATES})
+    cfg = ColumnsConfig(group_by=["day"], datetime_formats={"day": "%Y-%m-%d"})
+    assert detect_temporal_parses(df, cfg)["day"].forced is True
+
+
+@pytest.mark.parametrize("pattern", ["type:String *", "type:String d*", "day"])
+def test_columns_an_ignore_pattern_matches_on_their_original_dtype_are_not_detected(
+    pattern: str,
+) -> None:
+    """Regression: 'type:String *' stopped matching a text date once it was recast to Date."""
+    df = pl.DataFrame({"day": _TEXT_DATES})
+    assert detect_temporal_parses(df, ColumnsConfig(ignore=[pattern])) == {}
+
+
+def test_an_ignore_pattern_for_another_dtype_does_not_block_detection() -> None:
+    df = pl.DataFrame({"day": _TEXT_DATES})
+    assert "day" in detect_temporal_parses(df, ColumnsConfig(ignore=["type:Int64 *"]))
+
+
+# ---------------------------------------------------------------------------
+# run.strict and exact dtype checks
+# ---------------------------------------------------------------------------
+
+
+def test_ambiguous_date_warning_is_never_promoted_to_an_error() -> None:
+    """Like ReportGenerationWarning: the outcome (column stays text) is what earlier versions
+    did, so a strict run must not start failing over it."""
+    from sorethumb_ml.errors import SorethumbWarning
+
+    df = pl.DataFrame({"when": ["01/02/2026", "03/04/2026"]})
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("error", SorethumbWarning)  # what run.strict installs
+        parsed = detect_temporal_parses(df, ColumnsConfig())
+    assert parsed == {}
+    assert any(issubclass(w.category, AmbiguousDateFormatWarning) for w in caught)
+
+
+def test_a_date_parse_is_not_skipped_for_a_column_that_is_already_a_datetime() -> None:
+    """Regression: a str(dtype).startswith('Date') check treated Datetime as already a Date."""
+    df = pl.DataFrame({"d": ["2026-01-01 10:00:00"]}).with_columns(pl.col("d").str.to_datetime())
+    out = apply_temporal_parses(df, {"d": TemporalParse(kind="date", format=None, forced=False)})
+    assert isinstance(out.schema["d"], pl.Datetime)  # left alone: not a String, nothing to parse

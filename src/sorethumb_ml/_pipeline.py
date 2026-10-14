@@ -63,7 +63,7 @@ from sorethumb_ml.profiling.plan import FeaturePlan, build_feature_plan
 from sorethumb_ml.profiling.temporal import (
     apply_temporal_parses,
     convert_durations_to_seconds,
-    detect_temporal_parses,
+    parse_temporal_columns,
 )
 from sorethumb_ml.report.html import GroupSection, RunMeta, render_report
 from sorethumb_ml.scoring.calibrate import Calibrator
@@ -751,9 +751,7 @@ def run_detection(
         # filtering (so a text columns.time_column compares correctly, not
         # lexically) and before build_feature_plan (so every later stage sees
         # the same temporal dtypes a native Parquet column would have had).
-        parsed_temporal = detect_temporal_parses(df_raw, config.columns)
-        df_raw = apply_temporal_parses(df_raw, parsed_temporal)
-        df_raw = convert_durations_to_seconds(df_raw)
+        df_raw, parsed_temporal = parse_temporal_columns(df_raw, config.columns)
 
         # ── 2. Period resolution + window filter ────────────────────────
         df_raw, period_label, period_window = _resolve_and_filter_period(
