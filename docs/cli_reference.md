@@ -317,7 +317,7 @@ rows at all), which is not treated as an error.
 | `--limit-groups INT` | — | Cap the number of groups processed, applied after `--only-group`/`--group-filter`. Groups are sorted by label first, so the same limit always keeps the same groups. Must be >= 1 when given (exit code 2 otherwise). |
 | `--detectors STR`, `-d` | — | Comma-separated detector aliases, replacing the config list for this invocation only. Aliases: `if`=isolation_forest · `km`=kmeans_distance · `oc`=one_class_svm · `ecod` · `lof` · `hbos`. Full names also accepted. Never modifies `sorethumb.toml`. |
 | `--save-config / --no-save-config` | ask on a terminal, else no | With `data_file` and no `sorethumb.toml`: save (or don't save) this run's settings to `sorethumb.toml` without asking. No effect when the config file already exists. |
-| `--json` | off | Machine-readable JSON summary on stdout. Its `ensemble_policy` names the versioned rule that produced the flags (e.g. `intersection@1`; see [ensemble-policy.md](ensemble-policy.md)). |
+| `--json` | off | Machine-readable JSON summary on stdout. Its `ensemble_policy` names the versioned rule that produced the flags (e.g. `intersection@1`; see [ensemble-policy.md](ensemble-policy.md)), and `policy_evidence_id` the [`sorethumb backtest`](#sorethumb-backtest) record a non-default policy relied on (`null` otherwise). |
 | `--dry-run` | off | Resolve the plan and register the run, but fit no models. Still writes the workspace + schema migrations, the `dataset` / `dataset_snapshot` rows, and the `run` row (left in status `running`). Skips the feature plan, detector models, per-group results, history rows and the report. |
 
 ---
@@ -361,6 +361,48 @@ sorethumb score --from-run abc12345
 | `--config`, `--workdir`, `--log-level`, `--seed`, `--strict` | — | See [Common options](#common-options). |
 | `--no-report` | off | Skip report generation. |
 | `--json` | off | Machine-readable JSON summary. |
+
+---
+
+## `sorethumb backtest`
+
+Compare ensemble policies with the default (`intersection@1`) on your own data,
+and record the evidence in the workspace. The configured pipeline is fitted on
+`--replicates` random subsamples of the dataset (each `--subsample` of the rows),
+and every policy is applied to the same fits, so the comparison is paired.
+
+- **With labels** (`columns.reference_column`, 0/1, never used for fitting): a
+  candidate *outperforms* the default only if its flag F1 is significantly higher
+  (paired bootstrap, Holm-corrected across every candidate tested in the call),
+  it spends no more than the review budget on wrong rows where the default does
+  not, and its flags are no less stable across replicates.
+- **Without labels**: only flag volume and stability are reported, and the
+  verdict is `not_assessable`.
+
+Needs a numeric `scoring.contamination` (the review budget); `"auto"` is refused.
+Each candidate's verdict is recorded for the logical dataset and the configuration
+apart from the policy (and the explain settings, seed and strictness). A later
+`run` or `score` with a non-default policy looks for an `outperforms` record in
+that scope: without one it warns, and `--strict` refuses (exit code `2`). See
+[ensemble-policy.md](ensemble-policy.md#choosing-a-different-policy-on-your-data).
+
+```bash
+sorethumb backtest                                   # every registered policy
+sorethumb backtest --policy composite-agreement@1    # one candidate
+sorethumb backtest --replicates 40 --json
+```
+
+**Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--policy ID` | every registered policy | Candidate to test (repeatable), e.g. `union@1`. `composite-manual@1` is included by default only when `scoring.weights` is set. |
+| `--replicates INT` | `20` | Random subsamples to fit; at least 5. |
+| `--subsample FLOAT` | `0.8` | Fraction of rows in each subsample, in [0.2, 1). |
+| `--no-record` | off | Measure only; write no evidence. |
+| `--json` | off | The full result (per-policy means, verdicts, evidence ids) as JSON. |
+
+Plus `--config`, `--workdir`, `--log-level`, `--seed`.
 
 ---
 

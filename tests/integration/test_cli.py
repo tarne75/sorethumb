@@ -20,6 +20,7 @@ from typer.testing import CliRunner
 
 from sorethumb_ml.cli import app
 from tests.factories.frames import write_grouped_csv as _write_csv
+from tests.factories.policy_evidence import config_from_toml, record_evidence
 
 pytestmark = pytest.mark.integration
 
@@ -337,6 +338,7 @@ def test_run_strict_flag_overrides_explicit_toml_false(workspace):
     _, toml_path, workdir = workspace
     toml_path.write_text(toml_path.read_text().replace("[run]\n", "[run]\nstrict = false\n", 1))
 
+    record_evidence(config_from_toml(toml_path))  # strict refuses the fixture's composite policy otherwise
     result = runner.invoke(app, ["run", "--config", str(toml_path), "--no-report", "--strict"])
     assert result.exit_code == 0, result.stdout + (result.stderr or "")
 
@@ -369,6 +371,7 @@ def test_run_no_strict_or_no_strict_flag_respects_toml_true(workspace):
     _, toml_path, workdir = workspace
     toml_path.write_text(toml_path.read_text().replace("[run]\n", "[run]\nstrict = true\n", 1))
 
+    record_evidence(config_from_toml(toml_path))  # strict refuses the fixture's composite policy otherwise
     result = runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
     assert result.exit_code == 0, result.stdout + (result.stderr or "")
 

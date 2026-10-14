@@ -246,6 +246,10 @@ markers = [
 ]
 filterwarnings = [
     "error::sorethumb_ml.errors.SorethumbWarning",
+    # Most tests configure a non-default policy (composite, union) for reasons that
+    # have nothing to do with backtest evidence; tests/integration/
+    # test_policy_evidence_gate.py asserts this warning explicitly.
+    "ignore::sorethumb_ml.errors.UnevidencedPolicyWarning",
 ]
 
 # ── Coverage ─────────────────────────────────────────────────────────────────

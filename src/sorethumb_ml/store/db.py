@@ -467,11 +467,14 @@ class Store:
         source_run_id: str | None = None,
         source_digest: str | None = None,
         ensemble_policy: str | None = None,
+        policy_evidence_id: str | None = None,
     ) -> None:
         """Record a new run in status 'running'.
 
         *ensemble_policy* is the versioned id of the rule that turns detector votes
         into flags (``scoring.policies``), e.g. ``intersection@1``.
+        *policy_evidence_id* is the backtest evidence a non-default policy relied
+        on (``policy_evidence``), or None.
 
         *source_digest* is the one-way digest of the run's full source URI; *config_json*
         must already carry only the redacted display URI.
@@ -507,8 +510,8 @@ class Store:
             INSERT OR IGNORE INTO run
                 (run_id, dataset_fp, config_hash, config_json, seed,
                  library_version, python_version, started_at, status, source_run_id, source_digest,
-                 ensemble_policy)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)
+                 ensemble_policy, policy_evidence_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -522,9 +525,60 @@ class Store:
                 source_run_id,
                 source_digest,
                 ensemble_policy,
+                policy_evidence_id,
             ),
         )
         self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # policy_evidence
+    # ------------------------------------------------------------------
+
+    def insert_policy_evidence(self, record: dict[str, Any]) -> None:
+        """Record one backtest comparison (see migration 011 for the columns).
+
+        *record* must carry every column but ``created_at``, which is stamped here.
+        """
+        row = {**record, "created_at": _now_utc()}
+        cols = ", ".join(row)
+        marks = ", ".join("?" for _ in row)
+        self._conn.execute(f"INSERT INTO policy_evidence ({cols}) VALUES ({marks})", tuple(row.values()))
+        self._conn.commit()
+
+    def latest_policy_evidence(
+        self, dataset_fp: str, policy_id: str, scope_hash: str | None = None
+    ) -> dict[str, Any] | None:
+        """Return the most recent evidence record for *policy_id* on *dataset_fp*, or None.
+
+        With *scope_hash*, only a record made under that configuration scope
+        (``scoring.policies.policy_scope_hash``) counts.
+        """
+        if scope_hash is None:
+            row = self._conn.execute(
+                "SELECT * FROM policy_evidence WHERE dataset_fp=? AND policy_id=? "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (dataset_fp, policy_id),
+            ).fetchone()
+        else:
+            row = self._conn.execute(
+                "SELECT * FROM policy_evidence WHERE dataset_fp=? AND policy_id=? AND scope_hash=? "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (dataset_fp, policy_id, scope_hash),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_policy_evidence(self, dataset_fp: str | None = None) -> list[dict[str, Any]]:
+        """Return evidence records, newest first, optionally for one dataset."""
+        if dataset_fp is None:
+            rows = self._conn.execute(
+                "SELECT * FROM policy_evidence ORDER BY created_at DESC, rowid DESC"
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM policy_evidence WHERE dataset_fp=? ORDER BY created_at DESC, rowid DESC",
+                (dataset_fp,),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def mark_run_complete(self, run_id: str) -> None:
         """Transition run to complete."""

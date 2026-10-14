@@ -1234,6 +1234,145 @@ def score(
 
 
 # ---------------------------------------------------------------------------
+# sorethumb backtest
+# ---------------------------------------------------------------------------
+
+
+def _policy_config_keys(policy_id: str) -> str:
+    """Return the scoring settings that select *policy_id*, for the hint after a backtest."""
+    from sorethumb_ml.scoring.policies import policy_by_id  # noqa: PLC0415
+
+    policy = policy_by_id(policy_id)
+    if policy is None:
+        return policy_id
+    keys = f'combination = "{policy.combination}"'
+    if policy.weighting is not None:
+        keys += f', weighting = "{policy.weighting}"'
+    return keys
+
+
+@app.command()
+def backtest(
+    config: _CONFIG_OPT = None,
+    workdir: _WORKDIR_OPT = None,
+    log_level: _LOG_LEVEL_OPT = None,
+    seed: _SEED_OPT = None,
+    policy: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--policy",
+            help=(
+                "Candidate policy id to test against the default (repeatable), e.g. "
+                "composite-agreement@1. Default: every registered policy."
+            ),
+        ),
+    ] = None,
+    replicates: Annotated[
+        int, typer.Option("--replicates", help="Number of random subsamples to fit (at least 5).")
+    ] = 20,
+    subsample: Annotated[
+        float, typer.Option("--subsample", help="Fraction of rows in each subsample, in [0.2, 1).")
+    ] = 0.8,
+    no_record: Annotated[
+        bool, typer.Option("--no-record", help="Measure only; write no evidence to the workspace.")
+    ] = False,
+    json_output: _JSON_OPT = False,
+) -> None:
+    """Compare ensemble policies with the default on your own data, and record the evidence.
+
+    Fits the configured pipeline on --replicates random subsamples of the
+    dataset and applies the default policy and each candidate to the same fits.
+    With columns.reference_column (0/1 labels, never used for fitting) a
+    candidate outperforms the default only if its flag F1 is significantly
+    higher (paired bootstrap, Holm-corrected across the candidates tested),
+    it spends no more than the review budget on wrong rows where the default
+    does not, and its flags are no less stable. Without labels only flag
+    volume and stability are reported. Needs a numeric scoring.contamination
+    (the review budget). A later `run` with a non-default policy looks for an
+    "outperforms" record for this dataset and configuration; without one it
+    warns, and run.strict refuses. See docs/ensemble-policy.md.
+    """
+    _setup_logging(log_level or "WARNING")
+    cfg = _load_config(
+        config, workdir=workdir, seed=seed, strict=None, log_level=log_level, json_output=json_output
+    )
+    from sorethumb_ml.evaluate.user_backtest import backtest_dataset  # noqa: PLC0415
+
+    if not json_output:
+        console.print(
+            f"[bold]sorethumb backtest[/bold]  workspace={_e(cfg.run.workdir)}  "
+            f"replicates={replicates}  review budget={_e(cfg.scoring.contamination)}"
+        )
+    try:
+        result = backtest_dataset(
+            cfg, policies=policy or None, replicates=replicates, subsample=subsample, record=not no_record
+        )
+    except SorethumbError as exc:
+        _fail(json_output, f"backtest failed: {exc}", _classify_error(exc))
+
+    if json_output:
+        typer.echo(json.dumps(result.as_dict(), default=str))
+        raise typer.Exit(0)
+
+    def _f(v: float, fmt: str = ".3f") -> str:
+        return "—" if v != v else format(v, fmt)  # noqa: PLR0124 -- NaN check
+
+    table = Table(
+        title=f"Policies on {_e(result.dataset_fp)} ({result.n_rows} rows, {result.replicates} replicates)",
+        show_header=True,
+    )
+    for col in ("Policy", "Flags/budget", "Wrong/budget", "Precision", "Recall", "F1", "AP", "Stability"):
+        table.add_column(col, justify="left" if col == "Policy" else "right")
+    for summ in result.summaries:
+        _add_row(
+            table,
+            summ.policy_id + (" (default)" if summ.policy_id == result.baseline_policy_id else ""),
+            _f(summ.over_flag_ratio, ".2f"),
+            _f(summ.false_positive_budget_ratio, ".2f"),
+            _f(summ.flag_precision),
+            _f(summ.flag_recall),
+            _f(summ.flag_f1),
+            _f(summ.average_precision),
+            _f(summ.flag_jaccard_stability),
+        )
+    console.print(table)
+
+    verdicts = Table(title=f"Against {_e(result.baseline_policy_id)}", show_header=True)
+    for col in ("Candidate", "Verdict", "F1 difference [95% CI]", "p (Holm)", "Why not"):
+        verdicts.add_column(col)
+    for v in result.verdicts:
+        ci = (
+            "—"
+            if v.mean_difference != v.mean_difference
+            else (f"{v.mean_difference:+.3f} [{v.ci_low:+.3f}, {v.ci_high:+.3f}]")
+        )
+        _add_row(
+            verdicts,
+            v.policy_id,
+            v.verdict.replace("_", " "),
+            ci,
+            _f(v.p_holm, ".4f"),
+            "; ".join(v.reasons),
+        )
+    console.print(verdicts)
+    for note in result.notes:
+        console.print(f"[yellow]note:[/yellow] {_e(note)}")
+    if no_record:
+        console.print("[dim]--no-record: no evidence was written.[/dim]")
+    else:
+        console.print(
+            f"[dim]Evidence recorded in {_e(cfg.run.workdir)} (scope {_e(result.scope_hash[:8])}).[/dim]"
+        )
+    winners = [v.policy_id for v in result.verdicts if v.verdict == "outperforms"]
+    for policy_id in winners:
+        console.print(
+            f"[green]{_e(policy_id)} outperforms the default on this data.[/green] "
+            f"To use it, set under {_e('[scoring]')}: {_e(_policy_config_keys(policy_id))}"
+        )
+    raise typer.Exit(0)
+
+
+# ---------------------------------------------------------------------------
 # sorethumb report
 # ---------------------------------------------------------------------------
 
@@ -2453,6 +2592,7 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
         "snapshot_fp": result.snapshot_fp,
         "source_run_id": result.source_run_id,
         "ensemble_policy": result.ensemble_policy,
+        "policy_evidence_id": result.policy_evidence_id,
         "id_identity_scope": result.id_identity_scope,
         "group_selection_error": result.group_selection_error,
         "period_label": result.period_label,

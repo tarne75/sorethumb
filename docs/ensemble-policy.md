@@ -35,17 +35,37 @@ the default misses is listed there under `accepted_limitations` with its reason,
 and a scheduled CI job fails if the default misses one that is not listed, or
 meets one that still is.
 
-## Choosing a different policy
+## Choosing a different policy on your data
 
 `scoring.combination` (and `scoring.weighting` for `composite`) selects another
 registered policy: `union@1`, `composite-equal@1`, `composite-agreement@1` or
 `composite-manual@1`. Choose one on evidence, not intuition (`composite-agreement@1`
 has published backtest evidence on the synthetic suite; see
-[Round 2](#round-2-2026-10-14-budgets-v3)): measure the candidate
-against the default on labelled data that resembles yours, comparing the precision and
-recall of the actual flag decision, the ranking (average precision), stability across
-refits, and the false-positive rate, and prefer a policy only where it wins clearly
-without breaching a false-positive budget the default meets.
+[Round 2](#round-2-2026-10-14-budgets-v3)). That evidence is about known anomaly
+types, though. Whether a policy is better on *your* data is measured by
+`sorethumb backtest` ([CLI reference](cli_reference.md#sorethumb-backtest)):
+
+1. Set `columns.reference_column` to a 0/1 label column (used only for evaluation,
+   never for fitting) and `scoring.contamination` to the fraction of rows you can
+   review.
+2. Run `sorethumb backtest`. It fits your configured pipeline on random subsamples
+   of your rows, applies the default and every candidate to the same fits, and
+   decides each candidate with the same rule as the synthetic backtests:
+   significantly higher flag F1 (paired bootstrap, Holm-corrected across all the
+   candidates tested at once, so trying several and keeping the best is accounted
+   for), no more wrong flags than the review budget where the default stays within
+   it, and flags no less stable.
+3. Each verdict is recorded in the workspace for this dataset and this
+   configuration (everything but the policy itself and settings that cannot change
+   a flag).
+
+A `run` or `score` with a non-default policy then looks for an `outperforms` record
+in that scope and records its id on the run (`policy_evidence_id`). Without one, the
+run warns and proceeds; under `run.strict` it refuses before anything is registered.
+The policy is never switched for you: the choice stays yours, made visible and
+checkable. Without labels, `sorethumb backtest` reports flag volume and stability
+only; its `not_assessable` verdict does not satisfy the check, because accuracy was
+not measured.
 
 ## Backtests: when a candidate may be said to outperform
 

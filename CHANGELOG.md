@@ -146,6 +146,13 @@ First public release.
   disjoint confirmation seeds, paired bootstrap with Holm correction, no budget
   or stability regressions, confirmation in rounds of fresh seeds) and
   publishes each confirmation result.
+- **`sorethumb backtest`**: compares every registered ensemble policy with the
+  default on your own data, using `columns.reference_column` labels, and records
+  each verdict in the workspace (migration 011, `policy_evidence`). A `run` or
+  `score` with a non-default policy that has no `outperforms` record for the
+  dataset and configuration warns (`UnevidencedPolicyWarning`); `run.strict`
+  refuses it (`UnevidencedPolicyError`, exit code 2). The evidence a run relied
+  on is recorded as `run.policy_evidence_id` and in `--json` output.
 
 ### Security
 

@@ -22,6 +22,7 @@ from sorethumb_ml.config import Config, DetectorConfig, SourceConfig
 from sorethumb_ml.errors import SampleTruncatedWarning, SlowStageWarning
 from tests.factories.configs import make_config
 from tests.factories.frames import write_leading_anomaly_csv as _write_csv
+from tests.factories.policy_evidence import record_evidence
 
 pytestmark = pytest.mark.integration
 
@@ -183,7 +184,10 @@ def test_run_strict_promotes_in_group_warnings_to_failure(
     assert lenient.n_succeeded == 1
     assert any("synthetic in-group" in w for w in lenient.warnings_issued)
 
-    strict = run_detection(_cfg(csv, tmp_path / "ws_strict", run_kwargs={"strict": True}), no_report=True)
+    strict_cfg = _cfg(csv, tmp_path / "ws_strict", run_kwargs={"strict": True})
+    if strict_cfg.scoring.combination != "intersection":
+        record_evidence(strict_cfg)  # run.strict otherwise refuses a non-default policy up front
+    strict = run_detection(strict_cfg, no_report=True)
     assert strict.n_succeeded == 0
     assert strict.n_failed == 1
     assert "SlowStageWarning" in (strict.groups[0].error or "")
