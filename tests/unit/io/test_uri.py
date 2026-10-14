@@ -26,19 +26,20 @@ def _hash(uri: str) -> str:
 
 
 # dataset_id is taken from the code before canonicalisation existed and must never move.
-# config_hash incorporates the whole default Config -- including profiling thresholds -- so
-# it moves whenever a default changes (most recently profiling.near_constant_distinct, 3 -> 2);
-# that is an expected, one-time model-reuse invalidation, not a URI-identity regression. What
-# this test guards is that these four URI spellings keep hashing to the one *current* value.
+# dataset_id is taken from the code before canonicalisation existed and must never move.
+# config_hash incorporates the whole default Config, so it moves whenever a default changes
+# (most recently profiling.near_constant_distinct 3 -> 2, and columns.datetime_formats being
+# added) -- an expected, one-time model-reuse invalidation, not a URI-identity regression.
+# What this test guards is that these four URI spellings keep hashing to the one *current* value.
 _PINNED = [
-    ("/data/sales/2026 Q3.csv", "2026-Q3-f8f9aa16390c", "3947beb6bff65facf74f11c5071345ad"),
-    ("data/relative.parquet", "relative-fdeb11238495", "8919f45d716b2c2f58e4ebb6f6c7efd1"),
+    ("/data/sales/2026 Q3.csv", "2026-Q3-f8f9aa16390c", "9d137c393a94ad8c82435dc1e97bdb4f"),
+    ("data/relative.parquet", "relative-fdeb11238495", "833ea8b05bf8ac7d51a8706342d63d4b"),
     (
         "https://example.com/exports/daily.csv?sig=abc",
         "daily-e81dab578786",
-        "a9fe415c8e57c36b0c84233a9e94caac",
+        "f9d069b35bdefd6fa630474f886e5cd8",
     ),
-    ("file:///tmp/x%20y.csv", "x-20y-3ce4812025b2", "2792c7ddd0e57c7a8e357e07c983aea1"),
+    ("file:///tmp/x%20y.csv", "x-20y-3ce4812025b2", "e90dbd00c2a1db31640ee90700b0bb0f"),
 ]
 
 

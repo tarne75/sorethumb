@@ -33,6 +33,7 @@ from sorethumb_ml.features.space import FeatureSpace
 from sorethumb_ml.io.fingerprint import INTERNAL_ROW_ID_COLUMN, schema_fingerprint
 from sorethumb_ml.profiling.missing import float_nan_to_null
 from sorethumb_ml.profiling.plan import FeaturePlan, recompute_output_features
+from sorethumb_ml.profiling.temporal import apply_temporal_parses, convert_durations_to_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +242,15 @@ def apply_feature_plan(df: pl.DataFrame, plan: FeaturePlan) -> FeatureSpace:
     matrix. Same schema (names + dtypes) is required; different *values* for
     those columns — the normal score-forward case — is exactly what this
     fingerprint does not object to.
+
+    *df* need not already be parsed: ``plan.parsed_temporal`` is replayed on it
+    first (a no-op for a column already at its target dtype, so this is safe
+    whether *df* is a fresh raw load -- e.g. ``score --from-run`` -- or
+    already cast by the in-process pipeline), and every ``Duration`` column is
+    converted to seconds, before the fingerprint below is even computed.
     """
+    df = apply_temporal_parses(df, plan.parsed_temporal)
+    df = convert_durations_to_seconds(df)
     fp = schema_fingerprint(df)
     if fp != plan.schema_fingerprint:
         msg = (

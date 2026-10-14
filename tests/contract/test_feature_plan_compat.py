@@ -76,6 +76,38 @@ def test_feature_plan_json_is_deterministic(tmp_path: Path) -> None:
     assert plan.to_json() == plan.to_json()
 
 
+def test_parsed_temporal_round_trips(tmp_path: Path) -> None:
+    from sorethumb_ml.profiling.temporal import TemporalParse
+
+    df, _ = make_frame(n_rows=50, seed=0, with_low_cardinality_string=True)
+    cfg = _build_config(tmp_path)
+    parsed = {
+        "cat_low": TemporalParse(kind="date", format="%d/%m/%Y", forced=True),
+    }
+    plan = build_feature_plan(df, cfg, parsed)
+    restored = FeaturePlan.from_json(plan.to_json())
+    assert restored.parsed_temporal == parsed
+
+
+def test_a_plan_persisted_before_parsed_temporal_existed_restores_with_none_parsed(
+    tmp_path: Path,
+) -> None:
+    """A plan.json written by an older sorethumb has no "parsed_temporal" key at all."""
+    df, _ = make_frame(n_rows=50, seed=0, with_low_cardinality_string=True)
+    cfg = _build_config(tmp_path)
+    plan = build_feature_plan(df, cfg)
+    serialised = plan.to_json()
+
+    import json
+
+    d = json.loads(serialised)
+    del d["parsed_temporal"]
+    old_style_json = json.dumps(d)
+
+    restored = FeaturePlan.from_json(old_style_json)
+    assert restored.parsed_temporal == {}
+
+
 def test_feature_plan_imputation_medians_round_trip(tmp_path: Path) -> None:
     df = pl.DataFrame({"x": [1.0, 2.0, 3.0, None, 5.0], "y": [10.0, 20.0, 30.0, 40.0, 50.0]})
     cfg = _build_config(tmp_path)

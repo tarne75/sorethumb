@@ -6,6 +6,26 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Date/time stored as text is now detected and parsed automatically**: a
+  String column holding ISO dates or datetimes, a bare time of day, or a
+  day/month/year date is turned into a real `Date`/`Datetime`/`Time` value
+  before profiling -- it no longer needs to already be a native temporal
+  type to get derived features (`hour`, `dayofweek`, ...), and a configured
+  `columns.time_column` stored as text now compares correctly during
+  period-window filtering instead of lexically. Every temporal column gets
+  derived features now, not only the one `columns.time_column` picks for
+  sorting and history. `group_by`, `id_column` and `reference_column`
+  columns, and columns an `ignore` pattern matches, are left as text so
+  group keys and ignore rules are unchanged; `sorethumb inspect` and
+  `explain-plan` apply the same parse as `run`. An ambiguous day/month order
+  is never guessed and is left as text, with a warning (never promoted to an
+  error by `run.strict`). New `columns.datetime_formats` forces a
+  column's format (or `"epoch_s"`/`"epoch_ms"` for a Unix-timestamp
+  integer/float column) where auto-detection can't or shouldn't decide.
+  `Duration` columns are converted to a numeric seconds feature.
+
 ### Fixed
 
 - **Narrow and all-categorical sources**: a CSV/TSV with one column, or with
@@ -30,6 +50,10 @@ Versioning: [Semantic Versioning](https://semver.org/).
   cluster's centroid -- never flagged by the natural CBLOF boundary. The
   `kmeans_distance` `k_max` parameter now defaults to automatic (8 for
   continuous data); an explicitly configured `k_max` caps both paths.
+- **A period window selecting zero rows** now raises immediately with the
+  period, window, time column and the data's available range named, instead
+  of surfacing much later as an opaque "encoded feature matrix has zero
+  columns" error from deep inside feature building.
 
 ## [0.1.0] - 2026-09-21
 
