@@ -68,6 +68,7 @@ from sorethumb_ml.profiling.temporal import (
 from sorethumb_ml.report.html import GroupSection, RunMeta, render_report
 from sorethumb_ml.scoring.calibrate import Calibrator
 from sorethumb_ml.scoring.combine import ScoreEnsemble, descending_order
+from sorethumb_ml.scoring.policies import resolve_policy
 from sorethumb_ml.store.models import (
     load_model,
     load_plan,
@@ -402,6 +403,9 @@ class RunResult:
     report_status: str = "skipped"
     # The fitted run this run reused persisted models/plan from, via
     # score_forward -- None for an ordinary run_detection run (it fit its own).
+    # Versioned id of the ensemble decision rule this run used (scoring.policies),
+    # e.g. "intersection@1"; recorded on the run row too.
+    ensemble_policy: str | None = None
     source_run_id: str | None = None
     # The identity scope columns.id_column was actually validated against
     # ("dataset" or "group" -- see _validate_id_column_identity/
@@ -512,6 +516,11 @@ def _period_window_expr(time_col: str, dtype: pl.DataType, period_from: str, per
             # Period bounds are UTC by construction (see resolve_period).
             lo, hi = lo.replace(tzinfo=UTC), hi.replace(tzinfo=UTC)
     return (col >= lo) & (col < hi)
+
+
+def _ensemble_policy_id(config: Config) -> str:
+    """Return the versioned id of the ensemble policy *config* selects (see scoring.policies)."""
+    return resolve_policy(config.scoring.combination, config.scoring.weighting).id
 
 
 def _resolve_and_filter_period(
@@ -775,6 +784,7 @@ def run_detection(
             config_hash=config.config_hash(),
             library_version=_st.__version__,
             source_digest=source_digest(config.source.uri),
+            ensemble_policy=_ensemble_policy_id(config),
         )
 
         if dry_run:
@@ -793,6 +803,7 @@ def run_detection(
                 dataset_fp=dataset_fp,
                 snapshot_fp=snapshot_fp,
                 source_digest=source_digest(config.source.uri),
+                ensemble_policy=_ensemble_policy_id(config),
                 config_hash=config.config_hash(),
                 period_label=period_label,
                 workspace_path=ws_path,
@@ -945,6 +956,7 @@ def run_detection(
             dataset_fp=dataset_fp,
             snapshot_fp=snapshot_fp,
             source_digest=source_digest(config.source.uri),
+            ensemble_policy=_ensemble_policy_id(config),
             config_hash=config.config_hash(),
             period_label=period_label,
             workspace_path=ws_path,
@@ -1192,6 +1204,7 @@ def score_forward(
             source_run_id=source_run_id,
             library_version=_st.__version__,
             source_digest=source_digest(config.source.uri),
+            ensemble_policy=_ensemble_policy_id(config),
         )
         logger.info("score-forward run %s from source %s", new_run_id, source_run_id)
 
@@ -1257,6 +1270,7 @@ def score_forward(
             dataset_fp=dataset_fp,
             snapshot_fp=snapshot_fp,
             source_digest=source_digest(config.source.uri),
+            ensemble_policy=_ensemble_policy_id(config),
             config_hash=config.config_hash(),
             period_label=period_label,
             workspace_path=ws_path,

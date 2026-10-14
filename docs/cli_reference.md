@@ -317,7 +317,7 @@ rows at all), which is not treated as an error.
 | `--limit-groups INT` | — | Cap the number of groups processed, applied after `--only-group`/`--group-filter`. Groups are sorted by label first, so the same limit always keeps the same groups. Must be >= 1 when given (exit code 2 otherwise). |
 | `--detectors STR`, `-d` | — | Comma-separated detector aliases, replacing the config list for this invocation only. Aliases: `if`=isolation_forest · `km`=kmeans_distance · `oc`=one_class_svm · `ecod` · `lof` · `hbos`. Full names also accepted. Never modifies `sorethumb.toml`. |
 | `--save-config / --no-save-config` | ask on a terminal, else no | With `data_file` and no `sorethumb.toml`: save (or don't save) this run's settings to `sorethumb.toml` without asking. No effect when the config file already exists. |
-| `--json` | off | Machine-readable JSON summary on stdout. |
+| `--json` | off | Machine-readable JSON summary on stdout. Its `ensemble_policy` names the versioned rule that produced the flags (e.g. `intersection@1`; see [ensemble-policy.md](ensemble-policy.md)). |
 | `--dry-run` | off | Resolve the plan and register the run, but fit no models. Still writes the workspace + schema migrations, the `dataset` / `dataset_snapshot` rows, and the `run` row (left in status `running`). Skips the feature plan, detector models, per-group results, history rows and the report. |
 
 ---
@@ -339,7 +339,9 @@ plan and persisted models; a config that claims different values there is
 rejected outright (regardless of `--strict`), since score-forward has no way
 to actually apply them — re-run `sorethumb run` instead if you need
 different fit-time settings. `run_id`, `--json` output, and the rendered
-report all show `source_run_id` for a score-forward run.
+report all show `source_run_id` for a score-forward run. Because `scoring`
+may differ, the ensemble policy can differ from the source run's; the new run
+records the one it actually used (`ensemble_policy` in `--json` and `show`).
 
 Loading the source run unpickles its persisted estimator and calibrator
 files (`joblib`), which is code execution with no sandboxing — not safe

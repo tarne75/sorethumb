@@ -147,6 +147,12 @@ def test_migration_005_adds_snapshot_table_and_column(tmp_path):
     assert "dataset_snapshot" in tables
 
 
+def test_migration_010_adds_run_ensemble_policy_column(tmp_path):
+    with Store(tmp_path / "m.db") as store:
+        cols = {r[1] for r in store._conn.execute("PRAGMA table_info(run)")}
+    assert "ensemble_policy" in cols
+
+
 def test_migration_006_adds_period_execution_table(tmp_path):
     with Store(tmp_path / "m.db") as store:
         tables = {r[0] for r in store._conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}

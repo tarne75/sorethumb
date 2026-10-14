@@ -1,0 +1,196 @@
+{
+  "composite-agreement@1": {
+    "0.05": {
+      "combined_score_sha256": "f374b33baf0bf2d97f8b3b11e9138754dfde34111303f07bacc21b15cf9888ea",
+      "flagged_rows": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        33,
+        212,
+        230
+      ]
+    },
+    "auto": {
+      "combined_score_sha256": "f374b33baf0bf2d97f8b3b11e9138754dfde34111303f07bacc21b15cf9888ea",
+      "flagged_rows": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    }
+  },
+  "composite-equal@1": {
+    "0.05": {
+      "combined_score_sha256": "78cdd9436161cee9e7bf25059d5627685dbce57ae67b12f8459a5dec1e99fcd9",
+      "flagged_rows": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        33,
+        212,
+        230
+      ]
+    },
+    "auto": {
+      "combined_score_sha256": "78cdd9436161cee9e7bf25059d5627685dbce57ae67b12f8459a5dec1e99fcd9",
+      "flagged_rows": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    }
+  },
+  "composite-manual@1": {
+    "0.05": {
+      "combined_score_sha256": "a2d0e5dbf39e4f092aaddf1ad4426bfb3a82f3d2d72141aea43011dc1c57c5fc",
+      "flagged_rows": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        33,
+        149,
+        230
+      ]
+    },
+    "auto": {
+      "combined_score_sha256": "a2d0e5dbf39e4f092aaddf1ad4426bfb3a82f3d2d72141aea43011dc1c57c5fc",
+      "flagged_rows": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    }
+  },
+  "intersection@1": {
+    "0.05": {
+      "combined_score_sha256": "48e43a99cf61a169a8a8422d9a1f274740e7ae840df601cb8b1a53404f2f3158",
+      "flagged_rows": [
+        1,
+        2,
+        3,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    "auto": {
+      "combined_score_sha256": "48e43a99cf61a169a8a8422d9a1f274740e7ae840df601cb8b1a53404f2f3158",
+      "flagged_rows": [
+        1,
+        3,
+        5,
+        6,
+        7,
+        9,
+        10,
+        11
+      ]
+    }
+  },
+  "union@1": {
+    "0.05": {
+      "combined_score_sha256": "b0326827204ed579e75ab0eff4c3c822fb1774b510898be71c07a6c2d1c11b91",
+      "flagged_rows": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        20,
+        24,
+        33,
+        91,
+        149,
+        212,
+        220,
+        230,
+        274
+      ]
+    },
+    "auto": {
+      "combined_score_sha256": "b0326827204ed579e75ab0eff4c3c822fb1774b510898be71c07a6c2d1c11b91",
+      "flagged_rows": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        24,
+        33,
+        212,
+        230,
+        274
+      ]
+    }
+  }
+}
