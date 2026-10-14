@@ -27,6 +27,10 @@ accepts, and what evidence a different policy should be chosen on.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sorethumb_ml.config import Config
 
 
 @dataclass(frozen=True)
@@ -108,3 +112,28 @@ def resolve_policy(combination: str, weighting: str) -> EnsemblePolicy:
 def policy_by_id(policy_id: str) -> EnsemblePolicy | None:
     """Look up a current policy by its ``name@version`` id, or None."""
     return next((p for p in POLICIES if p.id == policy_id), None)
+
+
+def policy_scope_hash(config: Config) -> str:
+    """Fingerprint *config* apart from its ensemble policy: what backtest evidence is valid for.
+
+    Evidence that a policy outperforms the default was produced with one
+    configuration; it only speaks for a run with the same detectors, features,
+    review budget and data handling. The policy itself
+    (``scoring.combination``/``scoring.weighting``) is excluded -- the evidence
+    compares policies -- and so is everything that cannot change a flag: the
+    explain settings, ``run.strict`` and ``run.seed`` (a backtest already varies
+    the fit across resamples), on top of what ``Config.config_hash`` excludes.
+    """
+    scoring_fields = type(config.scoring).model_fields
+    scoring = config.scoring.model_copy(
+        update={
+            "combination": scoring_fields["combination"].default,
+            "weighting": scoring_fields["weighting"].default,
+        }
+    )
+    run = config.run.model_copy(
+        update={"strict": False, "seed": type(config.run).model_fields["seed"].default}
+    )
+    neutral = config.model_copy(update={"scoring": scoring, "run": run, "explain": type(config.explain)()})
+    return neutral.config_hash()

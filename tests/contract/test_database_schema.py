@@ -153,6 +153,23 @@ def test_migration_010_adds_run_ensemble_policy_column(tmp_path):
     assert "ensemble_policy" in cols
 
 
+def test_migration_011_adds_policy_evidence_and_the_run_link(tmp_path):
+    with Store(tmp_path / "m.db") as store:
+        run_cols = {r[1] for r in store._conn.execute("PRAGMA table_info(run)")}
+        ev_cols = {r[1] for r in store._conn.execute("PRAGMA table_info(policy_evidence)")}
+    assert "policy_evidence_id" in run_cols
+    assert {
+        "evidence_id",
+        "dataset_fp",
+        "policy_id",
+        "baseline_policy_id",
+        "scope_hash",
+        "verdict",
+        "labelled",
+        "details_json",
+    } <= ev_cols
+
+
 def test_migration_006_adds_period_execution_table(tmp_path):
     with Store(tmp_path / "m.db") as store:
         tables = {r[0] for r in store._conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -180,6 +197,7 @@ _REQUIRED_INDEXES: dict[str, tuple[str, tuple[str, ...]]] = {
     "idx_run_source": ("run", ("source_run_id",)),
     "idx_artifact_run_id": ("artifact", ("run_id",)),
     "idx_dataset_snapshot_fp": ("dataset_snapshot", ("snapshot_fp",)),
+    "idx_policy_evidence_lookup": ("policy_evidence", ("dataset_fp", "policy_id", "created_at")),
     "idx_totals_period": ("totals", ("dataset_fp", "period_label", "config_hash", "group_key")),
     "idx_period_execution_last_complete": (
         "period_execution",
@@ -216,6 +234,13 @@ _PLANNED_QUERIES: dict[str, tuple[str, int, str, str | None]] = {
         2,
         "model",
         "idx_model_run_group",
+    ),
+    "latest_policy_evidence": (
+        "SELECT * FROM policy_evidence WHERE dataset_fp=? AND policy_id=? "
+        "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        2,
+        "policy_evidence",
+        "idx_policy_evidence_lookup",
     ),
     "runs_list": (
         "SELECT * FROM run ORDER BY started_at DESC LIMIT ?",

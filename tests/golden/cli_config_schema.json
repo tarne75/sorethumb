@@ -520,7 +520,7 @@
       "properties": {
         "combination": {
           "default": "intersection",
-          "description": "'composite' averages normalised detector scores and applies a single global threshold. 'intersection' thresholds each detector independently then flags rows where ALL detectors agree (high precision). 'union' thresholds each detector independently then flags rows where ANY detector agrees (high recall). The default, 'intersection', is a deliberate design decision that accepts known limitations (it can flag few or no rows on local, varying-density and contextual anomalies); choose another policy on measured evidence -- see docs/ensemble-policy.md.",
+          "description": "'composite' averages normalised detector scores and applies a single global threshold. 'intersection' thresholds each detector independently then flags rows where ALL detectors agree (high precision). 'union' thresholds each detector independently then flags rows where ANY detector agrees (high recall). The default, 'intersection', is a deliberate design decision that accepts known limitations (it can flag few or no rows on local, varying-density and contextual anomalies); choose another policy on measured evidence: `sorethumb backtest` measures it on your own labelled data, and a run with a non-default policy that has no such evidence warns (run.strict refuses it) -- see docs/ensemble-policy.md.",
           "enum": [
             "composite",
             "intersection",

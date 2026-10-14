@@ -43,6 +43,8 @@ from sorethumb_ml.errors import (
     SlowStageWarning,
     SorethumbWarning,
     StoreError,
+    UnevidencedPolicyError,
+    UnevidencedPolicyWarning,
 )
 from sorethumb_ml.explain.blend import blend
 from sorethumb_ml.explain.project import aggregate_to_original, top_n_reasons
@@ -68,7 +70,7 @@ from sorethumb_ml.profiling.temporal import (
 from sorethumb_ml.report.html import GroupSection, RunMeta, render_report
 from sorethumb_ml.scoring.calibrate import Calibrator
 from sorethumb_ml.scoring.combine import ScoreEnsemble, descending_order
-from sorethumb_ml.scoring.policies import resolve_policy
+from sorethumb_ml.scoring.policies import DEFAULT_POLICY_ID, policy_scope_hash, resolve_policy
 from sorethumb_ml.store.models import (
     load_model,
     load_plan,
@@ -406,6 +408,9 @@ class RunResult:
     # Versioned id of the ensemble decision rule this run used (scoring.policies),
     # e.g. "intersection@1"; recorded on the run row too.
     ensemble_policy: str | None = None
+    # The backtest evidence record (policy_evidence) a non-default policy relied
+    # on; None for the default policy, or when the run warned that there was none.
+    policy_evidence_id: str | None = None
     source_run_id: str | None = None
     # The identity scope columns.id_column was actually validated against
     # ("dataset" or "group" -- see _validate_id_column_identity/
@@ -521,6 +526,48 @@ def _period_window_expr(time_col: str, dtype: pl.DataType, period_from: str, per
 def _ensemble_policy_id(config: Config) -> str:
     """Return the versioned id of the ensemble policy *config* selects (see scoring.policies)."""
     return resolve_policy(config.scoring.combination, config.scoring.weighting).id
+
+
+def _policy_evidence_gate(
+    ws: Workspace, config: Config, dataset_fp: str, issued_warnings: list[str]
+) -> str | None:
+    """Check a non-default ensemble policy against this workspace's backtest evidence.
+
+    Returns the id of the newest ``sorethumb backtest`` record, for this dataset
+    and this configuration scope (``policy_scope_hash``), in which the policy
+    outperformed the default -- or None for the default policy. Without such a
+    record, warns (:class:`UnevidencedPolicyWarning`), or under ``run.strict``
+    refuses before anything is registered (:class:`UnevidencedPolicyError`).
+    A warning is also appended to *issued_warnings*, so ``--json`` callers see it.
+    The policy is never changed: the choice stays the user's, made visible.
+    """
+    policy_id = _ensemble_policy_id(config)
+    if policy_id == DEFAULT_POLICY_ID:
+        return None
+    scope = policy_scope_hash(config)
+    in_scope = ws.store.latest_policy_evidence(dataset_fp, policy_id, scope)
+    if in_scope is not None and in_scope["verdict"] == "outperforms":
+        return str(in_scope["evidence_id"])
+    if in_scope is not None:
+        found = {
+            "does_not_outperform": "the latest backtest found it does not outperform the default",
+            "not_assessable": "the latest backtest had no labels, so it could not assess accuracy",
+        }.get(str(in_scope["verdict"]), f"the latest backtest verdict is {in_scope['verdict']!r}")
+        found += f" ({in_scope['evidence_id']})"
+    elif ws.store.latest_policy_evidence(dataset_fp, policy_id) is not None:
+        found = "its backtest evidence was produced under a different configuration"
+    else:
+        found = "no backtest has been run for it"
+    msg = (
+        f"scoring selects {policy_id}, not the default {DEFAULT_POLICY_ID}, on dataset {dataset_fp!r}, "
+        f"and {found}. Run `sorethumb backtest` (with columns.reference_column labels) to test it "
+        "-- see docs/ensemble-policy.md."
+    )
+    if config.run.strict:
+        raise UnevidencedPolicyError(msg + " run.strict refuses a policy without evidence.")
+    warnings.warn(msg, UnevidencedPolicyWarning, stacklevel=3)
+    issued_warnings.append(msg)
+    return None
 
 
 def _resolve_and_filter_period(
@@ -773,6 +820,7 @@ def run_detection(
         # dataset + config + period finds the same ledger entries and can skip
         # already-complete groups (resume behaviour).
         run_id = _make_run_id(dataset_fp, config.config_hash(), period_label, snapshot_fp)
+        policy_evidence_id = _policy_evidence_gate(ws, config, dataset_fp, issued_warnings)
         config_json = _redacted_config_json(config)
         import sorethumb_ml as _st  # noqa: PLC0415
 
@@ -785,6 +833,7 @@ def run_detection(
             library_version=_st.__version__,
             source_digest=source_digest(config.source.uri),
             ensemble_policy=_ensemble_policy_id(config),
+            policy_evidence_id=policy_evidence_id,
         )
 
         if dry_run:
@@ -804,6 +853,7 @@ def run_detection(
                 snapshot_fp=snapshot_fp,
                 source_digest=source_digest(config.source.uri),
                 ensemble_policy=_ensemble_policy_id(config),
+                policy_evidence_id=policy_evidence_id,
                 config_hash=config.config_hash(),
                 period_label=period_label,
                 workspace_path=ws_path,
@@ -812,6 +862,7 @@ def run_detection(
                 started_at=started_at,
                 finished_at=datetime.now(UTC).isoformat(),
                 id_identity_scope=id_identity_scope,
+                warnings_issued=issued_warnings,
             )
 
         # ── 4. Build feature plan on full dataset ────────────────────────
@@ -957,6 +1008,7 @@ def run_detection(
             snapshot_fp=snapshot_fp,
             source_digest=source_digest(config.source.uri),
             ensemble_policy=_ensemble_policy_id(config),
+            policy_evidence_id=policy_evidence_id,
             config_hash=config.config_hash(),
             period_label=period_label,
             workspace_path=ws_path,
@@ -1193,6 +1245,7 @@ def score_forward(
         new_run_id = _make_score_run_id(
             dataset_fp, snapshot_fp, config.config_hash(), period_label, source_run_id
         )
+        policy_evidence_id = _policy_evidence_gate(ws, config, dataset_fp, issued_warnings)
         import sorethumb_ml as _st  # noqa: PLC0415
 
         ws.store.insert_run(
@@ -1205,6 +1258,7 @@ def score_forward(
             library_version=_st.__version__,
             source_digest=source_digest(config.source.uri),
             ensemble_policy=_ensemble_policy_id(config),
+            policy_evidence_id=policy_evidence_id,
         )
         logger.info("score-forward run %s from source %s", new_run_id, source_run_id)
 
@@ -1271,6 +1325,7 @@ def score_forward(
             snapshot_fp=snapshot_fp,
             source_digest=source_digest(config.source.uri),
             ensemble_policy=_ensemble_policy_id(config),
+            policy_evidence_id=policy_evidence_id,
             config_hash=config.config_hash(),
             period_label=period_label,
             workspace_path=ws_path,
@@ -1539,6 +1594,44 @@ def _group_feature_matrix(group_space: FeatureSpace, config: Config) -> np.ndarr
     return group_space.matrix
 
 
+def _fit_detector(
+    det_name: str, X: np.ndarray, config: Config
+) -> tuple[Any, np.ndarray, np.ndarray, Calibrator, int]:
+    """Fit one configured detector on *X* exactly as a run does, and calibrate it on its own scores.
+
+    Returns ``(detector, raw_scores, natural_flags, calibrator, train_rows)``. Shared
+    by the run path and ``sorethumb backtest``, so a backtest fits what a run fits.
+    """
+    det_cfg = next((d for d in config.detectors if d.name == det_name), None)
+    params = dict(det_cfg.params) if det_cfg else {}
+    # Wire scoring contamination → OCSVM nu when not explicitly overridden.
+    # nu is the training-time equivalent of contamination for OneClassSVM.
+    if det_name == "one_class_svm" and "nu" not in params:
+        if isinstance(config.scoring.contamination, float):
+            params["nu"] = config.scoring.contamination
+    det = registry[det_name](**params)
+    # Effective training cap: the per-detector `train_row_cap` from config
+    # when set, otherwise the detector class's built-in default.
+    cap = (
+        det_cfg.train_row_cap
+        if det_cfg is not None and det_cfg.train_row_cap is not None
+        else det.default_train_row_cap
+    )
+    n_rows = len(X)
+    train_X = X
+    if cap and n_rows > cap:
+        rng = np.random.default_rng(config.run.seed)
+        idx = rng.choice(n_rows, cap, replace=False)
+        train_X = X[idx]
+
+    det.fit(train_X, seed=config.run.seed)
+    raw, flags = score_and_flag(det, X)  # raw: higher = more normal
+
+    cal = Calibrator()
+    cal.fit(raw)
+    return det, raw, flags, cal, len(train_X)
+
+
 def _run_group(
     ws: Workspace,
     run_id: str,
@@ -1571,7 +1664,6 @@ def _run_group(
 
     group_space = apply_feature_plan(df_group, plan)
     X = _group_feature_matrix(group_space, config)
-    n_rows = len(X)
 
     # ── Detectors ─────────────────────────────────────────────────────────
     enabled_names = [d.name for d in config.detectors if d.enabled]
@@ -1608,32 +1700,7 @@ def _run_group(
                 )
                 continue
 
-        det_cfg = next((d for d in config.detectors if d.name == det_name), None)
-        params = dict(det_cfg.params) if det_cfg else {}
-        # Wire scoring contamination → OCSVM nu when not explicitly overridden.
-        # nu is the training-time equivalent of contamination for OneClassSVM.
-        if det_name == "one_class_svm" and "nu" not in params:
-            if isinstance(config.scoring.contamination, float):
-                params["nu"] = config.scoring.contamination
-        det = registry[det_name](**params)
-        # Effective training cap: the per-detector `train_row_cap` from config
-        # when set, otherwise the detector class's built-in default.
-        cap = (
-            det_cfg.train_row_cap
-            if det_cfg is not None and det_cfg.train_row_cap is not None
-            else det.default_train_row_cap
-        )
-        train_X = X
-        if cap and n_rows > cap:
-            rng = np.random.default_rng(config.run.seed)
-            idx = rng.choice(n_rows, cap, replace=False)
-            train_X = X[idx]
-
-        det.fit(train_X, seed=config.run.seed)
-        raw, flags = score_and_flag(det, X)  # raw: higher = more normal
-
-        cal = Calibrator()
-        cal.fit(raw)
+        det, raw, flags, cal, train_rows = _fit_detector(det_name, X, config)
 
         det_instances[det_name] = det
         raw_scores_map[det_name] = raw
@@ -1648,7 +1715,7 @@ def _run_group(
             calibrator=cal,
             plan_json=plan.to_json(),
             feature_schema_hash=group_space.feature_schema_hash,
-            train_row_count=len(train_X),
+            train_row_count=train_rows,
             seed=config.run.seed,
         )
 

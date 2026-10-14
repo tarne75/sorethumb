@@ -571,7 +571,9 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
 - The default ensemble policy (`intersection@1`: every detector must flag a row) is a
   deliberate precision-first design decision. It accepts that some anomaly types (local,
   varying-density, contextual) can go unflagged; choose another policy on measured evidence,
-  not intuition. See [docs/ensemble-policy.md](https://github.com/tarne75/sorethumb/blob/main/docs/ensemble-policy.md).
+  not intuition: `sorethumb backtest` measures every policy against the default on your own
+  labelled data, and a run with a non-default policy that lacks that evidence warns
+  (`run.strict` refuses it). See [docs/ensemble-policy.md](https://github.com/tarne75/sorethumb/blob/main/docs/ensemble-policy.md).
 - Unsupervised anomaly ≠ the thing you care about. The library ranks statistical oddity;
   whether an odd record is *interesting* is a domain judgement it cannot make.
 - **A workspace is executable, not just data.** Persisted runs store fitted

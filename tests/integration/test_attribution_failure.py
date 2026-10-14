@@ -22,6 +22,7 @@ from sorethumb_ml.config import (
 )
 from sorethumb_ml.errors import AttributionBackendWarning, SorethumbWarning
 from tests.factories.frames import write_planted_csv
+from tests.factories.policy_evidence import record_evidence
 
 pytestmark = pytest.mark.integration
 
@@ -112,7 +113,9 @@ def test_strict_mode_promotes_the_warning_to_a_group_failure(
     lenient = run_detection(_cfg(tmp_path / "a"), no_report=True)
     assert lenient.n_failed == 0
 
-    strict = run_detection(_cfg(tmp_path / "b", strict=True), no_report=True)
+    strict_cfg = _cfg(tmp_path / "b", strict=True)
+    record_evidence(strict_cfg)  # run.strict otherwise refuses the composite policy before any group runs
+    strict = run_detection(strict_cfg, no_report=True)
     assert strict.n_failed == 1
     assert strict.n_succeeded == 0
     assert "AttributionBackendWarning" in (strict.groups[0].error or "")

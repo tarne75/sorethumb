@@ -99,6 +99,14 @@ class MemoryBudgetError(SorethumbError):
     failure_kind = "preflight"
 
 
+class UnevidencedPolicyError(ConfigError):
+    """``run.strict`` refused a non-default ensemble policy that has no backtest evidence.
+
+    The strict-mode form of :class:`UnevidencedPolicyWarning`: raised before
+    the run is registered, so nothing is fitted or recorded.
+    """
+
+
 class ModelSchemaDriftError(SorethumbError):
     """Raised in strict mode when a persisted model's feature schema no longer matches."""
 
@@ -188,6 +196,17 @@ class AmbiguousDateFormatWarning(SorethumbWarning):
     stays text and is encoded like any other category -- is exactly what every
     earlier version did, so failing a strict run over it would turn a
     previously passing configuration into a failing one for no new risk.
+    """
+
+
+class UnevidencedPolicyWarning(SorethumbWarning):
+    """A non-default ensemble policy is in use without backtest evidence that it outperforms the default.
+
+    Raised when ``scoring.combination``/``scoring.weighting`` select a policy
+    other than the default and the workspace holds no ``sorethumb backtest``
+    record, for this dataset and this configuration, in which that policy
+    outperforms the default. The run proceeds; ``run.strict`` refuses it
+    instead (:class:`UnevidencedPolicyError`). See docs/ensemble-policy.md.
     """
 
 
