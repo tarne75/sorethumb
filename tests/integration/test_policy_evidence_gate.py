@@ -256,3 +256,43 @@ def test_backtest_cli_refuses_auto_contamination_as_preflight(tmp_path: Path) ->
     result = CliRunner().invoke(app, ["backtest", "--config", str(toml), "--json"])
     assert result.exit_code == 2
     assert "fixed review budget" in json.loads(result.stdout)["error"]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [({"replicates": 3}, "at least 5"), ({"subsample": 1.0}, "subsample"), ({"subsample": 0.1}, "subsample")],
+)
+def test_a_backtest_rejects_unusable_settings_before_loading_anything(
+    tmp_path: Path, kwargs: dict[str, float], message: str
+) -> None:
+    with pytest.raises(ConfigError, match=message):
+        backtest_dataset(_cfg(tmp_path), **kwargs)  # type: ignore[arg-type]
+
+
+def test_a_backtest_needs_every_row_labelled_in_an_existing_column(tmp_path: Path) -> None:
+    with pytest.raises(SchemaError, match="not in the dataset"):
+        backtest_dataset(_cfg(tmp_path, columns={"reference_column": "nope"}), replicates=5)
+    csv = tmp_path / "data.csv"
+    pl.read_csv(csv).with_columns(
+        pl.when(pl.int_range(pl.len()) == 0).then(None).otherwise(pl.col("label")).alias("label")
+    ).write_csv(csv)
+    with pytest.raises(SchemaError, match="missing value"):
+        backtest_dataset(_cfg(tmp_path), replicates=5)
+
+
+def test_a_grouped_backtest_fits_each_group_and_skips_small_ones_as_a_run_does(tmp_path: Path) -> None:
+    csv = tmp_path / "data.csv"
+    _write_labelled_csv(csv)
+    df = pl.read_csv(csv)
+    shop = ["big"] * (len(df) - 6) + ["tiny"] * 6
+    df.with_columns(pl.Series("shop", shop)).write_csv(csv)
+    cfg = _cfg(
+        tmp_path,
+        columns={"reference_column": "label", "group_by": ["shop"]},
+        scoring={"contamination": 0.05, "min_records": 20},
+    )
+    result = backtest_dataset(cfg, policies=["union@1"], replicates=5, record=False)
+    as_json = json.loads(json.dumps(result.as_dict()))
+    assert as_json["labelled"] is True
+    union = next(s for s in result.summaries if s.policy_id == "union@1")
+    assert union.flag_count > 0  # only the big group is fitted and flagged
