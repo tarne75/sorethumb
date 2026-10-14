@@ -10,9 +10,10 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 - **Narrow and all-categorical sources**: a CSV/TSV with one column, or with
   every column inferred as String, is no longer refused outright -- it is
-  refused only on concrete evidence of a wrong delimiter (the header contains
-  a delimiter character other than the one configured) or, for an all-string
-  schema, when a full-file re-scan finds a numeric column the sampled
+  refused only on concrete evidence of a wrong delimiter (a delimiter
+  character other than the one configured appears in the header and the same
+  number of times in most sampled data rows) or, for an all-string schema,
+  when a re-scan of up to 1,000,000 rows finds a numeric column the sampled
   `infer_schema_length` missed. A local source that is a directory now fails
   with a clear `SourceError` instead of a low-level error deep in the pipeline.
 - **Low-cardinality columns are no longer dropped by default**: a column with
