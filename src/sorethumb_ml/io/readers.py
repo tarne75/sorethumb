@@ -4,12 +4,24 @@ Every reader returns a ``pl.LazyFrame`` so the caller controls when work
 actually happens. Format is detected from the file extension when
 ``config.format == 'auto'``.
 
-Ambiguous reads (single-column CSVs, all-string schemas after schema
-inference) raise ``SchemaError`` rather than silently returning bad data.
+A single-column or all-string CSV/TSV is valid data on its own (one numeric
+column, or several categorical columns) and is accepted. It is refused only
+when there is concrete evidence something else is wrong:
+
+- a delimiter character that was never applied (one of
+  ``_CANDIDATE_DELIMITERS`` other than the one configured) appears in the
+  header and the same number of times in most sampled data rows; or
+- (more than one column, all inferred String) a re-scan of up to
+  ``_RESCAN_ROWS`` rows finds a non-string column among them -- the sampled ``infer_schema_length`` rows
+  just happened to look non-numeric (blank leading rows are the common case).
+
+Parquet, JSON, JSONL and TSF have no delimiter to get wrong, so none of this
+applies to them.
 """
 
 from __future__ import annotations
 
+import gzip
 import logging
 from pathlib import Path
 
@@ -19,6 +31,11 @@ from sorethumb_ml.config import SourceConfig
 from sorethumb_ml.errors import SchemaError, SourceError
 
 logger = logging.getLogger(__name__)
+
+_CANDIDATE_DELIMITERS: tuple[str, ...] = (",", ";", "\t", "|")
+_SNIFF_LINES = 51  # header + 50 data rows
+_SNIFF_AGREEMENT = 0.9
+_RESCAN_ROWS = 1_000_000
 
 _FORMAT_EXTENSIONS: dict[str, list[str]] = {
     "parquet": [".parquet"],
@@ -35,8 +52,10 @@ def read_frame(path: Path, config: SourceConfig) -> pl.LazyFrame:
 
     Raises:
         SourceError: Format cannot be determined or path does not exist.
-        SchemaError: The inferred schema looks degenerate (single column,
-            or all-string after infer_schema_length rows scanned).
+        SchemaError: The frame has no columns at all, or (CSV/TSV only) the
+            header and data rows show consistent evidence of an untried
+            delimiter, or a wider re-scan of an all-string schema finds a
+            numeric column the sampled ``infer_schema_length`` missed.
 
     """
     fmt = _detect_format(path, config)
@@ -61,7 +80,7 @@ def read_frame(path: Path, config: SourceConfig) -> pl.LazyFrame:
     else:
         raise SourceError(f"Unrecognised format '{fmt}' for {path}")
 
-    _assert_non_degenerate(lf, path)
+    _assert_non_degenerate(lf, path, fmt, opts)
     return lf
 
 
@@ -183,23 +202,101 @@ def _read_tsf(path: Path) -> pl.LazyFrame:
     return pl.DataFrame(rows).lazy()
 
 
-def _assert_non_degenerate(lf: pl.LazyFrame, path: Path) -> None:
+def _read_leading_lines(path: Path, n: int) -> list[str]:
+    """Best-effort read of the first *n* raw lines, for delimiter sniffing. ``[]`` if unreadable."""
+    opener = gzip.open if path.name.endswith(".gz") else Path.open
+    lines: list[str] = []
+    try:
+        with opener(path, mode="rt", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                lines.append(line.rstrip("\r\n"))
+                if len(lines) >= n:
+                    break
+    except OSError:
+        return []
+    return lines
+
+
+def _untried_delimiter(path: Path, configured_sep: str) -> str | None:
+    """Return a delimiter the file consistently shows evidence of, other than the one actually used.
+
+    Evidence is the header containing the character *and* most sampled data
+    rows containing it the same number of times -- a real delimiter splits
+    every row into the same number of fields. A character that appears only
+    in the header (a column named ``"region, code"`` in a TSV, or ``amount;usd``
+    as a single column's name) is just part of a name, not a missed delimiter.
+    """
+    lines = _read_leading_lines(path, _SNIFF_LINES)
+    if not lines:
+        return None
+    header, rows = lines[0], [line for line in lines[1:] if line]
+    for candidate in _CANDIDATE_DELIMITERS:
+        if candidate == configured_sep:
+            continue
+        expected = header.count(candidate)
+        if expected == 0:
+            continue
+        if not rows:
+            return candidate  # a header-only file: the header is all the evidence there is
+        matching = sum(1 for row in rows if row.count(candidate) == expected)
+        if matching / len(rows) >= _SNIFF_AGREEMENT:
+            return candidate
+    return None
+
+
+def _schema_has_non_string_column(path: Path, opts: dict[str, object]) -> bool:
+    """Re-infer the schema over a much larger window, to check whether a small sample is the cause.
+
+    Only called for an all-string schema, which is otherwise accepted as
+    genuine categorical data -- this distinguishes that from a numeric column
+    whose configured or default ``infer_schema_length`` happened to sample
+    only non-numeric-looking rows (blank leading rows are the common case).
+    Bounded at ``_RESCAN_ROWS`` so a genuinely all-categorical multi-gigabyte
+    file is not read twice end to end; a window that already covers that many
+    rows (or is unbounded) has nothing more to learn, so no rescan happens.
+    """
+    configured = opts.get("infer_schema_length")
+    if configured is None or (isinstance(configured, int) and configured >= _RESCAN_ROWS):
+        return False
+    rescan_opts = {**opts, "infer_schema_length": _RESCAN_ROWS}
+    schema = pl.scan_csv(path, **rescan_opts).collect_schema()  # type: ignore[arg-type]
+    return any(dtype != pl.String for dtype in schema.values())
+
+
+def _assert_non_degenerate(lf: pl.LazyFrame, path: Path, fmt: str, opts: dict[str, object]) -> None:
     schema = lf.collect_schema()
     n_cols = len(schema)
 
     if n_cols == 0:
         raise SchemaError(f"'{path}' produced a frame with no columns.")
 
-    if n_cols == 1:
-        raise SchemaError(
-            f"'{path}' has only one column — this usually means the delimiter "
-            "was not detected correctly. Check source.read_options['separator']."
-        )
+    if fmt not in ("csv", "tsv"):
+        return  # no delimiter concept; a narrow or all-string frame here is simply the data
 
     n_string = sum(1 for dtype in schema.values() if dtype == pl.String)
-    if n_string == n_cols:
+    if n_cols > 1 and n_string < n_cols:
+        return  # at least one column parsed as non-string: not a flat, undelimited dump
+
+    configured_sep = str(opts.get("separator", opts.get("delimiter", ",")))
+    missed = _untried_delimiter(path, configured_sep)
+    if missed is not None:
+        if n_cols == 1:
+            raise SchemaError(
+                f"'{path}' has only one column, and every row splits consistently on {missed!r} — this usually "
+                "means the delimiter was not detected correctly. Check source.read_options['separator']."
+            )
         raise SchemaError(
-            f"All {n_cols} columns in '{path}' were inferred as String. "
-            "The file may have too many header rows, a wrong delimiter, "
-            "or schema inference may need a larger infer_schema_length."
+            f"All {n_cols} columns in '{path}' were inferred as String, and every row splits "
+            f"consistently on {missed!r} — this usually means the delimiter was not detected correctly. "
+            "Check source.read_options['separator']."
         )
+
+    if n_cols > 1 and _schema_has_non_string_column(path, opts):
+        raise SchemaError(
+            f"All {n_cols} columns in '{path}' were inferred as String, but a scan of up to "
+            f"{_RESCAN_ROWS:,} rows finds a numeric column among them -- the configured (or default) "
+            "source.read_options['infer_schema_length'] sampled only non-numeric-looking rows "
+            "(blank leading rows are a common cause). Set it larger, or to null for an unbounded scan."
+        )
+    # No evidence of a missed delimiter, and (for n_cols > 1) a wider scan agrees every column is
+    # genuinely String: a narrow or all-string CSV/TSV is valid data on its own.

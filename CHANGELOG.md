@@ -28,6 +28,28 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Narrow and all-categorical sources**: a CSV/TSV with one column, or with
+  every column inferred as String, is no longer refused outright -- it is
+  refused only on concrete evidence of a wrong delimiter (a delimiter
+  character other than the one configured appears in the header and the same
+  number of times in most sampled data rows) or, for an all-string schema,
+  when a re-scan of up to 1,000,000 rows finds a numeric column the sampled
+  `infer_schema_length` missed. A local source that is a directory now fails
+  with a clear `SourceError` instead of a low-level error deep in the pipeline.
+- **Low-cardinality columns are no longer dropped by default**: a column with
+  2 or 3 distinct values (a rare category, a small set of status codes) often
+  carries exactly the signal a review tool exists to surface.
+  `profiling.near_constant_distinct` now defaults to 2, which drops nothing;
+  raise it explicitly to restore the previous drop-on-low-cardinality
+  behaviour. This changes the default feature matrix and realised detector
+  rates for affected datasets.
+- **KMeans on discrete data**: with few distinct feature rows relative to the
+  row count, k now goes straight to one cluster per distinct row instead of
+  using the elbow/silhouette heuristic, which could merge a rare one-hot
+  category into a common cluster and leave it with ~0 distance to that
+  cluster's centroid -- never flagged by the natural CBLOF boundary. The
+  `kmeans_distance` `k_max` parameter now defaults to automatic (8 for
+  continuous data); an explicitly configured `k_max` caps both paths.
 - **A period window selecting zero rows** now raises immediately with the
   period, window, time column and the data's available range named, instead
   of surfacing much later as an opaque "encoded feature matrix has zero

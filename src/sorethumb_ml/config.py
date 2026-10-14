@@ -214,11 +214,15 @@ class ProfilingConfig(BaseModel):
         ),
     )
     near_constant_distinct: int = Field(
-        3,
+        2,
         ge=2,
         description=(
-            "A non-empty column with n_unique <= this is classified 'near_constant' "
-            "and dropped (too low variance to be useful)."
+            "A non-empty column with 2 < n_unique <= this is classified 'near_constant' and "
+            "dropped. Binary columns (n_unique == 2) are never dropped by this rule -- they "
+            "carry signal regardless of this setting. The default (2) therefore drops nothing: "
+            "a rare category is exactly the kind of signal a review tool exists to surface, so "
+            "dropping on low cardinality alone is opt-in. Raise this (e.g. to 5) to drop columns "
+            "with few distinct values anyway."
         ),
     )
     identifier_cardinality_ratio: float = Field(

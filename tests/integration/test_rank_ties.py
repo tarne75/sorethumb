@@ -22,6 +22,7 @@ from sorethumb_ml.config import (
     ColumnsConfig,
     DetectorConfig,
     ExplainConfig,
+    ProfilingConfig,
     RunConfig,
     ScoringConfig,
     SourceConfig,
@@ -55,6 +56,10 @@ def _cfg(tmp_path: Path, *, contamination: float, max_rows: int = 5000) -> Confi
         source=SourceConfig(uri=str(tmp_path / "d.parquet"), format="parquet"),
         run=RunConfig(workdir=str(tmp_path / "ws"), seed=7),
         columns=ColumnsConfig(id_column="id", time_column="ts"),
+        # num_b has only 3 distinct values; this fixture's engineered exact ties depend on it
+        # being dropped (near_constant), not on the package default -- raised explicitly here so
+        # it stays true regardless of where that default sits.
+        profiling=ProfilingConfig(near_constant_distinct=3),
         detectors=[DetectorConfig(name="one_class_svm")],
         scoring=ScoringConfig(
             combination="composite", contamination=contamination, weighting="equal", min_records=5

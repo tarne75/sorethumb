@@ -214,6 +214,8 @@ def _resolve_local(uri: str) -> Path:
     path = Path(uri).expanduser().resolve()
     if not path.exists():
         raise SourceError(f"Local source file not found: {path}")
+    if not path.is_file():
+        raise SourceError(f"Local source is not a file: {path}")
     return path
 
 
