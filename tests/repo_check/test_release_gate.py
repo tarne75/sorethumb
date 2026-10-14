@@ -44,6 +44,27 @@ def test_release_validation_runs_the_synthetic_accuracy_smoke():
         assert all(step.get("continue-on-error") is not True for step in jobs[name]["steps"])
 
 
+_PIPELINE_FLOORS = "tests/benchmark/test_pipeline_accuracy_floors.py"
+
+
+def test_release_validation_runs_the_pipeline_scenario_floors():
+    """A default change that degrades a guarded scenario must fail on the PR, not a week later."""
+    jobs = _load("release-validation.yml")["jobs"]
+    floor_jobs = [name for name, job in jobs.items() if any(_PIPELINE_FLOORS in r for r in _run_steps(job))]
+    assert floor_jobs, f"no job in release-validation.yml runs {_PIPELINE_FLOORS}"
+    for name in floor_jobs:
+        pytest_runs = [r for r in _run_steps(jobs[name]) if _PIPELINE_FLOORS in r]
+        assert all("-m benchmark" in r for r in pytest_runs), pytest_runs
+        assert jobs[name].get("continue-on-error") is not True
+        assert all(step.get("continue-on-error") is not True for step in jobs[name]["steps"])
+
+
+def test_the_pipeline_floors_are_network_free():
+    text = (_ROOT / _PIPELINE_FLOORS).read_text(encoding="utf-8")
+    for forbidden in ("kddcup", "covtype", "pytest.mark.network"):
+        assert forbidden not in text, f"{forbidden!r} must not appear in the release-gate pipeline floors"
+
+
 def test_the_smoke_test_is_the_fast_network_free_one():
     path = _ROOT / _SMOKE_TEST
     assert path.is_file()

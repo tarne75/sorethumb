@@ -44,20 +44,21 @@ def test_high_null_iff_ratio_exceeds_threshold(n_null: int, n_total: int, thresh
     null_ratio = n_null / n_total
     col_class = _classify_float_col(vals, null_ratio_drop=threshold)
 
-    # Classification priority means constant / empty can win before high_null.
-    # Our values are [None]*n_null + [0.0, 1.0, ...], so all non-null values
-    # are distinct (n_unique_non_null == n_non_null). near_constant cannot win
-    # here at all: its default threshold (2) combined with its own n_unique > 2
-    # guard makes it structurally unreachable at the default -- it only fires
-    # when a config explicitly raises near_constant_distinct, which this test
-    # does not.
+    # Classification priority means constant / near_constant / empty can win
+    # before high_null. Our values are [None]*n_null + [0.0, 1.0, ...], so all
+    # non-null values are distinct (n_unique_non_null == n_non_null). The
+    # near_constant threshold is read from the config default, not hardcoded.
     n_non_null = n_total - n_null
+    near_constant_threshold = ProfilingConfig().near_constant_distinct
 
     if n_non_null == 0:
         assert col_class == ColumnClass.empty
     elif n_non_null == 1:
         # Only one distinct non-null value → constant wins
         assert col_class == ColumnClass.constant
+    elif 2 < n_non_null <= near_constant_threshold:
+        # Binary columns are exempt; (2, threshold] → near_constant wins before high_null
+        assert col_class == ColumnClass.near_constant
     elif null_ratio > threshold:
         assert col_class == ColumnClass.high_null
     else:
