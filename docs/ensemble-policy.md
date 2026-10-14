@@ -39,7 +39,9 @@ meets one that still is.
 
 `scoring.combination` (and `scoring.weighting` for `composite`) selects another
 registered policy: `union@1`, `composite-equal@1`, `composite-agreement@1` or
-`composite-manual@1`. Choose one on evidence, not intuition: measure the candidate
+`composite-manual@1`. Choose one on evidence, not intuition (`composite-agreement@1`
+has published backtest evidence on the synthetic suite; see
+[Round 2](#round-2-2026-10-14-budgets-v3)): measure the candidate
 against the default on labelled data that resembles yours, comparing the precision and
 recall of the actual flag decision, the ranking (average precision), stability across
 refits, and the false-positive rate, and prefer a policy only where it wins clearly
@@ -181,6 +183,27 @@ The round-1 verdicts stand: they were judged under v2, which is archived byte-fo
 (`tests/benchmark/budgets-archive/v2.toml`). The fix is tested only through new
 pre-registrations on round 2's fresh seeds. A bound changed after seeing a result is
 exactly what this protocol guards against, so the change gets no retroactive effect.
+
+### Round 2 (2026-10-14, budgets v3)
+
+Both verdicts went against the expectations pre-registered from the development seeds,
+which is why confirmation is a separate step:
+
+- **`composite-agreement@1` outperforms `intersection@1`** (`composite-agreement-v2`).
+  Flag F1 improves by +0.14 to +0.45 on point, clustered, masking and irrelevant
+  columns, and it meets every budget the default meets, stability included. The
+  average-precision and stability dips seen on the development seeds did not recur on
+  the fresh seeds. What it trades away is unchanged: it always spends the review
+  budget, so where the ensemble cannot rank the anomalies its flags are mostly normal
+  rows, still within the budget. It is now a policy with published evidence. The
+  default stays `intersection@1` by design (see below), and choosing the composite for
+  your data should rest on evidence from data like yours.
+- **`rule:discrete-budget@1` does not outperform** (`discrete-budget-v1`). Keeping the
+  default's ranking and flagging the review budget's top rows on all-discrete data
+  improves flag F1 by +0.17 with average precision unchanged. But its flagged set is
+  less stable across refits (Jaccard 0.70 against the default's 0.76, beyond the 0.05
+  tolerance). Rows near the budget cut-off change between refits, which a unanimous
+  vote mostly avoids by flagging fewer rows.
 
 ## Versioning
 
