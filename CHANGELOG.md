@@ -74,7 +74,11 @@ First public release.
 - **Ensemble combination**: `intersection` (the default: every configured
   detector must flag a row; see Known limitations), `union`, and `composite`
   (a weighted average with a guard that drops an anti-correlated member, and
-  optional agreement-based weighting).
+  optional agreement-based weighting). Each is a versioned *policy*
+  (`intersection@1`, `union@1`, `composite-equal@1`, `composite-agreement@1`,
+  `composite-manual@1`) recorded on every run (`run --json`, `show`); a change
+  to what a policy flags is a new version. The default is a deliberate
+  precision-first design decision; see `docs/ensemble-policy.md`.
 - **Explanations**: up to `explain.top_n` reasons per flagged row
   (`reason_1`, `reason_2`, ...), labelled per row by `attribution_kind`:
   `exact` for ECOD and HBOS, `model_specific` (TreeSHAP) for Isolation Forest
