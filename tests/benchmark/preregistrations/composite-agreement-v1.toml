@@ -1,0 +1,26 @@
+# Pre-registered 2026-10-14, before any confirmation-seed run.
+candidate = "composite-agreement@1"
+baseline = "intersection@1"
+hypothesis = """
+Thresholding the agreement-weighted composite score at the review budget improves
+flag F1 over unanimity on the anomaly types where the ensemble ranking is good but the
+unanimous flag under-flags: point, clustered, masking and irrelevant_columns.
+"""
+primary_metric = "flag_f1"
+scenarios = ["point", "clustered", "masking", "irrelevant_columns"]
+require = "all"
+alpha = 0.05
+stability_metric = "flag_jaccard_stability"
+stability_tolerance = 0.05
+n_resamples = 10000
+expected_outcome = """
+Does not outperform. On the development seeds flag F1 improved significantly on all four
+scenarios (text_timestamp, in the first draft, did not: +0.05, p 0.23, so it was dropped
+before registration), but the candidate breached budgets the baseline meets: the false
+positive rate rose from 0.01-0.02 to 0.050-0.054 on local, varying_density, contextual
+and both swamping variants (a composite fills the review budget, so where it cannot rank
+the anomalies it fills it with normal rows), average precision fell on clustered (1.00 to
+0.77) and all_categorical, and flag stability fell on local. Confirmation is expected to
+show the same trade-off: more anomalies caught where the ranking is good, at the price of
+the false-positive budget where it is not.
+"""

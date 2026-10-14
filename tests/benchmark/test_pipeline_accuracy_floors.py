@@ -85,6 +85,7 @@ _FLOORS: dict[tuple[str, str], float] = {
     # compared to labels in time-sorted order); irrelevant_columns guards dilution.
     ("text_timestamp", "default"): 0.75,  # observed 0.91
     ("irrelevant_columns", "default"): 0.8,  # observed 0.96
+    ("all_categorical", "default"): 0.75,  # observed 0.87
 }
 
 # Sanity-only, not "beats random": contextual anomalies genuinely sit at

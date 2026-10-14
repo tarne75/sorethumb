@@ -20,7 +20,7 @@
 # A metric that is undefined for a cell (NaN: e.g. AP on the single-class
 # swamping holdout) is not checked.
 
-version = 1
+version = 2
 
 [defaults]
 min_average_precision = 0.15
@@ -51,6 +51,8 @@ max_flag_false_positive_rate = 0.15  # this scenario's review budget is 15%
 [kinds.text_timestamp]
 
 [kinds.irrelevant_columns]
+
+[kinds.all_categorical]
 
 [kinds.swamping]
 # Single-class (all-normal) holdout: only false positives are defined.
@@ -166,3 +168,15 @@ policy = "intersection@1"
 scenario = "categorical_rare"
 bound = "min_flag_recall"
 reason = "near_constant_distinct=3 drops the 3-value signal column; set it to 2 where measured to help"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "all_categorical"
+bound = "min_flag_precision"
+reason = "unanimity: the detectors rank combination anomalies (AUC ~0.86) but rarely all flag the same row; see the discrete-composite-v1 backtest"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "all_categorical"
+bound = "min_flag_recall"
+reason = "unanimity: the detectors rank combination anomalies (AUC ~0.86) but rarely all flag the same row; see the discrete-composite-v1 backtest"

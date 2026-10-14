@@ -61,6 +61,11 @@ text_timestamp
 irrelevant_columns
     Moderate point anomalies in two columns among twenty pure-noise
     columns: whether the signal survives dilution.
+all_categorical
+    The one scenario with no numeric column at all (the mixed-data rule
+    above does not apply): five categorical columns, and anomalies that are
+    unseen combinations of individually common levels. Every column has
+    five levels, so ``profiling.near_constant_distinct`` drops none of them.
 """
 
 from __future__ import annotations
@@ -378,6 +383,44 @@ def irrelevant_columns_anomalies(
     return _shuffle(_assemble(numeric, categorical), y, seed)
 
 
+_PROFILE_COLUMNS = ("region", "product", "channel", "payment", "device")
+
+
+def all_categorical_anomalies(
+    seed: int, n_normal: int = 800, n_anomaly: int = 40, n_profiles: int = 3, home_p: float = 0.85
+) -> tuple[pl.DataFrame, np.ndarray]:
+    """Every column categorical; anomalies combine levels that never co-occur in normal rows.
+
+    Normal rows belong to one of *n_profiles* latent customer profiles; each of
+    the five columns takes its profile's "home" level with probability
+    *home_p* and any other level otherwise. An anomalous row takes each
+    column's home level from an independently chosen profile, with at least
+    two different profiles among its columns -- so every level it has is
+    common, and only the combination is unusual.
+    """
+    rng = np.random.default_rng(seed)
+    n_levels = 5
+    levels = {c: [f"{c}_{i}" for i in range(n_levels)] for c in _PROFILE_COLUMNS}
+
+    def draw(home: int) -> int:
+        if rng.random() < home_p:
+            return home
+        return int(rng.choice([i for i in range(n_levels) if i != home]))
+
+    rows: list[list[int]] = []
+    for _ in range(n_normal):
+        profile = int(rng.integers(n_profiles))
+        rows.append([draw(profile) for _ in _PROFILE_COLUMNS])
+    for _ in range(n_anomaly):
+        profiles = rng.integers(n_profiles, size=len(_PROFILE_COLUMNS))
+        while len(set(profiles.tolist())) < 2:
+            profiles = rng.integers(n_profiles, size=len(_PROFILE_COLUMNS))
+        rows.append([int(p) for p in profiles])
+    y = np.concatenate([np.zeros(n_normal), np.ones(n_anomaly)]).astype(int)
+    categorical = {c: [levels[c][r[j]] for r in rows] for j, c in enumerate(_PROFILE_COLUMNS)}
+    return _shuffle(_assemble({}, categorical), y, seed)
+
+
 @dataclass(frozen=True)
 class Scenario:
     """One registered synthetic scenario."""
@@ -446,6 +489,12 @@ SCENARIOS: list[Scenario] = [
         "irrelevant_columns",
         "Point anomalies in 2 columns diluted by 20 irrelevant numeric columns.",
         irrelevant_columns_anomalies,
+    ),
+    Scenario(
+        "all_categorical",
+        "all_categorical",
+        "No numeric columns; anomalies are unseen combinations of individually common levels.",
+        all_categorical_anomalies,
     ),
 ]
 

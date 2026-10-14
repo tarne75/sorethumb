@@ -141,6 +141,10 @@ First public release.
   precision, recall, ranking, stability and false-positive figures checked
   against versioned per-anomaly-type budgets, where every budget the default
   misses is listed as an accepted limitation with its reason.
+  `docs/ensemble-policy.md` sets out the backtest protocol a candidate policy
+  must pass before it can be said to outperform the default (pre-registration,
+  disjoint confirmation seeds, paired bootstrap with Holm correction, no budget
+  or stability regressions) and publishes each confirmation result.
 
 ### Security
 
