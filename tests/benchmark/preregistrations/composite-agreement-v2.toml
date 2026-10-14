@@ -1,0 +1,27 @@
+# Pre-registered 2026-10-14, after the round-2 development run and before any round-2 confirmation run.
+candidate = "composite-agreement@1"
+baseline = "intersection@1"
+confirmation_round = 2
+hypothesis = """
+Re-test of composite-agreement-v1 under budgets v3, which state the false-positive bound in
+whole rows (a policy may spend its review budget, never more) instead of a rate over normal
+rows that an exact-budget policy could breach with no extra flags. Same hypothesis: the
+agreement-weighted composite improves flag F1 over unanimity on point, clustered, masking
+and irrelevant_columns. Judged on fresh seeds, because round 1's have been seen.
+"""
+primary_metric = "flag_f1"
+scenarios = ["point", "clustered", "masking", "irrelevant_columns"]
+require = "all"
+alpha = 0.05
+stability_metric = "flag_jaccard_stability"
+stability_tolerance = 0.05
+n_resamples = 10000
+expected_outcome = """
+Uncertain. Under budgets v3 the development seeds show no false-positive regression at all
+(confirming round 1's were the v2 units artefact), and flag F1 improves significantly on all
+four scenarios. But three other regressions remain on the development seeds: average
+precision on clustered (1.00 to 0.77, from a few seeds where the agreement weighting
+down-weights a detector that ranks this cluster well) and on all_categorical (0.166 to 0.150,
+against the 0.15 budget), and flag stability on local (0.78 vs 0.88). Round 1's confirmation
+seeds showed none of these, so whether round 2 does decides the verdict.
+"""
