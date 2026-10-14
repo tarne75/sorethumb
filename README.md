@@ -187,7 +187,7 @@ whether a flagged record is actually interesting.
 | --- | --- | --- |
 | Linux (x86-64) | 3.11–3.13 | unit, contract, integration, property, packaging (`ubuntu-latest`) |
 | macOS (Apple silicon) | 3.11–3.13 | unit, contract, integration (`macos-latest`) |
-| Windows 10/11 (x64) | 3.11–3.13 | unit, contract, integration, and installing the built wheel and running it from PowerShell (`windows-latest`) |
+| Windows 10/11 (x64) | 3.11–3.13 | unit, contract, integration, and installing the built wheel and sdist and running them from PowerShell (`windows-latest`) |
 
 The integration suite exercises a real workspace, SQLite, the CLI as a
 subprocess and report rendering on all three
