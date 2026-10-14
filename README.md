@@ -415,6 +415,7 @@ mean ± spread across seeds):
 | Synthetic, rare categorical value, default pipeline | 0.4649 ± 0.0920 | 0.0381 ± 0.0168 |
 | Synthetic, off-hours text timestamps, default pipeline | 0.9110 ± 0.0035 | 0.3268 ± 0.0626 |
 | Synthetic, 20 irrelevant columns, default pipeline | 0.9557 ± 0.0132 | 0.6758 ± 0.0770 |
+| Synthetic, all-categorical combinations, default pipeline | 0.8740 ± 0.0491 | 0.1872 ± 0.0569 |
 | KDDCup99 (SA), bare Isolation Forest, 20,000-row sample | 0.9386 ± 0.0061 | 0.4443 ± 0.0143 |
 | Covtype, bare Isolation Forest, 20,000-row sample | 0.9837 ± 0.0030 | 0.3486 ± 0.0320 |
 
