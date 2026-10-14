@@ -172,8 +172,10 @@ class ColumnsConfig(BaseModel):
     include_only: list[str] | None = Field(
         None,
         description=(
-            "When set, only these columns (plus protected ones) are considered. "
-            "Useful for narrowing scope without touching the source schema."
+            "When set, only these columns (exact names) plus protected ones -- time_column, "
+            "group_by, id_column, reference_column -- are considered; every other column is "
+            "ignored. A name not in the dataset is an error. Useful for narrowing scope without "
+            "touching the source schema."
         ),
     )
     datetime_formats: dict[str, str] = Field(

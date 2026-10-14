@@ -311,3 +311,55 @@ def test_a_date_parse_is_not_skipped_for_a_column_that_is_already_a_datetime() -
     df = pl.DataFrame({"d": ["2026-01-01 10:00:00"]}).with_columns(pl.col("d").str.to_datetime())
     out = apply_temporal_parses(df, {"d": TemporalParse(kind="date", format=None, forced=False)})
     assert isinstance(out.schema["d"], pl.Datetime)  # left alone: not a String, nothing to parse
+
+
+# ---------------------------------------------------------------------------
+# The public build_feature_plan / apply_feature_plan pair parses like `run`
+# ---------------------------------------------------------------------------
+
+
+def _plan_config(tmp_path: object) -> object:
+    from sorethumb_ml.config import Config, RunConfig, SourceConfig
+
+    return Config(source=SourceConfig(uri="/dev/null"), run=RunConfig(workdir=str(tmp_path)))
+
+
+def _raw_text_dates(n: int = 60) -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "amount": [float(i) for i in range(n)],
+            "when": [f"2026-01-{(i % 28) + 1:02d}T{i % 24:02d}:00:00" for i in range(n)],
+        }
+    )
+
+
+def test_build_feature_plan_parses_a_raw_frame_itself(tmp_path: object) -> None:
+    """Regression: called directly (library API), it planned text dates as categorical."""
+    from sorethumb_ml.profiling.plan import build_feature_plan
+
+    plan = build_feature_plan(_raw_text_dates(), _plan_config(tmp_path))  # type: ignore[arg-type]
+    assert plan.parsed_temporal["when"].kind == "datetime"
+    assert any(f.startswith("when__") for f in plan.output_features)
+
+
+def test_an_explicit_empty_parse_result_means_use_the_frame_as_given(tmp_path: object) -> None:
+    """{} is 'already parsed, nothing found' -- the pipeline's case -- not 'parse it'."""
+    from sorethumb_ml.profiling.plan import build_feature_plan
+
+    plan = build_feature_plan(_raw_text_dates(), _plan_config(tmp_path), {})  # type: ignore[arg-type]
+    assert plan.parsed_temporal == {}
+    assert not any(f.startswith("when__") for f in plan.output_features)
+
+
+def test_raw_frame_through_build_fit_and_apply_matches(tmp_path: object) -> None:
+    """The same raw (text) frame through all three public/internal steps stays consistent."""
+    from sorethumb_ml.features.build import apply_feature_plan, fit_features
+    from sorethumb_ml.profiling.plan import build_feature_plan
+
+    raw = _raw_text_dates()
+    cfg = _plan_config(tmp_path)
+    plan = build_feature_plan(raw, cfg)  # type: ignore[arg-type]
+    fitted = fit_features(raw, plan, cfg)  # type: ignore[arg-type]
+    applied = apply_feature_plan(raw, plan)
+    assert fitted.feature_names == applied.feature_names
+    assert any(f.startswith("when__") for f in fitted.feature_names)

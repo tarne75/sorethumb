@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 import polars as pl
 
 from sorethumb_ml.config import ColumnsConfig, Config, FeaturesConfig, ProfilingConfig
-from sorethumb_ml.errors import PlanError
+from sorethumb_ml.errors import ConfigError, PlanError
 from sorethumb_ml.io.fingerprint import schema_fingerprint
 from sorethumb_ml.profiling.classify import (
     ColumnClass,
@@ -29,7 +29,7 @@ from sorethumb_ml.profiling.classify import (
 )
 from sorethumb_ml.profiling.missing import float_nan_to_null
 from sorethumb_ml.profiling.profile import ColumnProfile, profile_columns
-from sorethumb_ml.profiling.temporal import TemporalParse
+from sorethumb_ml.profiling.temporal import TemporalParse, parse_temporal_columns
 
 _NUMERIC_BASE_TYPES = (
     pl.Int8,
@@ -263,15 +263,29 @@ def build_feature_plan(
     The returned plan is fully fitted: applying it to any frame with the same
     schema will produce an identical feature space (before scaling / PCA).
 
-    *df* is assumed already parsed: a caller that detected date/time-as-text
-    columns (:func:`sorethumb_ml.profiling.temporal.detect_temporal_parses`)
-    must cast *df* with :func:`~sorethumb_ml.profiling.temporal.apply_temporal_parses`
-    itself before calling this, and pass the same detection result as
-    *parsed_temporal* so it is recorded on the plan for ``apply_feature_plan``
-    to replay later. Detection isn't done here because it must also run
-    before period-window filtering, which happens earlier in the pipeline
-    than this function does.
+    Date/time stored as text is parsed here, exactly as ``run`` parses it,
+    and the parse is recorded on the plan for ``apply_feature_plan`` to
+    replay -- so a raw frame planned here and later applied gives the same
+    features ``run`` would. A caller that has already parsed *df* (the
+    pipeline does, because period-window filtering needs the parsed dtypes
+    before this runs) passes that result as *parsed_temporal* instead, and
+    *df* is then used as given -- ``{}`` means "parsed, nothing found", not
+    "parse it".
+
+    Raises:
+        ConfigError: ``columns.include_only`` names a column not in *df*.
+
     """
+    if parsed_temporal is None:
+        df, parsed_temporal = parse_temporal_columns(df, config.columns)
+
+    include_only = config.columns.include_only
+    if include_only is not None:
+        unknown = sorted(set(include_only) - set(df.columns))
+        if unknown:
+            msg = f"columns.include_only names column(s) not in the dataset: {unknown}"
+            raise ConfigError(msg)
+
     protected = _build_protected(config.columns)
 
     # NaN is a missing value: normalise before profiling so null
@@ -346,7 +360,7 @@ def build_feature_plan(
         imputation_medians=medians,
         chosen_time_column=chosen_time,
         time_derivatives=list(config.features.time_derivatives),
-        parsed_temporal=dict(parsed_temporal) if parsed_temporal else {},
+        parsed_temporal=dict(parsed_temporal),
     )
 
 
