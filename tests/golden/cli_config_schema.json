@@ -371,7 +371,7 @@
         },
         "near_constant_distinct": {
           "default": 3,
-          "description": "A non-empty column with 2 < n_unique <= this is classified 'near_constant' and dropped. Binary columns (n_unique == 2) are never dropped by this rule. The default (3) drops a column with exactly 3 distinct values: on the full-pipeline benchmark, keeping such a column when it is noise pushed the local and varying-density rankings below chance. Set it to 2 to keep every low-cardinality column -- for example when a rare level of a 3-value category is itself the anomaly -- after measuring that it helps on your data.",
+          "description": "A non-empty column with 2 < n_unique <= this is classified 'near_constant' and dropped. Binary columns (n_unique == 2) are never dropped by this rule. The default (3) drops a column with exactly 3 distinct values: on the full-pipeline benchmark, keeping such a column when it is noise pushed the local and varying-density rankings below chance. Set it to 2 to keep every low-cardinality column -- for example when a rare level of a 3-value category is itself the anomaly -- after measuring that it helps on your data. Evidence: docs/benchmarks.md, ensemble policy matrix.",
           "minimum": 2,
           "title": "Near Constant Distinct",
           "type": "integer"

@@ -401,7 +401,7 @@ sorethumb anomalies --top 100 --json | jq '.[] | {rank, score: .composite_score,
 Two suites, both reproducible from a clone. Full matrices, method and every
 metric are in the
 [benchmark results page](https://github.com/tarne75/sorethumb/blob/main/docs/benchmarks.md).
-These are the headline cells from the committed run (generated 2026-09-29, 3 seeds,
+These are the headline cells from the committed run (regenerated 2026-10-14, 3 seeds,
 mean ± spread across seeds):
 
 | Setting | ROC-AUC | Average precision |
@@ -412,13 +412,23 @@ mean ± spread across seeds):
 | Synthetic, local anomalies, default pipeline | 0.7085 ± 0.0335 | 0.1075 ± 0.0460 |
 | Synthetic, varying density, default pipeline | 0.6824 ± 0.0341 | 0.0844 ± 0.0552 |
 | Synthetic, contextual anomalies, default pipeline | 0.4965 ± 0.0842 | 0.0579 ± 0.0091 |
+| Synthetic, rare categorical value, default pipeline | 0.4649 ± 0.0920 | 0.0381 ± 0.0168 |
+| Synthetic, off-hours text timestamps, default pipeline | 0.9110 ± 0.0035 | 0.3268 ± 0.0626 |
+| Synthetic, 20 irrelevant columns, default pipeline | 0.9557 ± 0.0132 | 0.6758 ± 0.0770 |
 | KDDCup99 (SA), bare Isolation Forest, 20,000-row sample | 0.9386 ± 0.0061 | 0.4443 ± 0.0143 |
 | Covtype, bare Isolation Forest, 20,000-row sample | 0.9837 ± 0.0030 | 0.3486 ± 0.0320 |
 
 Read the weak rows as seriously as the strong ones: the default ensemble is close to
-chance on contextual anomalies and weak on local and varying-density ones, and average
+chance on contextual and rare-categorical anomalies and weak on local and varying-density ones, and average
 precision is the more telling column when anomalies are rare. The page above also
 shows the bare-detector baselines and the flag-level precision and recall.
+
+The same page has the ensemble-policy matrix: every scenario under every built-in
+policy over 10 seeds, with flag precision/recall, false-positive rate, over-flag
+ratio and refit stability checked against versioned budgets. The default
+(`intersection@1`) misses some of those budgets by design; each accepted miss is
+listed with its reason in [`tests/benchmark/budgets.toml`](https://github.com/tarne75/sorethumb/blob/main/tests/benchmark/budgets.toml)
+(rationale: [`docs/ensemble-policy.md`](https://github.com/tarne75/sorethumb/blob/main/docs/ensemble-policy.md)).
 
 ---
 

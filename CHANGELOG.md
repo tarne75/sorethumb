@@ -136,7 +136,11 @@ First public release.
 - **Extras**: `explain` (shap, numba) for TreeSHAP and KernelSHAP attributions;
   `benchmark` (datasets, pandas) for the benchmark harnesses.
 - **Docs**: `docs/stability.md` sets out the pre-1.0 API and stability policy;
-  `docs/benchmarks.md` holds the benchmark results and their accuracy floors.
+  `docs/benchmarks.md` holds the benchmark results and their accuracy floors,
+  and an ensemble policy matrix: every scenario under every policy, with
+  precision, recall, ranking, stability and false-positive figures checked
+  against versioned per-anomaly-type budgets, where every budget the default
+  misses is listed as an accepted limitation with its reason.
 
 ### Security
 

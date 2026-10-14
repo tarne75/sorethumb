@@ -38,7 +38,9 @@ Design principles
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
+import json
 import logging
 import multiprocessing
 import sys
@@ -82,6 +84,16 @@ class AblationSpec:
     scaler: str = "robust"
     detector_names: tuple[str, ...] = _DEFAULT_DETECTORS
     combination: str = "intersection"
+    weighting: str = "equal"
+    # None: the shipped profiling.near_constant_distinct default.
+    near_constant_distinct: int | None = None
+
+    @property
+    def policy_id(self) -> str:
+        """The versioned ensemble policy this ablation runs (scoring.policies)."""
+        from sorethumb_ml.scoring.policies import resolve_policy  # noqa: PLC0415
+
+        return resolve_policy(self.combination, self.weighting).id
 
 
 ABLATIONS: list[AblationSpec] = [
@@ -95,7 +107,20 @@ ABLATIONS: list[AblationSpec] = [
     AblationSpec("all_detectors", detector_names=_ALL_DETECTORS),
     AblationSpec("combination_composite", combination="composite"),
     AblationSpec("combination_union", combination="union"),
+    AblationSpec("combination_composite_agreement", combination="composite", weighting="agreement"),
+    # Keep 3-value columns (the threshold before 2026-10-14's restore of 3) -- the
+    # evidence for which profiling.near_constant_distinct default to ship.
+    AblationSpec("near_constant_2", near_constant_distinct=2),
 ]
+
+# One ablation per registered ensemble policy, everything else at the shipped
+# default: the policy matrix compares policies, not other knobs.
+POLICY_ABLATIONS: tuple[str, ...] = (
+    "default",
+    "combination_union",
+    "combination_composite",
+    "combination_composite_agreement",
+)
 
 DEFAULT_ABLATION = ABLATIONS[0]
 
@@ -118,6 +143,7 @@ class PipelineBenchmarkRow:
     scenario: str
     kind: str
     ablation: str  # an AblationSpec.name, or "sklearn:<detector>" for a baseline row
+    policy: str | None  # versioned ensemble policy id; None for a "sklearn:*" baseline row
     n_seeds: int
     n_train: int
     n_holdout: int
@@ -147,6 +173,14 @@ class PipelineBenchmarkRow:
     flag_f1: float | None = None
     flag_false_positive_rate: float | None = None
     flag_count: float | None = None
+    # flag_count / (review_budget * n_holdout): 1.0 flags exactly the review
+    # budget, above 1.0 over-flags it.
+    over_flag_ratio: float | None = None
+    # Mean overlap of the flagged rows, and Spearman correlation of the scores,
+    # between the full fit and refits on training subsamples (NaN when the run
+    # was configured with n_bootstrap=0). See _fit_score_one_seed_pipeline.
+    flag_jaccard_stability: float | None = None
+    rank_stability: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Flatten to a JSON/CSV-serialisable dict."""
@@ -154,6 +188,7 @@ class PipelineBenchmarkRow:
             "scenario": self.scenario,
             "kind": self.kind,
             "ablation": self.ablation,
+            "policy": self.policy,
             "n_seeds": self.n_seeds,
             "n_train": self.n_train,
             "n_holdout": self.n_holdout,
@@ -174,6 +209,9 @@ class PipelineBenchmarkRow:
             "flag_f1": self.flag_f1,
             "flag_false_positive_rate": self.flag_false_positive_rate,
             "flag_count": self.flag_count,
+            "over_flag_ratio": self.over_flag_ratio,
+            "flag_jaccard_stability": self.flag_jaccard_stability,
+            "rank_stability": self.rank_stability,
         }
 
 
@@ -274,11 +312,21 @@ def _build_pipeline_config(ablation: AblationSpec, seed: int) -> Any:
     from sorethumb_ml.config import Config  # noqa: PLC0415
 
     detectors = [{"name": name, "enabled": True} for name in ablation.detector_names]
+    profiling = (
+        {}
+        if ablation.near_constant_distinct is None
+        else {"near_constant_distinct": ablation.near_constant_distinct}
+    )
     return Config.model_validate(
         {
             "source": {"uri": "file:///dev/null"},
             "features": {"pca": ablation.pca, "scaler": ablation.scaler},
-            "scoring": {"contamination": "auto", "combination": ablation.combination},
+            "profiling": profiling,
+            "scoring": {
+                "contamination": "auto",
+                "combination": ablation.combination,
+                "weighting": ablation.weighting,
+            },
             "detectors": detectors,
             "run": {"workdir": "/tmp/unused-pipeline-benchmark", "seed": seed},  # noqa: S108 -- never touched, see docstring
             "explain": {"enabled": False},
@@ -286,11 +334,96 @@ def _build_pipeline_config(ablation: AblationSpec, seed: int) -> Any:
     )
 
 
+_STABILITY_SUBSAMPLE = 0.8
+
+
+def _fit_and_score(
+    train_df: pl.DataFrame,
+    holdout_df: pl.DataFrame,
+    ablation: AblationSpec,
+    seed: int,
+    review_budget: float,
+) -> tuple[dict[str, Any], float, float]:
+    """Fit the real pipeline on *train_df*, score *holdout_df*. Returns (combine result, fit s, score s).
+
+    The combine result's per-row arrays are in *holdout_df*'s row order. The
+    feature pipeline sorts rows by the plan's chosen time column, so every
+    frame is stamped with the pipeline's own row-identity column first (as
+    ``run_detection`` does) and the scores are put back in holdout order
+    afterwards -- without that, a scenario with a date column would score
+    against the wrong labels.
+    """
+    from sorethumb_ml.detectors import registry  # noqa: PLC0415
+    from sorethumb_ml.features.build import apply_feature_plan, fit_features  # noqa: PLC0415
+    from sorethumb_ml.io.fingerprint import INTERNAL_ROW_ID_COLUMN  # noqa: PLC0415
+    from sorethumb_ml.profiling.plan import build_feature_plan  # noqa: PLC0415
+    from sorethumb_ml.scoring.calibrate import Calibrator  # noqa: PLC0415
+    from sorethumb_ml.scoring.combine import ScoreEnsemble  # noqa: PLC0415
+
+    train_df = train_df.with_columns(
+        pl.Series(INTERNAL_ROW_ID_COLUMN, np.arange(len(train_df), dtype=np.int64))
+    )
+    holdout_df = holdout_df.with_columns(
+        pl.Series(INTERNAL_ROW_ID_COLUMN, np.arange(len(holdout_df), dtype=np.int64))
+    )
+    cfg = _build_pipeline_config(ablation, seed)
+    plan = build_feature_plan(train_df, cfg)
+
+    t0 = time.perf_counter()
+    train_space = fit_features(train_df, plan, cfg)
+    calibrators: dict[str, Calibrator] = {}
+    detectors: dict[str, Any] = {}
+    for name in ablation.detector_names:
+        det = registry[name]()
+        det.fit(train_space.matrix.astype(np.float64), seed=seed)
+        raw, _ = score_and_flag(det, train_space.matrix.astype(np.float64))
+        cal = Calibrator()
+        cal.fit(raw)
+        calibrators[name] = cal
+        detectors[name] = det
+    fit_seconds = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    holdout_space = apply_feature_plan(holdout_df, plan)
+    calibrated_holdout: dict[str, np.ndarray] = {}
+    natural_flags_holdout: dict[str, np.ndarray] = {}
+    for name, det in detectors.items():
+        raw, natural_flags_holdout[name] = score_and_flag(det, holdout_space.matrix.astype(np.float64))
+        calibrated_holdout[name] = calibrators[name].transform(raw)
+    score_seconds = time.perf_counter() - t0
+
+    ensemble = ScoreEnsemble(
+        combination=ablation.combination, weighting=ablation.weighting, contamination=review_budget
+    )
+    combined = ensemble.combine(calibrated_holdout, natural_flags_holdout)
+    order = np.empty(len(holdout_df), dtype=np.int64)
+    order[np.asarray(holdout_space.row_ids, dtype=np.int64)] = np.arange(len(holdout_df))
+    combined["combined_score"] = np.asarray(combined["combined_score"])[order]
+    combined["anomaly_flag"] = np.asarray(combined["anomaly_flag"])[order]
+    return combined, fit_seconds, score_seconds
+
+
+def _flag_jaccard(a: np.ndarray, b: np.ndarray) -> float:
+    """Overlap of two flagged-row sets; 1.0 when both are empty (they agree: nothing flagged)."""
+    union = int(np.logical_or(a, b).sum())
+    return 1.0 if union == 0 else float(np.logical_and(a, b).sum()) / union
+
+
+def _rank_correlation(a: np.ndarray, b: np.ndarray) -> float:
+    """Spearman correlation of two score vectors over the same rows (NaN if either is constant)."""
+    from scipy.stats import spearmanr  # noqa: PLC0415
+
+    if np.ptp(a) == 0 or np.ptp(b) == 0:
+        return float("nan")
+    return float(spearmanr(a, b).statistic)
+
+
 def _fit_score_one_seed_pipeline(
     scenario_name: str,
     swamping_variant: str | None,
     ablation: AblationSpec,
     seed: int,
+    n_bootstrap: int = 0,
 ) -> dict[str, Any]:
     """Fit on train, score holdout, through the real feature pipeline. One seed.
 
@@ -299,13 +432,16 @@ def _fit_score_one_seed_pipeline(
     ``evaluate.scenarios`` module docstring. *scenario_name* still selects a
     real ``Scenario`` even when a swamping variant is set: only its
     ``review_budget`` is used (for calibration/thresholding), never its data.
+
+    Stability (*n_bootstrap* > 0): the pipeline is refitted on that many random
+    ``_STABILITY_SUBSAMPLE`` subsamples of the training rows (without
+    replacement, so no row is duplicated into a detector's fit) and the same
+    holdout is scored each time. ``flag_jaccard_stability`` is the mean overlap
+    of each refit's flagged rows with the full fit's; ``rank_stability`` is the
+    mean Spearman correlation of their scores. A policy whose flags move a lot
+    between near-identical fits is not usable even if its average looks good.
     """
-    from sorethumb_ml.detectors import registry  # noqa: PLC0415
     from sorethumb_ml.evaluate.metrics import evaluate_flags, evaluate_scores  # noqa: PLC0415
-    from sorethumb_ml.features.build import apply_feature_plan, fit_features  # noqa: PLC0415
-    from sorethumb_ml.profiling.plan import build_feature_plan  # noqa: PLC0415
-    from sorethumb_ml.scoring.calibrate import Calibrator  # noqa: PLC0415
-    from sorethumb_ml.scoring.combine import ScoreEnsemble  # noqa: PLC0415
 
     scenario = scenario_by_name(scenario_name)
     if scenario is None:
@@ -321,41 +457,27 @@ def _fit_score_one_seed_pipeline(
         df, y = scenario.generate(seed)
         train_df, _train_y, holdout_df, holdout_y = _split(df, y, seed)
 
-    cfg = _build_pipeline_config(ablation, seed)
-    plan = build_feature_plan(train_df, cfg)
-
-    t0 = time.perf_counter()
-    train_space = fit_features(train_df, plan, cfg)
-    calibrated_train: dict[str, np.ndarray] = {}
-    natural_flags_train: dict[str, np.ndarray] = {}
-    calibrators: dict[str, Calibrator] = {}
-    detectors: dict[str, Any] = {}
-    for name in ablation.detector_names:
-        det = registry[name]()
-        det.fit(train_space.matrix.astype(np.float64), seed=seed)
-        raw, natural_flags_train[name] = score_and_flag(det, train_space.matrix.astype(np.float64))
-        cal = Calibrator()
-        cal.fit(raw)
-        calibrated_train[name] = cal.transform(raw)
-        calibrators[name] = cal
-        detectors[name] = det
-    fit_seconds = time.perf_counter() - t0
-
-    t0 = time.perf_counter()
-    holdout_space = apply_feature_plan(holdout_df, plan)
-    calibrated_holdout: dict[str, np.ndarray] = {}
-    natural_flags_holdout: dict[str, np.ndarray] = {}
-    for name, det in detectors.items():
-        raw, natural_flags_holdout[name] = score_and_flag(det, holdout_space.matrix.astype(np.float64))
-        calibrated_holdout[name] = calibrators[name].transform(raw)
-    score_seconds = time.perf_counter() - t0
-
-    ensemble = ScoreEnsemble(combination=ablation.combination, contamination=scenario.review_budget)
-    combined = ensemble.combine(calibrated_holdout, natural_flags_holdout)
+    combined, fit_seconds, score_seconds = _fit_and_score(
+        train_df, holdout_df, ablation, seed, scenario.review_budget
+    )
     scores = combined["combined_score"]
+    flags = np.asarray(combined["anomaly_flag"], dtype=bool)
+
+    jaccards: list[float] = []
+    rank_corrs: list[float] = []
+    rng = np.random.default_rng(seed + 2000)
+    n_sub = max(2, round(len(train_df) * _STABILITY_SUBSAMPLE))
+    for _ in range(n_bootstrap):
+        idx = np.sort(rng.choice(len(train_df), size=n_sub, replace=False))
+        refit, _, _ = _fit_and_score(
+            train_df[idx.tolist()], holdout_df, ablation, seed, scenario.review_budget
+        )
+        jaccards.append(_flag_jaccard(flags, np.asarray(refit["anomaly_flag"], dtype=bool)))
+        rank_corrs.append(_rank_correlation(np.asarray(scores), np.asarray(refit["combined_score"])))
 
     metrics = evaluate_scores(scores, holdout_y, contamination=scenario.review_budget)
-    flag_metrics = evaluate_flags(combined["anomaly_flag"], holdout_y)
+    flag_metrics = evaluate_flags(flags, holdout_y)
+    budget_rows = scenario.review_budget * len(holdout_df)
     return {
         "n_train": len(train_df),
         "n_holdout": len(holdout_df),
@@ -371,6 +493,9 @@ def _fit_score_one_seed_pipeline(
         "flag_f1": flag_metrics.f1,
         "flag_false_positive_rate": flag_metrics.false_positive_rate,
         "flag_count": float(flag_metrics.flag_count),
+        "over_flag_ratio": float(flag_metrics.flag_count) / budget_rows if budget_rows > 0 else float("nan"),
+        "flag_jaccard_stability": float(np.mean(jaccards)) if jaccards else float("nan"),
+        "rank_stability": float(np.nanmean(rank_corrs)) if rank_corrs else float("nan"),
     }
 
 
@@ -379,11 +504,15 @@ def _pipeline_batch_worker(
     swamping_variant: str | None,
     ablation: AblationSpec,
     seeds: list[int],
+    n_bootstrap: int,
     conn: Any,
 ) -> None:
     """Run every seed for one (scenario, ablation) cell; send results back via *conn*."""
     try:
-        per_seed = [_fit_score_one_seed_pipeline(scenario_name, swamping_variant, ablation, s) for s in seeds]
+        per_seed = [
+            _fit_score_one_seed_pipeline(scenario_name, swamping_variant, ablation, s, n_bootstrap)
+            for s in seeds
+        ]
         conn.send({"per_seed": per_seed, "peak_memory_mb": _peak_memory_mb(), "error": None})
     except Exception as exc:  # noqa: BLE001 -- reported back to the parent, not raised in the child
         conn.send({"per_seed": [], "peak_memory_mb": _peak_memory_mb(), "error": str(exc)[:500]})
@@ -417,6 +546,7 @@ def _aggregate(
     scenario: Scenario,
     ablation_name: str,
     batch: dict[str, Any],
+    policy: str | None = None,
 ) -> PipelineBenchmarkRow:
     per_seed = batch["per_seed"]
     if batch["error"] is not None or not per_seed:
@@ -424,6 +554,7 @@ def _aggregate(
             scenario=scenario.name,
             kind=scenario.kind,
             ablation=ablation_name,
+            policy=policy,
             n_seeds=0,
             n_train=0,
             n_holdout=0,
@@ -462,6 +593,7 @@ def _aggregate(
         scenario=scenario.name,
         kind=scenario.kind,
         ablation=ablation_name,
+        policy=policy,
         n_seeds=len(per_seed),
         n_train=per_seed[0]["n_train"],
         n_holdout=per_seed[0]["n_holdout"],
@@ -481,6 +613,9 @@ def _aggregate(
         flag_f1=_mean_or_none("flag_f1"),
         flag_false_positive_rate=_mean_or_none("flag_false_positive_rate"),
         flag_count=_mean_or_none("flag_count"),
+        over_flag_ratio=_mean_or_none("over_flag_ratio"),
+        flag_jaccard_stability=_mean_or_none("flag_jaccard_stability"),
+        rank_stability=_mean_or_none("rank_stability"),
     )
 
 
@@ -591,6 +726,8 @@ class PipelineBenchmarkConfig:
     n_seeds: int = 3
     include_baselines: bool = True
     include_swamping: bool = True
+    # Refits per seed for the stability metrics; 0 skips them (they are then NaN).
+    n_bootstrap: int = 0
 
 
 def run_pipeline_benchmark(cfg: PipelineBenchmarkConfig | None = None) -> list[PipelineBenchmarkRow]:
@@ -611,8 +748,10 @@ def run_pipeline_benchmark(cfg: PipelineBenchmarkConfig | None = None) -> list[P
     for scenario in selected_scenarios:
         for ablation in selected_ablations:
             logger.info("pipeline_benchmark: %s x %s", scenario.name, ablation.name)
-            batch = _run_isolated(_pipeline_batch_worker, (scenario.name, None, ablation, seeds))
-            rows.append(_aggregate(scenario, ablation.name, batch))
+            batch = _run_isolated(
+                _pipeline_batch_worker, (scenario.name, None, ablation, seeds, cfg.n_bootstrap)
+            )
+            rows.append(_aggregate(scenario, ablation.name, batch, ablation.policy_id))
 
         if cfg.include_baselines:
             for det_name in _SKLEARN_BASELINE_DETECTORS:
@@ -643,8 +782,10 @@ def run_pipeline_benchmark(cfg: PipelineBenchmarkConfig | None = None) -> list[P
             )
             for ablation in selected_ablations:
                 logger.info("pipeline_benchmark: swamping_%s x %s", variant, ablation.name)
-                batch = _run_isolated(_pipeline_batch_worker, ("point", variant, ablation, seeds))
-                rows.append(_aggregate(variant_scenario, ablation.name, batch))
+                batch = _run_isolated(
+                    _pipeline_batch_worker, ("point", variant, ablation, seeds, cfg.n_bootstrap)
+                )
+                rows.append(_aggregate(variant_scenario, ablation.name, batch, ablation.policy_id))
 
     return rows
 
@@ -710,6 +851,7 @@ _TABLE_COLS = [
     "scenario",
     "kind",
     "ablation",
+    "policy",
     "n_seeds",
     "n_train",
     "n_holdout",
@@ -722,6 +864,9 @@ _TABLE_COLS = [
     "flag_f1",
     "flag_false_positive_rate",
     "flag_count",
+    "over_flag_ratio",
+    "flag_jaccard_stability",
+    "rank_stability",
     "fit_seconds",
     "score_seconds",
     "peak_memory_mb",
@@ -758,6 +903,7 @@ def _fmt_row_for_table(row: PipelineBenchmarkRow) -> dict[str, str]:
         "scenario": row.scenario,
         "kind": row.kind,
         "ablation": row.ablation,
+        "policy": row.policy or "n/a",
         "n_seeds": str(row.n_seeds),
         "n_train": str(row.n_train),
         "n_holdout": str(row.n_holdout),
@@ -770,6 +916,9 @@ def _fmt_row_for_table(row: PipelineBenchmarkRow) -> dict[str, str]:
         "flag_f1": _opt(row.flag_f1),
         "flag_false_positive_rate": _opt(row.flag_false_positive_rate),
         "flag_count": _opt(row.flag_count, ".1f"),
+        "over_flag_ratio": _opt(row.over_flag_ratio, ".2f"),
+        "flag_jaccard_stability": _opt(row.flag_jaccard_stability, ".3f"),
+        "rank_stability": _opt(row.rank_stability, ".3f"),
         "fit_seconds": f"{row.fit_seconds:.3f}",
         "score_seconds": f"{row.score_seconds:.3f}",
         "peak_memory_mb": peak,
@@ -846,4 +995,93 @@ def inject_into_readme(rows: list[PipelineBenchmarkRow], readme_path: Path) -> b
         return False
 
     readme_path.write_text(updated, encoding="utf-8")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Policy matrix: every registered ensemble policy x every scenario
+# ---------------------------------------------------------------------------
+
+_POLICY_MATRIX_MARKER_START = "<!-- policy-matrix-results-start -->"
+_POLICY_MATRIX_MARKER_END = "<!-- policy-matrix-results-end -->"
+
+# Ablations the published policy matrix runs: one per policy, plus the
+# near_constant_2 evidence row for the profiling.near_constant_distinct default.
+POLICY_MATRIX_ABLATIONS: tuple[str, ...] = (*POLICY_ABLATIONS, "near_constant_2")
+
+
+def policy_matrix_config(n_seeds: int = 10, n_bootstrap: int = 3) -> PipelineBenchmarkConfig:
+    """Return the published policy matrix's configuration (every scenario and policy, stability on)."""
+    return PipelineBenchmarkConfig(
+        ablation_names=list(POLICY_MATRIX_ABLATIONS),
+        n_seeds=n_seeds,
+        n_bootstrap=n_bootstrap,
+        include_baselines=False,
+        include_swamping=True,
+    )
+
+
+def suite_version(cfg: PipelineBenchmarkConfig) -> str:
+    """Fingerprint of everything that defines the benchmark suite a result came from.
+
+    Covers the scenario generators, the metric definitions, this harness, the
+    seeds, the number of stability refits and the holdout/subsample fractions.
+    Results are only comparable within one suite version: a change to any of
+    these moves it, even if no number changes.
+    """
+    from sorethumb_ml.evaluate import metrics, scenarios  # noqa: PLC0415
+
+    digest = hashlib.sha256()
+    for module_file in (scenarios.__file__, metrics.__file__, __file__):
+        digest.update(Path(module_file).read_bytes())
+    params = {
+        "seed": cfg.seed,
+        "n_seeds": cfg.n_seeds,
+        "n_bootstrap": cfg.n_bootstrap,
+        "holdout_fraction": HOLDOUT_FRACTION,
+        "stability_subsample": _STABILITY_SUBSAMPLE,
+    }
+    digest.update(json.dumps(params, sort_keys=True).encode())
+    return digest.hexdigest()[:16]
+
+
+def to_json(rows: list[PipelineBenchmarkRow], metadata: dict[str, Any]) -> str:
+    """Serialise *rows* with their provenance *metadata* (suite version, policies, versions)."""
+
+    def _clean(value: Any) -> Any:
+        return None if isinstance(value, float) and np.isnan(value) else value
+
+    payload = {
+        "metadata": metadata,
+        "rows": [{k: _clean(v) for k, v in row.as_dict().items()} for row in rows],
+    }
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+def inject_policy_matrix(rows: list[PipelineBenchmarkRow], doc_path: Path, metadata: dict[str, Any]) -> bool:
+    """Inject the policy-matrix table and its provenance between the policy-matrix markers.
+
+    Returns True if the file was modified.
+    """
+    original = Path(doc_path).read_text(encoding="utf-8")
+    if _POLICY_MATRIX_MARKER_START not in original or _POLICY_MATRIX_MARKER_END not in original:
+        logger.warning("%s has no policy-matrix markers; skipping injection.", doc_path)
+        return False
+    provenance = (
+        f"Suite version `{metadata['suite_version']}`, budgets v{metadata['budgets_version']}, "
+        f"{metadata['n_seeds']} seeds, {metadata['n_bootstrap']} stability refits per seed, "
+        f"sorethumb {metadata['library_version']} at `{metadata['git_sha']}`. "
+        "Full results with provenance: [`benchmark-results/policy-matrix.json`](benchmark-results/policy-matrix.json)."
+    )
+    auto_gen = (
+        "<!-- AUTO-GENERATED — do not edit manually; run `python scripts/run_benchmark.py --output-dir "
+        "benchmark_results --no-legacy --no-pipeline --policy-matrix --readme docs/benchmarks.md` to regenerate. -->"
+    )
+    block = f"{_POLICY_MATRIX_MARKER_START}\n{auto_gen}\n\n{provenance}\n\n{to_markdown(rows)}{_POLICY_MATRIX_MARKER_END}"
+    before = original[: original.index(_POLICY_MATRIX_MARKER_START)]
+    after = original[original.index(_POLICY_MATRIX_MARKER_END) + len(_POLICY_MATRIX_MARKER_END) :]
+    updated = before + block + after
+    if updated == original:
+        return False
+    Path(doc_path).write_text(updated, encoding="utf-8")
     return True

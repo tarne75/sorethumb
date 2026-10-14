@@ -21,6 +21,15 @@ Two independent suites, both on by default:
 * ``--legacy``: real datasets (KDDCup99, Covtype; network) + bare-detector
   synthetic suite. Needs the ``benchmark`` extra (``uv sync --extra benchmark``).
 
+Off by default:
+
+* ``--policy-matrix``: every scenario x every registered ensemble policy, with
+  stability refits, checked against ``tests/benchmark/budgets.toml``. Writes
+  ``policy-matrix.json`` (results plus provenance: suite version, budgets
+  version, policy ids, library version, git SHA, ``uv.lock`` hash) and
+  ``policy-matrix.md``; with ``--readme`` also publishes the JSON to
+  ``docs/benchmark-results/`` and injects the table.
+
 Usage:
     uv run python scripts/run_benchmark.py --output-dir benchmark_results
     uv run python scripts/run_benchmark.py --output-dir benchmark_results --readme docs/benchmarks.md
@@ -83,6 +92,25 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Run the full-pipeline scenario suite.",
+    )
+    parser.add_argument(
+        "--policy-matrix",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Run the ensemble-policy matrix (every scenario x every policy, with stability refits), "
+            "check it against tests/benchmark/budgets.toml, and write policy-matrix.json/.md. "
+            "With --readme, also writes docs/benchmark-results/policy-matrix.json and injects the table."
+        ),
+    )
+    parser.add_argument(
+        "--matrix-seeds", type=int, default=10, help="Policy matrix: seeds per cell (default 10)."
+    )
+    parser.add_argument(
+        "--matrix-bootstrap",
+        type=int,
+        default=3,
+        help="Policy matrix: stability refits per seed (default 3).",
     )
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return parser.parse_args(argv)
@@ -160,6 +188,96 @@ def _run_pipeline(args: argparse.Namespace) -> tuple[int, int | None]:
     return len(rows), None
 
 
+def _git_sha() -> str:
+    import subprocess  # noqa: PLC0415
+
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short=12", "HEAD"],  # noqa: S607
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+    return out.stdout.strip()
+
+
+def _sha256(path: Path) -> str | None:
+    import hashlib  # noqa: PLC0415
+
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+
+
+def _run_policy_matrix(args: argparse.Namespace) -> tuple[int, int | None]:
+    """Run the policy matrix and check it against the budgets. Returns ``(n_rows, exit_code)``."""
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    import sorethumb_ml  # noqa: PLC0415
+    from sorethumb_ml.evaluate.budgets import check_rows, default_policy_report, load_budgets  # noqa: PLC0415
+    from sorethumb_ml.evaluate.pipeline_benchmark import (  # noqa: PLC0415
+        assert_complete_and_error_free,
+        expected_cells,
+        inject_policy_matrix,
+        policy_matrix_config,
+        run_pipeline_benchmark,
+        suite_version,
+        to_json,
+        to_markdown,
+    )
+    from sorethumb_ml.scoring.policies import DEFAULT_POLICY_ID, POLICIES  # noqa: PLC0415
+
+    budgets_path = REPO_ROOT / "tests" / "benchmark" / "budgets.toml"
+    budgets = load_budgets(budgets_path)
+    cfg = policy_matrix_config(n_seeds=args.matrix_seeds, n_bootstrap=args.matrix_bootstrap)
+    print(f"Running policy matrix ({cfg.n_seeds} seed(s), {cfg.n_bootstrap} stability refit(s) per cell)...")
+    rows = run_pipeline_benchmark(cfg)
+    try:
+        assert_complete_and_error_free(rows, expected_cells(cfg))
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 0, 1
+
+    report = default_policy_report(check_rows(rows, budgets), budgets, DEFAULT_POLICY_ID)
+    metadata = {
+        "suite_version": suite_version(cfg),
+        "budgets_version": budgets.version,
+        "budgets_sha256": _sha256(budgets_path),
+        "policies": [p.id for p in POLICIES],
+        "default_policy": DEFAULT_POLICY_ID,
+        "library_version": sorethumb_ml.__version__,
+        "git_sha": _git_sha(),
+        "uv_lock_sha256": _sha256(REPO_ROOT / "uv.lock"),
+        "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        "n_seeds": cfg.n_seeds,
+        "n_bootstrap": cfg.n_bootstrap,
+        "generated_at": datetime.now(UTC).strftime("%Y-%m-%d"),
+        "default_policy_unaccepted_misses": [
+            f"{c.scenario}: {c.bound} {c.value:.3f} vs {c.limit}" for c in report.unaccepted_misses
+        ],
+        "stale_accepted_limitations": [f"{a.scenario}: {a.bound}" for a in report.stale_acceptances],
+    }
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    (args.output_dir / "policy-matrix.json").write_text(to_json(rows, metadata), encoding="utf-8")
+    (args.output_dir / "policy-matrix.md").write_text(to_markdown(rows), encoding="utf-8")
+    print(f"Policy matrix written to {args.output_dir / 'policy-matrix.json'}")
+    for line in metadata["default_policy_unaccepted_misses"]:
+        print(f"  default policy misses an unaccepted budget: {line}")
+    for line in metadata["stale_accepted_limitations"]:
+        print(f"  stale accepted limitation (the default now meets it): {line}")
+
+    if args.readme is not None:
+        published = REPO_ROOT / "docs" / "benchmark-results" / "policy-matrix.json"
+        published.parent.mkdir(parents=True, exist_ok=True)
+        published.write_text(to_json(rows, metadata), encoding="utf-8")
+        changed = inject_policy_matrix(rows, args.readme, metadata)
+        print(
+            f"Policy matrix {'injected into' if changed else 'unchanged in'} {args.readme}; JSON at {published}"
+        )
+    return len(rows), None
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point; returns the process exit code."""
     args = _parse_args(argv)
@@ -182,6 +300,11 @@ def main(argv: list[str] | None = None) -> int:
         total_rows += n_rows
     if args.pipeline:
         n_rows, code = _run_pipeline(args)
+        if code is not None:
+            return code
+        total_rows += n_rows
+    if args.policy_matrix:
+        n_rows, code = _run_policy_matrix(args)
         if code is not None:
             return code
         total_rows += n_rows

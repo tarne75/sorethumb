@@ -240,6 +240,7 @@ markers = [
     "property: Hypothesis-driven property tests",
     "slow: tests that are otherwise in-lane but too slow to run on every plain-pytest invocation (deselected by default)",
     "benchmark: opt-in accuracy measurement against real or synthetic datasets, including detector fitting (deselected by default)",
+    "policy_matrix: the full ensemble-policy matrix checked against tests/benchmark/budgets.toml (~30 min; its own scheduled CI job)",
     "network: tests that require network access to fetch external datasets or resources (deselected by default)",
     "repo_check: tests that validate repository-level consistency (generated docs, README snippets, config schema) rather than library behaviour",
 ]

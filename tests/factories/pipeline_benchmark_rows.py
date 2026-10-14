@@ -15,6 +15,7 @@ def make_pipeline_row(**overrides: Any) -> PipelineBenchmarkRow:
         "scenario": "point",
         "kind": "point",
         "ablation": "default",
+        "policy": "intersection@1",
         "n_seeds": 3,
         "n_train": 100,
         "n_holdout": 40,

@@ -189,4 +189,22 @@ jobs:
           python-version: "3.12"
       - run: uv lock --check
       - run: uv sync --all-extras --frozen
-      - run: uv run pytest -m "benchmark or slow or network or property" --tb=short
+      - run: uv run pytest -m "(benchmark or slow or network or property) and not policy_matrix" --tb=short
+
+  # The full ensemble-policy matrix (every scenario x every registered policy, with
+  # stability refits) against tests/benchmark/budgets.toml -- about half an hour, so
+  # it is its own scheduled job rather than part of full-nightly's 30-minute budget.
+  # Fails if the default policy misses a budget that is not an accepted limitation,
+  # or meets one that still is (docs/ensemble-policy.md).
+  policy-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.12"
+      - run: uv lock --check
+      - run: uv sync --all-extras --frozen
+      - run: uv run pytest -m policy_matrix --tb=short
