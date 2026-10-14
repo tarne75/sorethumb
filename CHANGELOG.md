@@ -6,66 +6,6 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added
-
-- **Date/time stored as text is now detected and parsed automatically**: a
-  String column holding ISO dates or datetimes, a bare time of day, or a
-  day/month/year date is turned into a real `Date`/`Datetime`/`Time` value
-  before profiling -- it no longer needs to already be a native temporal
-  type to get derived features (`hour`, `dayofweek`, ...), and a configured
-  `columns.time_column` stored as text now compares correctly during
-  period-window filtering instead of lexically. Every temporal column gets
-  derived features now, not only the one `columns.time_column` picks for
-  sorting and history. `group_by`, `id_column` and `reference_column`
-  columns, and columns an `ignore` pattern matches, are left as text so
-  group keys and ignore rules are unchanged; `sorethumb inspect` and
-  `explain-plan` apply the same parse as `run`. An ambiguous day/month order
-  is never guessed and is left as text, with a warning (never promoted to an
-  error by `run.strict`). New `columns.datetime_formats` forces a
-  column's format (or `"epoch_s"`/`"epoch_ms"` for a Unix-timestamp
-  integer/float column) where auto-detection can't or shouldn't decide.
-  `Duration` columns are converted to a numeric seconds feature.
-
-### Fixed
-
-- **`columns.include_only` now takes effect**: it was documented since the
-  first release but never read, so setting it had no effect and every column
-  was still used. Only the
-  listed columns (exact names) plus `time_column`, `group_by`, `id_column` and
-  `reference_column` are now used; a listed name not in the dataset is a
-  `ConfigError`. A config that set it will see different features and scores
-  from this release on.
-- **`build_feature_plan` called directly** (library API) now parses
-  date/time-as-text exactly as `run` does and records the parse on the plan,
-  so `build_feature_plan` and `apply_feature_plan` on a raw frame produce the
-  same features `run` would.
-- **Narrow and all-categorical sources**: a CSV/TSV with one column, or with
-  every column inferred as String, is no longer refused outright -- it is
-  refused only on concrete evidence of a wrong delimiter (a delimiter
-  character other than the one configured appears in the header and the same
-  number of times in most sampled data rows) or, for an all-string schema,
-  when a re-scan of up to 1,000,000 rows finds a numeric column the sampled
-  `infer_schema_length` missed. A local source that is a directory now fails
-  with a clear `SourceError` instead of a low-level error deep in the pipeline.
-- **Low-cardinality columns are no longer dropped by default**: a column with
-  2 or 3 distinct values (a rare category, a small set of status codes) often
-  carries exactly the signal a review tool exists to surface.
-  `profiling.near_constant_distinct` now defaults to 2, which drops nothing;
-  raise it explicitly to restore the previous drop-on-low-cardinality
-  behaviour. This changes the default feature matrix and realised detector
-  rates for affected datasets.
-- **KMeans on discrete data**: with few distinct feature rows relative to the
-  row count, k now goes straight to one cluster per distinct row instead of
-  using the elbow/silhouette heuristic, which could merge a rare one-hot
-  category into a common cluster and leave it with ~0 distance to that
-  cluster's centroid -- never flagged by the natural CBLOF boundary. The
-  `kmeans_distance` `k_max` parameter now defaults to automatic (8 for
-  continuous data); an explicitly configured `k_max` caps both paths.
-- **A period window selecting zero rows** now raises immediately with the
-  period, window, time column and the data's available range named, instead
-  of surfacing much later as an opaque "encoded feature matrix has zero
-  columns" error from deep inside feature building.
-
 ## [0.1.0] - 2026-09-21
 
 First public release.
@@ -83,10 +23,43 @@ First public release.
   original columns. It ranks a review shortlist: `scoring.contamination` is a
   review budget, not an estimate of how many anomalies the data contains, and
   each run shows the per-detector flag rates alongside the flagged count.
+- **Input data**: a file with a single column, or with every column as text
+  (all-categorical data), is valid input. A CSV/TSV is refused as
+  mis-delimited only when another delimiter character appears in the header
+  and the same number of times in most data rows; an all-text schema is
+  re-scanned (up to 1,000,000 rows) and refused, naming
+  `source.read_options['infer_schema_length']`, if a numeric column was hidden
+  by blank leading rows. A source path that is a directory is rejected with a
+  clear message. Columns with only a few distinct values (a rare category, a
+  handful of status codes) are kept: `profiling.near_constant_distinct`
+  (default 2) drops nothing unless raised. `columns.include_only` restricts
+  the features to the listed columns plus `time_column`, `group_by`,
+  `id_column` and `reference_column`; a listed name not in the dataset is a
+  `ConfigError`.
+- **Dates and times stored as text**: a text column holding ISO dates or
+  datetimes, a time of day, or a day/month/year date is parsed into a real
+  date/time before profiling, so it gets derived features (`hour`,
+  `dayofweek`, ...) and a text `columns.time_column` filters period windows by
+  date rather than as a string. Every date/time column gets derived features,
+  not only `time_column`. `group_by`, `id_column` and `reference_column`
+  columns, and columns an `ignore` pattern or `include_only` excludes, are
+  left as text. An ambiguous day/month order (every day and month <= 12) is
+  never guessed: the column stays text, with a warning that `run.strict`
+  does not turn into an error. `columns.datetime_formats` forces a column's
+  format, or `"epoch_s"`/`"epoch_ms"` for a Unix-timestamp integer or float
+  column. A value that fails to parse becomes missing. `Duration` columns
+  become a numeric seconds feature. `run`, `score --from-run`, `inspect`,
+  `explain-plan` and the Python API's `build_feature_plan`/`apply_feature_plan`
+  all parse the same way, and the parse is stored with the run so
+  `score --from-run` replays it exactly.
 - **Detectors**: `isolation_forest`, `kmeans_distance` (CBLOF-style) and
   `one_class_svm` form the default ensemble; `ecod`, `hbos` and `lof` are also
   available. A detector's `extra_params` forwards extra constructor keywords to
-  the underlying scikit-learn estimator.
+  the underlying scikit-learn estimator. On discrete features (for example
+  all-categorical data: at most 50 distinct feature rows, and at most half
+  as many as there are rows), `kmeans_distance` gives each distinct row its
+  own cluster so a rare category is flagged; its `k_max` defaults to automatic
+  (8 on continuous data), and an explicitly set `k_max` is a hard cap.
 - **Detector output contract**: `score_samples` must return a finite 1-D numeric
   `ndarray` with one value per input row, and `natural_flag` a 1-D `bool`
   `ndarray` of the same length. Every call is checked immediately, for a
@@ -122,13 +95,15 @@ First public release.
   the source run's is rejected.
 - **History**: `sorethumb history` shows rolling-window trends and
   `sorethumb backfill` fills missing periods, both scoped to the dataset and
-  the exact configuration that produced each period.
+  the exact configuration that produced each period. A period window that
+  selects no rows fails immediately, naming the window, the time column and
+  the data's available range.
 - **Reports**: self-contained HTML plus CSV and JSON, re-renderable from
   persisted state with `sorethumb report`.
 - **Windows** (10/11 x64): every command, the Python API and reports work as
   on Linux and macOS, from PowerShell, Windows PowerShell 5.1 or cmd.exe; CI
   runs the unit, contract and integration suites on `windows-latest` for
-  every change, plus an install of the built wheel. Spellings of one Windows
+  every change, plus installs of the built wheel and sdist. Spellings of one Windows
   file that differ only in letter case, separators or a `file://` prefix
   (`C:\Data\x.csv`, `c:/data/x.csv`, `file:///C:/Data/x.csv`) are one dataset
   for history and one configuration for run ids and model reuse; a
@@ -179,8 +154,10 @@ First public release.
   `source.uri`, and download error messages redact it.
 - Authenticated HTTP(S) downloads (`source.auth`) send the `Authorization`
   header only to the configured origin: never across a redirect to another host
-  or port. An HTTPS-to-HTTP redirect is refused, and so is a request or redirect
-  to a loopback, link-local, private or reserved address.
+  or port. An HTTPS-to-HTTP redirect is refused, and so is a redirect to a
+  different host that resolves to a loopback, link-local, private, reserved
+  or multicast address (such as a cloud metadata endpoint). The host you
+  configure yourself is never blocked, even an internal one; see SECURITY.md.
 - An unexpected CLI crash never prints local variables, so a traceback cannot
   reveal the download credential.
 - Source URI query values are never stored, logged or reported. The persisted
@@ -192,7 +169,8 @@ First public release.
   the `httpx` request log line and download errors, with no opt-out. A new
   `source_digest` (SHA-256 of the canonical full URI) on `dataset` and `run`
   keeps query-differing sources distinguishable. Migration 009 irreversibly
-  scrubs values stored by earlier versions and compacts the database; logs and
+  scrubs values stored by earlier versions and compacts the database (best
+  effort: skipped with a warning if another process has it open); logs and
   reports written by earlier versions are not touched (see SECURITY.md). Without
   `source.dataset_id`, a run whose query key set differs from the dataset's
   previous run is refused, naming the `dataset_id` that keeps its history.

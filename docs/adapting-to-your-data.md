@@ -44,15 +44,20 @@ This loads the dataset, profiles every column, and prints a classification table
 Use this table to decide:
 
 1. **If a column is classified `identifier_like` but carries signal** (e.g. a store
-   ID that is not globally unique), add it to `columns.group_by` or
-   `columns.include_only`.
+   ID that is not globally unique), add it to `columns.group_by` (grouping
+   columns are exempt from identifier detection), or set
+   `profiling.identifier_detection = "off"`.
 
 2. **If a column is classified `categorical` but has too many values** for one-hot
    encoding, it will automatically switch to frequency encoding. Adjust
    `features.one_hot_max_cardinality` if the default (20) is wrong for your domain.
 
-3. **If a column is dropped but you want it**, add it to `columns.include_only`
-   (to allow only those columns) or remove it from the ignore list.
+3. **If a column is dropped but you want it**, check the reason column: remove
+   it from `columns.ignore` if a pattern matched it, add it to
+   `columns.include_only` if that is set and does not list it, or adjust the
+   profiling threshold the reason names. `include_only` only narrows which
+   columns are considered -- listing a column there does not override a
+   classification such as `identifier_like` or `high_null`.
 
 4. **If the dataset is grouped** (e.g. one file contains multiple sites), add
    the grouping column to `columns.group_by`:
