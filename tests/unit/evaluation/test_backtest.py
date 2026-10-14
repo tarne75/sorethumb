@@ -310,3 +310,23 @@ def test_run_policy_seeds_runs_every_scenario_and_fails_loudly(monkeypatch: pyte
     monkeypatch.setattr(pipeline_benchmark, "_run_isolated", lambda _t, _a: {"per_seed": [], "error": "boom"})
     with pytest.raises(RuntimeError, match="boom"):
         backtest.run_policy_seeds("intersection@1", (1, 2))
+
+
+def test_a_decision_on_numpy_typed_metrics_serialises_to_json(tmp_path: Path, budgets: Any) -> None:
+    """The harness hands back numpy scalars; the published decision must still be plain JSON."""
+    from sorethumb_ml.evaluate.backtest import decision_as_dict
+
+    def np_seed(f1: float) -> dict[str, Any]:
+        return {k: np.float64(v) for k, v in _seed(f1).items()}
+
+    per_seed = {
+        s: _per_seed(
+            [np_seed(0.1 + 0.01 * i) for i in range(10)], [np_seed(0.5 + 0.01 * i) for i in range(10)]
+        )
+        for s in _KINDS
+    }
+    decision = decide(_prereg(tmp_path), per_seed, _KINDS, budgets)
+    assert all(type(c.improved) is bool for c in decision.comparisons)
+    assert type(decision.comparisons[0].estimate.p_value) is float
+    payload = json.loads(json.dumps(decision_as_dict(decision)))
+    assert payload["outperforms"] is True

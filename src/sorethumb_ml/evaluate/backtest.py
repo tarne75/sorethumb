@@ -178,7 +178,9 @@ def paired_bootstrap(
     below = (np.count_nonzero(means <= 0.0) + 1) / (n_resamples + 1)
     above = (np.count_nonzero(means >= 0.0) + 1) / (n_resamples + 1)
     lo, hi = np.quantile(means, [alpha / 2, 1 - alpha / 2])
-    return PairedEstimate(float(d.mean()), float(lo), float(hi), min(1.0, 2 * min(below, above)), int(d.size))
+    return PairedEstimate(
+        float(d.mean()), float(lo), float(hi), float(min(1.0, 2 * min(below, above))), int(d.size)
+    )
 
 
 def holm_adjust(p_values: list[float]) -> list[float]:
@@ -267,7 +269,7 @@ def decide(
         estimates.append(paired_bootstrap(diffs, n_resamples=prereg.n_resamples, alpha=prereg.alpha))
     adjusted = holm_adjust([e.p_value for e in estimates])
     for scenario, est, p_holm in zip(prereg.scenarios, estimates, adjusted, strict=True):
-        improved = est.mean > 0.0 and p_holm <= prereg.alpha
+        improved = bool(est.mean > 0.0 and p_holm <= prereg.alpha)
         comparisons.append(ScenarioComparison(scenario, est, p_holm, improved))
 
     budget_regressions: list[Regression] = []
@@ -326,6 +328,8 @@ def decision_as_dict(decision: BacktestDecision) -> dict[str, Any]:
     """JSON-ready form of a decision (NaN becomes None)."""
 
     def _clean(value: Any) -> Any:
+        if isinstance(value, np.generic):  # numpy scalars are not JSON-serialisable
+            value = value.item()
         if isinstance(value, float) and math.isnan(value):
             return None
         if isinstance(value, dict):

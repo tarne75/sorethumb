@@ -205,6 +205,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _nan_to_none(value: Any) -> Any:
+    if hasattr(value, "item") and not isinstance(value, list | tuple | dict):  # numpy scalar
+        value = value.item()
     if isinstance(value, float) and value != value:  # noqa: PLR0124 -- NaN check
         return None
     if isinstance(value, dict):
