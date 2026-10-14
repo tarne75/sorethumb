@@ -14,6 +14,7 @@ from sorethumb_ml.detectors.kmeans_distance import (
     KMeansDetector,
     _elbow_index,
     _nearest_large_centroid,
+    _select_k,
 )
 from sorethumb_ml.detectors.lof import LOFDetector
 from sorethumb_ml.detectors.one_class_svm import OneClassSVMDetector
@@ -94,6 +95,75 @@ def test_kmeans_auto_k_selection():
     det.fit(X, seed=0)
     assert det._chosen_k is not None
     assert 2 <= det._chosen_k <= 5
+
+
+def test_select_k_goes_to_one_cluster_per_distinct_row_when_discrete():
+    """Below _DISCRETE_K_CEILING, k bypasses the elbow/silhouette heuristic entirely.
+
+    Deterministic by construction (no KMeans fit involved in the decision),
+    unlike the elbow/silhouette path, which can pick a different k across
+    floating-point environments when several k score nearly identically.
+    """
+    # 12 distinct one-hot rows -> one cluster each, above the automatic heuristic's 8.
+    X = np.eye(12, dtype=np.float64)[np.array([0] * 30 + list(range(12)) * 5)]
+    assert _select_k(X, k_min=2, k_max=None, seed=0) == 12
+
+
+def test_select_k_explicit_k_max_caps_the_discrete_path():
+    """A user-set k_max is a cap on both paths, never silently exceeded."""
+    X = np.eye(12, dtype=np.float64)[np.array([0] * 30 + list(range(12)) * 5)]
+    assert _select_k(X, k_min=2, k_max=4, seed=0) == 4
+
+
+def test_kmeans_detector_honours_configured_k_max_on_discrete_data():
+    X = np.eye(12, dtype=np.float64)[np.array([0] * 30 + list(range(12)) * 5)]
+    det = KMeansDetector(k_max=4)
+    det.fit(X, seed=0)
+    assert det._chosen_k == 4
+
+
+def test_select_k_floors_at_k_min_when_very_few_distinct_rows():
+    X = np.eye(2, dtype=np.float64)[np.array([0, 0, 0, 1] * 20)]
+    assert _select_k(X, k_min=2, k_max=None, seed=0) == 2
+
+
+def test_select_k_automatic_k_max_on_continuous_data_is_the_default_cap():
+    from sorethumb_ml.detectors.kmeans_distance import _DEFAULT_K_MAX
+
+    k = _select_k(_normal_data(n=300), k_min=2, k_max=None, seed=0)
+    assert 2 <= k <= _DEFAULT_K_MAX
+
+
+def test_select_k_uses_the_heuristic_above_the_discrete_ceiling():
+    """Above _DISCRETE_K_CEILING, k stays within the configured bounds (elbow/silhouette path)."""
+    k = _select_k(_normal_data(n=300), k_min=2, k_max=5, seed=0)
+    assert 2 <= k <= 5
+
+
+def test_kmeans_flags_a_rare_one_hot_combination_on_discrete_data():
+    """End-to-end regression test: a rare one-hot category must actually get flagged.
+
+    Before the discrete k-selection fix, the default k_max=8 merged this
+    dataset's 15-16 distinct one-hot combinations into too few clusters; a
+    1%-frequency category was folded into a common cluster and had ~0
+    distance to its centroid, so the natural CBLOF boundary never flagged it.
+    """
+    rng = np.random.default_rng(0)
+    n = 500
+    # Two independent one-hot categoricals (4 values each -> up to 16 distinct
+    # combinations): one value of the first is rare (1%), the second is even.
+    method_idx = rng.choice(4, size=n, p=[0.6, 0.3, 0.09, 0.01])
+    region_idx = rng.choice(4, size=n)
+    X = np.hstack([np.eye(4)[method_idx], np.eye(4)[region_idx]]).astype(np.float64)
+    rare = method_idx == 3
+
+    det = KMeansDetector(k_min=2, k_max=8)
+    det.fit(X, seed=0)
+    scores = det.score_samples(X)
+    flags = det.natural_flag(scores)
+
+    assert rare.sum() > 0
+    assert flags[rare].mean() > 0.5  # the rare category is (mostly) flagged
 
 
 def test_kmeans_get_params():
