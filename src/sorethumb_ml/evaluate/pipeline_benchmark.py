@@ -117,6 +117,7 @@ ABLATIONS: list[AblationSpec] = [
     # evidence for which profiling.near_constant_distinct default to ship.
     AblationSpec("near_constant_2", near_constant_distinct=2),
     AblationSpec("rule_discrete_composite", rule="rule:discrete-composite@1"),
+    AblationSpec("rule_discrete_budget", rule="rule:discrete-budget@1"),
 ]
 
 # One ablation per registered ensemble policy, everything else at the shipped
@@ -182,6 +183,11 @@ class PipelineBenchmarkRow:
     # flag_count / (review_budget * n_holdout): 1.0 flags exactly the review
     # budget, above 1.0 over-flags it.
     over_flag_ratio: float | None = None
+    # Wrongly flagged rows / round(review_budget * n_holdout), the whole-row
+    # budget an exact-k policy flags: <= 1.0 means no more false positives
+    # than the review budget allows rows, however the denominator of a rate
+    # would count them.
+    false_positive_budget_ratio: float | None = None
     # Mean overlap of the flagged rows, and Spearman correlation of the scores,
     # between the full fit and refits on training subsamples (NaN when the run
     # was configured with n_bootstrap=0). See _fit_score_one_seed_pipeline.
@@ -216,6 +222,7 @@ class PipelineBenchmarkRow:
             "flag_false_positive_rate": self.flag_false_positive_rate,
             "flag_count": self.flag_count,
             "over_flag_ratio": self.over_flag_ratio,
+            "false_positive_budget_ratio": self.false_positive_budget_ratio,
             "flag_jaccard_stability": self.flag_jaccard_stability,
             "rank_stability": self.rank_stability,
         }
@@ -365,7 +372,7 @@ def _fit_and_score(
     from sorethumb_ml.io.fingerprint import INTERNAL_ROW_ID_COLUMN  # noqa: PLC0415
     from sorethumb_ml.profiling.plan import build_feature_plan  # noqa: PLC0415
     from sorethumb_ml.scoring.calibrate import Calibrator  # noqa: PLC0415
-    from sorethumb_ml.scoring.combine import ScoreEnsemble  # noqa: PLC0415
+    from sorethumb_ml.scoring.combine import ScoreEnsemble, _exact_k_flags  # noqa: PLC0415
 
     train_df = train_df.with_columns(
         pl.Series(INTERNAL_ROW_ID_COLUMN, np.arange(len(train_df), dtype=np.int64))
@@ -375,7 +382,7 @@ def _fit_and_score(
     )
     cfg = _build_pipeline_config(ablation, seed)
     plan = build_feature_plan(train_df, cfg)
-    combination, weighting, branch = ablation.combination, ablation.weighting, None
+    combination, weighting, branch, flag_rule = ablation.combination, ablation.weighting, None, "policy"
     if ablation.rule is not None:
         rule = candidate_by_id(ablation.rule)
         if rule is None:
@@ -383,6 +390,7 @@ def _fit_and_score(
             raise ValueError(msg)
         choice = rule.choose(plan)
         combination, weighting, branch = choice.combination, choice.weighting, choice.branch
+        flag_rule = choice.flags
 
     t0 = time.perf_counter()
     train_space = fit_features(train_df, plan, cfg)
@@ -409,6 +417,8 @@ def _fit_and_score(
 
     ensemble = ScoreEnsemble(combination=combination, weighting=weighting, contamination=review_budget)
     combined = ensemble.combine(calibrated_holdout, natural_flags_holdout)
+    if flag_rule == "top_budget":
+        combined["anomaly_flag"] = _exact_k_flags(np.asarray(combined["combined_score"]), review_budget)
     order = np.empty(len(holdout_df), dtype=np.int64)
     order[np.asarray(holdout_space.row_ids, dtype=np.int64)] = np.arange(len(holdout_df))
     combined["combined_score"] = np.asarray(combined["combined_score"])[order]
@@ -492,6 +502,8 @@ def _fit_score_one_seed_pipeline(
     metrics = evaluate_scores(scores, holdout_y, contamination=scenario.review_budget)
     flag_metrics = evaluate_flags(flags, holdout_y)
     budget_rows = scenario.review_budget * len(holdout_df)
+    budget_whole_rows = round(budget_rows)  # what an exact-k flag decision flags (scoring.combine)
+    false_positives = int(np.count_nonzero(flags & (np.asarray(holdout_y) == 0)))
     return {
         "n_train": len(train_df),
         "n_holdout": len(holdout_df),
@@ -508,6 +520,9 @@ def _fit_score_one_seed_pipeline(
         "flag_false_positive_rate": flag_metrics.false_positive_rate,
         "flag_count": float(flag_metrics.flag_count),
         "over_flag_ratio": float(flag_metrics.flag_count) / budget_rows if budget_rows > 0 else float("nan"),
+        "false_positive_budget_ratio": (
+            false_positives / budget_whole_rows if budget_whole_rows > 0 else float("nan")
+        ),
         "flag_jaccard_stability": float(np.mean(jaccards)) if jaccards else float("nan"),
         "rank_stability": float(np.nanmean(rank_corrs)) if rank_corrs else float("nan"),
         "policy_branch": combined["policy_branch"],
@@ -629,6 +644,7 @@ def _aggregate(
         flag_false_positive_rate=_mean_or_none("flag_false_positive_rate"),
         flag_count=_mean_or_none("flag_count"),
         over_flag_ratio=_mean_or_none("over_flag_ratio"),
+        false_positive_budget_ratio=_mean_or_none("false_positive_budget_ratio"),
         flag_jaccard_stability=_mean_or_none("flag_jaccard_stability"),
         rank_stability=_mean_or_none("rank_stability"),
     )
@@ -880,6 +896,7 @@ _TABLE_COLS = [
     "flag_false_positive_rate",
     "flag_count",
     "over_flag_ratio",
+    "false_positive_budget_ratio",
     "flag_jaccard_stability",
     "rank_stability",
     "fit_seconds",
@@ -932,6 +949,7 @@ def _fmt_row_for_table(row: PipelineBenchmarkRow) -> dict[str, str]:
         "flag_false_positive_rate": _opt(row.flag_false_positive_rate),
         "flag_count": _opt(row.flag_count, ".1f"),
         "over_flag_ratio": _opt(row.over_flag_ratio, ".2f"),
+        "false_positive_budget_ratio": _opt(row.false_positive_budget_ratio, ".2f"),
         "flag_jaccard_stability": _opt(row.flag_jaccard_stability, ".3f"),
         "rank_stability": _opt(row.rank_stability, ".3f"),
         "fit_seconds": f"{row.fit_seconds:.3f}",

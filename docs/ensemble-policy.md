@@ -61,9 +61,11 @@ scores), is judged by a fixed protocol (`sorethumb_ml.evaluate.backtest`):
    result records the file's sha256 and commit, so it cannot be edited afterwards
    unnoticed.
 2. **Seed split.** Candidates are developed on the development seeds (the policy
-   matrix's, 0-9) and judged once on 20 disjoint confirmation seeds (10000-10019). A
-   confirmation run is refused for an uncommitted pre-registration, and refused again
-   once a result exists: a revised hypothesis is a new pre-registration.
+   matrix's, 0-9) and judged once on 20 disjoint confirmation seeds. Confirmations run in
+   rounds: once a round's results are published its seeds have been seen, so the next
+   round uses fresh ones (round 1: 10000-10019, closed; round 2: 20000-20019, open). A
+   confirmation run is refused for an uncommitted pre-registration, for a closed round,
+   and again once a result exists: a revised hypothesis is a new pre-registration.
 3. **Paired statistics.** Candidate and baseline run on the same seeds, so on the same
    data and split. Each hypothesis scenario's per-seed differences in the primary metric
    get a paired bootstrap estimate (10,000 resamples), and the p-values are
@@ -119,7 +121,7 @@ Why it does not outperform:
 - budget regression on all_categorical: min_average_precision 0.15 met by the baseline (0.1693) but not the candidate (0.1490)
 <!-- backtest-results-end -->
 
-### What the confirmations show (2026-10-14)
+### Round 1 (2026-10-14, budgets v2)
 
 Neither candidate outperforms `intersection@1`, and both results came out as their
 pre-registrations predicted from the development seeds:
@@ -129,7 +131,8 @@ pre-registrations predicted from the development seeds:
   a composite always fills the review budget. Where it cannot rank the anomalies (local,
   varying density, the swamping pair), it fills the budget with normal rows, and its
   false-positive rate rises from 0.01 to 0.054, past the 0.05 budget the default meets.
-  This is the trade the default is designed not to make.
+  Most of that breach, though, is in how budgets v2 stated the bound (see the correction
+  below).
 - **`rule:discrete-composite@1`** improves flag F1 on all-categorical data (+0.11) with
   no false-positive, volume or stability cost, and is identical to the default
   everywhere else. It fails on one budget: the composite's *ranking* is slightly worse
@@ -137,6 +140,17 @@ pre-registrations predicted from the development seeds:
   budget, where the default reaches 0.169). The gain comes from where the threshold sits,
   not from a better ranking. A later candidate could test that observation under its own
   pre-registration; this result cannot be reinterpreted as a win.
+
+**Correction after round 1: budgets v3.** The documented principle is that a policy's
+wrong flags may not exceed its review budget. Budgets v2 encoded it as a false-positive
+*rate* over normal rows capped at the review budget, which is a fraction of *all* rows.
+`composite-agreement@1` flags exactly the budget, rounded to whole rows (13 of 252). Where
+none of those rows is an anomaly, its rate is 13/240 = 0.054: a breach with no extra
+flags at all. Budgets v3 states the bound in rows (`false_positive_budget_ratio` ≤ 1.0).
+The round-1 verdicts stand: they were judged under v2, which is archived byte-for-byte
+(`tests/benchmark/budgets-archive/v2.toml`). The fix is tested only through new
+pre-registrations on round 2's fresh seeds. A bound changed after seeing a result is
+exactly what this protocol guards against, so the change gets no retroactive effect.
 
 ## Versioning
 

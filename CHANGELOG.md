@@ -144,7 +144,8 @@ First public release.
   `docs/ensemble-policy.md` sets out the backtest protocol a candidate policy
   must pass before it can be said to outperform the default (pre-registration,
   disjoint confirmation seeds, paired bootstrap with Holm correction, no budget
-  or stability regressions) and publishes each confirmation result.
+  or stability regressions, confirmation in rounds of fresh seeds) and
+  publishes each confirmation result.
 
 ### Security
 

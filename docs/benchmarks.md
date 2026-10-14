@@ -134,9 +134,13 @@ Per cell, over every seed (mean, 95% CI where shown):
 - **Stability**: the pipeline is refitted on random 80% subsamples of the
   training rows; `flag_jaccard_stability` is how much of the flagged set the
   refits keep, `rank_stability` the Spearman correlation of their scores.
-- **False-positive budget**: `flag_false_positive_rate` on normal rows, and
+- **False-positive budget**: `flag_false_positive_rate` on normal rows;
   `over_flag_ratio`, the flagged count divided by the review budget (1.0 flags
-  exactly the budget).
+  exactly the budget); and `false_positive_budget_ratio`, the wrongly flagged
+  rows divided by the review budget in whole rows (at most 1.0: a policy may
+  spend its review budget on wrong rows, never more). The budget is checked on
+  the last of these; a rate over normal rows alone could be breached by a
+  policy flagging exactly its budget.
 
 Each cell is checked against explicit per-anomaly-type budgets in
 [`tests/benchmark/budgets.toml`](../tests/benchmark/budgets.toml), set from
