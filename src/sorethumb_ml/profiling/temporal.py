@@ -43,7 +43,7 @@ import polars as pl
 
 from sorethumb_ml.config import ColumnsConfig
 from sorethumb_ml.errors import AmbiguousDateFormatWarning, ConfigError
-from sorethumb_ml.profiling.classify import _is_ignored
+from sorethumb_ml.profiling.classify import _is_ignored, is_included
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +237,8 @@ def _excluded_from_auto_detection(column: str, dtype: pl.DataType, columns_confi
       unless the column is also ``time_column``: their values become group
       keys, row ids and labels, and recasting them changes those keys,
       orphaning every earlier run's history and models for those groups.
-    * Columns an ``ignore`` pattern matches against their *original* dtype:
+    * Columns ``include_only`` leaves out, and columns an ``ignore`` pattern
+      matches against their *original* dtype:
       ``"type:String *"`` was written about the column as it appears in the
       source, and must not stop matching because detection recast it.
     """
@@ -248,6 +249,8 @@ def _excluded_from_auto_detection(column: str, dtype: pl.DataType, columns_confi
     if column in identity:
         return True
     protected = identity | ({columns_config.time_column} if columns_config.time_column else set())
+    if not is_included(column, columns_config, protected):
+        return True
     return _is_ignored(column, str(dtype), columns_config.ignore, protected)
 
 

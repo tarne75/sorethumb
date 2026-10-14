@@ -1,7 +1,8 @@
 """Column classification: maps a ColumnProfile to a ColumnClass and Treatment.
 
 Classification priority (first rule that matches wins):
-  1. ignored       — name matches config.columns.ignore patterns
+  1. ignored       — name matches config.columns.ignore patterns, or is not
+                     listed in config.columns.include_only (when set)
   2. empty         — all values null
   3. constant      — exactly one distinct non-null value
   4. near_constant — n_unique <= profiling.near_constant_distinct
@@ -127,6 +128,10 @@ def classify_column(
     # 1. Ignored by pattern
     if _is_ignored(col, profile.dtype_str, columns_config.ignore, protected_columns):
         return ColumnClass.ignored, "matches ignore pattern"
+
+    # 1b. Not selected by include_only (protected columns are always kept)
+    if not is_included(col, columns_config, protected_columns):
+        return ColumnClass.ignored, "not listed in columns.include_only"
 
     # 2. Empty
     if profile.is_empty:
@@ -267,6 +272,16 @@ def _is_ignored(
         elif fnmatch.fnmatch(col, pat):
             return True
     return False
+
+
+def is_included(col: str, columns_config: ColumnsConfig, protected: set[str]) -> bool:
+    """Whether ``columns.include_only`` (exact names; unset means every column) admits *col*.
+
+    Protected columns -- time_column, group_by, id_column, reference_column --
+    are always admitted, as the setting documents.
+    """
+    include = columns_config.include_only
+    return include is None or col in protected or col in include
 
 
 def _is_temporal(dtype_str: str) -> bool:

@@ -28,6 +28,17 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`columns.include_only` now takes effect**: it was documented since the
+  first release but never read, so setting it had no effect and every column
+  was still used. Only the
+  listed columns (exact names) plus `time_column`, `group_by`, `id_column` and
+  `reference_column` are now used; a listed name not in the dataset is a
+  `ConfigError`. A config that set it will see different features and scores
+  from this release on.
+- **`build_feature_plan` called directly** (library API) now parses
+  date/time-as-text exactly as `run` does and records the parse on the plan,
+  so `build_feature_plan` and `apply_feature_plan` on a raw frame produce the
+  same features `run` would.
 - **Narrow and all-categorical sources**: a CSV/TSV with one column, or with
   every column inferred as String, is no longer refused outright -- it is
   refused only on concrete evidence of a wrong delimiter (a delimiter

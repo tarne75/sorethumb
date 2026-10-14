@@ -133,6 +133,11 @@ def fit_features(df: pl.DataFrame, plan: FeaturePlan, config: Config) -> Feature
     """
     _clear_fitted_artefacts(plan)
 
+    # build_feature_plan may have parsed date/time-as-text itself; *df* here is
+    # usually the same raw frame, so replay that parse (a no-op if already cast).
+    df = apply_temporal_parses(df, plan.parsed_temporal)
+    df = convert_durations_to_seconds(df)
+
     plan.scaler_type = config.features.scaler
     plan.output_dtype = config.features.dtype
 
