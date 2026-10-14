@@ -168,3 +168,15 @@ policy = "intersection@1"
 scenario = "categorical_rare"
 bound = "min_flag_recall"
 reason = "near_constant_distinct=3 drops the 3-value signal column; set it to 2 where measured to help"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "all_categorical"
+bound = "min_flag_precision"
+reason = "unanimity: the detectors rank combination anomalies (AUC ~0.86) but rarely all flag the same row; see the discrete-composite-v1 backtest"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "all_categorical"
+bound = "min_flag_recall"
+reason = "unanimity: the detectors rank combination anomalies (AUC ~0.86) but rarely all flag the same row; see the discrete-composite-v1 backtest"
