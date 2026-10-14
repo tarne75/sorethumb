@@ -104,14 +104,34 @@ def test_select_k_goes_to_one_cluster_per_distinct_row_when_discrete():
     unlike the elbow/silhouette path, which can pick a different k across
     floating-point environments when several k score nearly identically.
     """
-    # 5 distinct one-hot rows -> k = 5 - 1 = 4, not the configured k_max=8.
-    X = np.eye(5, dtype=np.float64)[np.array([0, 0, 0, 1, 2, 3, 4] * 20)]
-    assert _select_k(X, k_min=2, k_max=8, seed=0) == 4
+    # 12 distinct one-hot rows -> one cluster each, above the automatic heuristic's 8.
+    X = np.eye(12, dtype=np.float64)[np.array([0] * 30 + list(range(12)) * 5)]
+    assert _select_k(X, k_min=2, k_max=None, seed=0) == 12
+
+
+def test_select_k_explicit_k_max_caps_the_discrete_path():
+    """A user-set k_max is a cap on both paths, never silently exceeded."""
+    X = np.eye(12, dtype=np.float64)[np.array([0] * 30 + list(range(12)) * 5)]
+    assert _select_k(X, k_min=2, k_max=4, seed=0) == 4
+
+
+def test_kmeans_detector_honours_configured_k_max_on_discrete_data():
+    X = np.eye(12, dtype=np.float64)[np.array([0] * 30 + list(range(12)) * 5)]
+    det = KMeansDetector(k_max=4)
+    det.fit(X, seed=0)
+    assert det._chosen_k == 4
 
 
 def test_select_k_floors_at_k_min_when_very_few_distinct_rows():
     X = np.eye(2, dtype=np.float64)[np.array([0, 0, 0, 1] * 20)]
-    assert _select_k(X, k_min=2, k_max=8, seed=0) == 2
+    assert _select_k(X, k_min=2, k_max=None, seed=0) == 2
+
+
+def test_select_k_automatic_k_max_on_continuous_data_is_the_default_cap():
+    from sorethumb_ml.detectors.kmeans_distance import _DEFAULT_K_MAX
+
+    k = _select_k(_normal_data(n=300), k_min=2, k_max=None, seed=0)
+    assert 2 <= k <= _DEFAULT_K_MAX
 
 
 def test_select_k_uses_the_heuristic_above_the_discrete_ceiling():

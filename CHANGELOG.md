@@ -23,10 +23,12 @@ Versioning: [Semantic Versioning](https://semver.org/).
   behaviour. This changes the default feature matrix and realised detector
   rates for affected datasets.
 - **KMeans on discrete data**: with few distinct feature rows relative to the
-  row count, k now goes straight to one cluster per distinct row (bounded)
-  instead of using the elbow/silhouette heuristic, which could merge a rare
-  one-hot category into a common cluster and leave it with ~0 distance to
-  that cluster's centroid -- never flagged by the natural CBLOF boundary.
+  row count, k now goes straight to one cluster per distinct row instead of
+  using the elbow/silhouette heuristic, which could merge a rare one-hot
+  category into a common cluster and leave it with ~0 distance to that
+  cluster's centroid -- never flagged by the natural CBLOF boundary. The
+  `kmeans_distance` `k_max` parameter now defaults to automatic (8 for
+  continuous data); an explicitly configured `k_max` caps both paths.
 
 ## [0.1.0] - 2026-09-21
 

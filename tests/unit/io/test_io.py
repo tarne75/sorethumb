@@ -187,15 +187,61 @@ def test_read_single_column_csv_with_untried_delimiter_raises(tmp_path: Path) ->
 
 
 def test_read_all_string_csv_with_untried_delimiter_raises(tmp_path: Path) -> None:
-    """Two all-string columns whose header also contains '|' (not configured) are refused."""
+    """A ';'-separated file read with ',' (fields themselves containing commas) splits every
+    row the same way on ';' -- consistent evidence of the real delimiter, so it is refused."""
     p = tmp_path / "bad.csv"
-    p.write_text("a,b|c\nfoo,bar\nbaz,qux\n")
+    p.write_text("name,first;city\nsmith,j;paris\njones,k;rome\n")
 
     from sorethumb_ml.config import SourceConfig
 
     cfg = SourceConfig(uri=str(p))
     with pytest.raises(SchemaError, match="inferred as String"):
         read_frame(p, cfg).collect()
+
+
+def test_a_delimiter_character_only_in_a_column_name_is_not_evidence(tmp_path: Path) -> None:
+    """Regression: a valid TSV with a comma inside one column's name was refused."""
+    p = tmp_path / "ok.tsv"
+    p.write_text("region, code\tmethod\nus\tcard\neu\tcash\n")
+
+    from sorethumb_ml.config import SourceConfig
+
+    result = read_frame(p, SourceConfig(uri=str(p))).collect()
+    assert result.columns == ["region, code", "method"]
+
+
+def test_a_single_column_whose_name_contains_a_delimiter_is_accepted(tmp_path: Path) -> None:
+    """Regression: a one-column CSV named 'amount;usd' was refused though no data row has ';'."""
+    p = tmp_path / "ok.csv"
+    p.write_text("amount;usd\n1\n2\n3\n")
+
+    from sorethumb_ml.config import SourceConfig
+
+    result = read_frame(p, SourceConfig(uri=str(p))).collect()
+    assert result.shape == (3, 1)
+
+
+def test_an_unbounded_infer_schema_length_skips_the_rescan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """infer_schema_length=None already scanned every row: there is nothing more to learn."""
+    from sorethumb_ml.io import readers
+
+    p = tmp_path / "cats.csv"
+    p.write_text("region,method\nus,card\neu,cash\n")
+    calls: list[object] = []
+    real_scan = readers.pl.scan_csv
+
+    def counting_scan(*args: object, **kwargs: object) -> object:
+        calls.append(kwargs)
+        return real_scan(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(readers.pl, "scan_csv", counting_scan)
+
+    from sorethumb_ml.config import SourceConfig
+
+    read_frame(p, SourceConfig(uri=str(p), read_options={"infer_schema_length": None}))
+    assert len(calls) == 1
 
 
 def test_read_single_column_parquet_is_accepted(tmp_path: Path) -> None:

@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 _SILHOUETTE_SAMPLE = 20_000
 _DEFAULT_LARGE_COVERAGE = 0.90
 _DISCRETE_K_CEILING = 50
+_DEFAULT_K_MAX = 8
 _CURATED = frozenset({"k", "k_min", "k_max", "n_init", "large_cluster_coverage"})
 
 
@@ -76,7 +77,7 @@ class KMeansDetector:
         self,
         k: int | None = None,
         k_min: int = 2,
-        k_max: int = 8,
+        k_max: int | None = None,
         n_init: int = 10,
         large_cluster_coverage: float = _DEFAULT_LARGE_COVERAGE,
         extra_params: dict[str, Any] | None = None,
@@ -91,9 +92,11 @@ class KMeansDetector:
         k_min:
             Lower bound for auto-selected k.
         k_max:
-            Upper bound for auto-selected k. Kept intentionally small (default 8)
-            to reduce the chance that a minority anomaly cluster captures its own
-            centroid even before CBLOF scoring is applied.
+            Upper bound for auto-selected k. ``None`` (the default) means 8 for
+            continuous data -- kept small to reduce the chance that a minority
+            anomaly cluster captures its own centroid even before CBLOF scoring
+            is applied -- and one cluster per distinct row for discrete data
+            (see ``_select_k``). An explicit value caps both.
         n_init:
             Number of KMeans initialisations.
         large_cluster_coverage:
@@ -228,34 +231,38 @@ class KMeansDetector:
 # ---------------------------------------------------------------------------
 
 
-def _select_k(X: np.ndarray, k_min: int, k_max: int, seed: int) -> int:
+def _select_k(X: np.ndarray, k_min: int, k_max: int | None, seed: int) -> int:
     """Choose k by combining normalised-elbow and silhouette criteria.
 
-    Bypassed entirely when there is clear duplication -- few distinct feature
-    rows (<= ``_DISCRETE_K_CEILING``) relative to the row count (at most half
-    as many): on low-cardinality or all-categorical features, most rows
-    collapse onto a handful of distinct vectors, and the elbow/silhouette
-    heuristic (tuned for continuous data, and not immune to picking a
-    different k across floating-point environments when several k score
-    almost identically) can settle on a k well below that count. A rare
-    combination then gets folded into a common cluster, leaving it with ~0
-    distance to that cluster's centroid -- never flagged by the natural CBLOF
-    boundary. In that regime there is no heuristic left to apply: the natural
-    number of clusters *is* the number of distinct vectors, so k goes
-    straight to one cluster per distinct vector (less one, so the rarest
-    forms its own small cluster rather than blending into a neighbour). A
-    small continuous dataset with no real duplication (every row distinct)
-    must NOT take this path -- it would make nearly every row its own
-    cluster -- hence the row-count-relative half, not just the absolute cap.
+    Bypassed when there is clear duplication -- few distinct feature rows
+    (<= ``_DISCRETE_K_CEILING``) relative to the row count (at most half as
+    many): on low-cardinality or all-categorical features, most rows collapse
+    onto a handful of distinct vectors, and the elbow/silhouette heuristic
+    (tuned for continuous data) can settle on a k well below that count. A
+    rare combination then gets folded into a common cluster, leaving it with
+    ~0 distance to that cluster's centroid -- never flagged by the natural
+    CBLOF boundary. In that regime the natural number of clusters *is* the
+    number of distinct vectors, so k is exactly that: every distinct vector
+    gets its own cluster, the rare ones fall outside the large-cluster
+    coverage, and their distance to the nearest large centroid is what flags
+    them. A small continuous dataset with no real duplication (every row
+    distinct) must NOT take this path -- it would make nearly every row its
+    own cluster -- hence the row-count-relative half, not just the absolute cap.
+
+    *k_max* ``None`` means automatic (``_DEFAULT_K_MAX`` for the heuristic,
+    uncapped for the discrete path); an explicit value caps both.
     """
     n_distinct = len(np.unique(X, axis=0))
     if n_distinct <= _DISCRETE_K_CEILING and n_distinct <= len(X) // 2:
-        return max(k_min, min(n_distinct - 1, len(X) - 1))
+        k = min(n_distinct, len(X) - 1)
+        if k_max is not None:
+            k = min(k, k_max)
+        return max(k_min, k)
 
     from sklearn.cluster import KMeans  # noqa: PLC0415
     from sklearn.metrics import silhouette_score  # noqa: PLC0415
 
-    k_max = min(k_max, len(X) - 1)
+    k_max = min(_DEFAULT_K_MAX if k_max is None else k_max, len(X) - 1)
     ks = list(range(k_min, k_max + 1))
     if len(ks) == 1:
         return ks[0]
