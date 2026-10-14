@@ -411,7 +411,10 @@ class ScoringConfig(BaseModel):
         description=(
             "'composite' averages normalised detector scores and applies a single global threshold. "
             "'intersection' thresholds each detector independently then flags rows where ALL detectors agree (high precision). "
-            "'union' thresholds each detector independently then flags rows where ANY detector agrees (high recall)."
+            "'union' thresholds each detector independently then flags rows where ANY detector agrees (high recall). "
+            "The default, 'intersection', is a deliberate design decision that accepts known limitations "
+            "(it can flag few or no rows on local, varying-density and contextual anomalies); choose "
+            "another policy on measured evidence -- see docs/ensemble-policy.md."
         ),
     )
     weighting: Literal["equal", "manual", "agreement"] = Field(

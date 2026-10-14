@@ -1626,6 +1626,9 @@ def show(
     console.print(f"  Dataset: {_e(run_row.get('dataset_fp', '')[:12])}")
     console.print(f"  Started: {_e(str(run_row.get('started_at', ''))[:19])}")
     console.print(f"  Config:  {_e(run_row.get('config_hash', '')[:8])}")
+    console.print(
+        f"  Policy:  {_e(run_row.get('ensemble_policy') or 'not recorded (run predates migration 010)')}"
+    )
 
     table = Table(title=f"Groups ({len(groups)})", show_header=True)
     table.add_column("Group key")
@@ -2373,6 +2376,8 @@ def _print_run_summary(result: RunResult) -> None:
         err_console.print(f"  [red]{_e(result.group_selection_error)}[/red]")
     if result.source_run_id:
         console.print(f"  [dim]Scored forward from run {_e(result.source_run_id)} (no re-fitting).[/dim]")
+    if result.ensemble_policy:
+        console.print(f"  [dim]Ensemble policy: {_e(result.ensemble_policy)}[/dim]")
 
     total_rows = sum(g.n_records for g in result.groups if g.status in ("success", "skipped"))
     if result.n_anomalies or total_rows:
@@ -2447,6 +2452,7 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
         "dataset_fp": result.dataset_fp,
         "snapshot_fp": result.snapshot_fp,
         "source_run_id": result.source_run_id,
+        "ensemble_policy": result.ensemble_policy,
         "id_identity_scope": result.id_identity_scope,
         "group_selection_error": result.group_selection_error,
         "period_label": result.period_label,

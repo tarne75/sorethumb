@@ -466,8 +466,12 @@ class Store:
         python_version: str = "",
         source_run_id: str | None = None,
         source_digest: str | None = None,
+        ensemble_policy: str | None = None,
     ) -> None:
         """Record a new run in status 'running'.
+
+        *ensemble_policy* is the versioned id of the rule that turns detector votes
+        into flags (``scoring.policies``), e.g. ``intersection@1``.
 
         *source_digest* is the one-way digest of the run's full source URI; *config_json*
         must already carry only the redacted display URI.
@@ -502,8 +506,9 @@ class Store:
             """
             INSERT OR IGNORE INTO run
                 (run_id, dataset_fp, config_hash, config_json, seed,
-                 library_version, python_version, started_at, status, source_run_id, source_digest)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
+                 library_version, python_version, started_at, status, source_run_id, source_digest,
+                 ensemble_policy)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)
             """,
             (
                 run_id,
@@ -516,6 +521,7 @@ class Store:
                 now,
                 source_run_id,
                 source_digest,
+                ensemble_policy,
             ),
         )
         self._conn.commit()

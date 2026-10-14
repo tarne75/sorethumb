@@ -15,6 +15,10 @@ what a release is allowed to change.
 - **The command line.** Command names, options, the five exit codes and the JSON output
   shapes documented in the [CLI reference](cli_reference.md).
 - **The configuration schema** documented in the [configuration reference](configuration.md).
+- **Ensemble policy ids.** The `name@version` id a run records (e.g. `intersection@1`) keeps
+  its meaning: a change to what a policy flags is a new version, never an edit under the old
+  id. The default policy is a design decision, changed only as
+  [ensemble-policy.md](ensemble-policy.md) describes.
 - **The workspace on disk.** The database carries numbered, checksummed migrations, so an
   older workspace is upgraded when a newer sorethumb opens it, and an older sorethumb
   refuses to open a workspace that a newer one has already migrated.
