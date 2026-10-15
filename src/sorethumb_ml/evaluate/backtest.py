@@ -47,9 +47,10 @@ from sorethumb_ml.scoring.policies import DEFAULT_POLICY_ID, policy_by_id
 DEVELOPMENT_SEEDS: tuple[int, ...] = tuple(range(10))
 CONFIRMATION_ROUNDS: dict[int, tuple[int, ...]] = {
     1: tuple(range(10_000, 10_020)),  # closed 2026-10-14: composite-agreement-v1, discrete-composite-v1
-    2: tuple(range(20_000, 20_020)),
+    2: tuple(range(20_000, 20_020)),  # closed 2026-10-14: composite-agreement-v2, discrete-budget-v1
+    3: tuple(range(30_000, 30_020)),
 }
-OPEN_ROUND = 2
+OPEN_ROUND = 3
 STABILITY_REFITS = 3
 
 # Primary metrics: per-seed values where higher is better.

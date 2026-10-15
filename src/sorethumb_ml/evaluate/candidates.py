@@ -34,6 +34,10 @@ class RuleChoice:
     # combination's combined score and flag exactly round(review_budget * n)
     # rows, as an exact-k composite does (scoring.combine._exact_k_flags).
     flags: str = "policy"
+    # >1: average the combination's combined score over this many fits, each on a
+    # seeded 80% subsample of the fitting rows (bagging), before flagging -- a
+    # ranking that varies less between fits flags more stable rows.
+    bags: int = 1
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,13 @@ def _discrete_budget_v1(plan: FeaturePlan) -> RuleChoice:
     return RuleChoice("intersection", "equal", "mixed")
 
 
+def _discrete_budget_v2(plan: FeaturePlan) -> RuleChoice:
+    """As v1, but the ranking is bagged over 5 fits on 80% subsamples, for steadier flags."""
+    if _all_discrete(plan):
+        return RuleChoice("intersection", "equal", "discrete", flags="top_budget", bags=5)
+    return RuleChoice("intersection", "equal", "mixed")
+
+
 CANDIDATE_RULES: tuple[CandidateRule, ...] = (
     CandidateRule(
         name="discrete-composite",
@@ -92,6 +103,15 @@ CANDIDATE_RULES: tuple[CandidateRule, ...] = (
             "flag exactly the review budget's top rows; intersection@1 otherwise."
         ),
         choose=_discrete_budget_v1,
+    ),
+    CandidateRule(
+        name="discrete-budget",
+        version=2,
+        summary=(
+            "As discrete-budget@1, but on all-discrete data the default's combined score is averaged "
+            "over 5 fits on 80% subsamples (bagging) before the review budget's top rows are flagged."
+        ),
+        choose=_discrete_budget_v2,
     ),
 )
 

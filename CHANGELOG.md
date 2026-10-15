@@ -156,7 +156,10 @@ First public release.
   `sorethumb show` and the run summary; `sorethumb evidence` lists the recorded
   evidence and which records apply to the current configuration.
   `sorethumb backtest --forward` tests out of time instead: each period is fitted
-  and the next scored with those fits, as `score --from-run` does.
+  and the next scored with those fits, as `score --from-run` does. A candidate
+  must also rank the anomalies no worse than the default (mean average precision
+  within `--ranking-tolerance`, 10%): decision rule 2, which `run` requires of the
+  evidence it relies on.
 - **Real-data policy evidence**: the pre-registered backtest protocol applied to
   KDD Cup 1999 (SA), Covertype (2 vs 4) and a time-ordered credit-card fraud
   dataset, with disjoint development and confirmation slices; results in

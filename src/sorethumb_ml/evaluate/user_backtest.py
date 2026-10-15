@@ -15,9 +15,12 @@ statistics, on your rows and your configuration:
   testing many policies and keeping the best is accounted for.
 * **Decision.** A candidate *outperforms* the default only if its flag F1 is
   higher (Holm-adjusted p <= ``alpha``), it does not spend more than the review
-  budget on wrong rows where the default does not, and its flags are no less
+  budget on wrong rows where the default does not, its flags are no less
   stable across replicates (Jaccard with the all-rows fit) by more than
-  ``stability_tolerance``.
+  ``stability_tolerance``, and it does not rank the anomalies worse: its mean
+  average precision is not more than ``ranking_tolerance`` (relative) below
+  the default's. This is decision rule ``EVIDENCE_DECISION_RULE`` (2); rule 1
+  had no ranking check.
 * **No labels.** Accuracy cannot be assessed: the backtest reports flag volume
   and stability only, and records the verdict ``not_assessable``.
 * **Forward mode** (``mode="forward"``, ``--forward``). Instead of random
@@ -52,6 +55,7 @@ from sorethumb_ml.errors import ConfigError, SchemaError, SorethumbWarning
 from sorethumb_ml.evaluate.backtest import holm_adjust, paired_bootstrap
 from sorethumb_ml.scoring.policies import (
     DEFAULT_POLICY_ID,
+    EVIDENCE_DECISION_RULE,
     POLICIES,
     EnsemblePolicy,
     policy_by_id,
@@ -366,8 +370,13 @@ def decide_candidates(
     alpha: float,
     stability_tolerance: float,
     n_resamples: int,
+    ranking_tolerance: float | None = None,
 ) -> list[CandidateVerdict]:
-    """Apply the decision rule to every candidate against ``DEFAULT_POLICY_ID`` (pure; no fitting)."""
+    """Apply the decision rule to every candidate against ``DEFAULT_POLICY_ID`` (pure; no fitting).
+
+    *ranking_tolerance* None applies decision rule 1 (no ranking check), as the
+    real-data pre-registration judged before rule 2 existed requires.
+    """
     base = per_replicate[DEFAULT_POLICY_ID]
     if not labelled:
         return [
@@ -388,6 +397,7 @@ def decide_candidates(
     adjusted = holm_adjust([e.p_value for e in estimates])
     verdicts = []
     b_fp, b_stab = _mean(base, "false_positive_budget_ratio"), _mean(base, "flag_jaccard_stability")
+    b_ap = _mean(base, "average_precision")
     for c, est, p_holm in zip(candidates, estimates, adjusted, strict=True):
         reasons: list[str] = []
         if not (est.mean > 0.0 and p_holm <= alpha):
@@ -408,6 +418,16 @@ def decide_candidates(
             reasons.append(
                 f"flags less stable across replicates (Jaccard {c_stab:.3f} vs {b_stab:.3f}, "
                 f"tolerance {stability_tolerance:g})"
+            )
+        c_ap = _mean(per_replicate[c], "average_precision")
+        if (
+            ranking_tolerance is not None
+            and not (math.isnan(c_ap) or math.isnan(b_ap))
+            and c_ap < b_ap * (1.0 - ranking_tolerance)
+        ):
+            reasons.append(
+                f"ranks the anomalies worse (average precision {c_ap:.3f} vs {b_ap:.3f}, more than "
+                f"{ranking_tolerance:.0%} below)"
             )
         verdicts.append(
             CandidateVerdict(
@@ -565,6 +585,7 @@ def backtest_dataset(
     subsample: float = 0.8,
     alpha: float = 0.05,
     stability_tolerance: float = 0.05,
+    ranking_tolerance: float = 0.10,
     n_resamples: int = 10_000,
     record: bool = True,
     mode: str = "random",
@@ -658,6 +679,7 @@ def backtest_dataset(
             alpha=alpha,
             stability_tolerance=stability_tolerance,
             n_resamples=n_resamples,
+            ranking_tolerance=ranking_tolerance,
         )
         scope = policy_scope_hash(config)
         if record:
@@ -676,6 +698,8 @@ def backtest_dataset(
                     "subsample": subsample,
                     "alpha": alpha,
                     "stability_tolerance": stability_tolerance,
+                    "ranking_tolerance": ranking_tolerance,
+                    "decision_rule": EVIDENCE_DECISION_RULE,
                 },
             )
 

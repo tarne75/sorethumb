@@ -118,6 +118,7 @@ ABLATIONS: list[AblationSpec] = [
     AblationSpec("near_constant_2", near_constant_distinct=2),
     AblationSpec("rule_discrete_composite", rule="rule:discrete-composite@1"),
     AblationSpec("rule_discrete_budget", rule="rule:discrete-budget@1"),
+    AblationSpec("rule_discrete_budget_v2", rule="rule:discrete-budget@2"),
 ]
 
 # One ablation per registered ensemble policy, everything else at the shipped
@@ -382,7 +383,13 @@ def _fit_and_score(
     )
     cfg = _build_pipeline_config(ablation, seed)
     plan = build_feature_plan(train_df, cfg)
-    combination, weighting, branch, flag_rule = ablation.combination, ablation.weighting, None, "policy"
+    combination, weighting, branch, flag_rule, bags = (
+        ablation.combination,
+        ablation.weighting,
+        None,
+        "policy",
+        1,
+    )
     if ablation.rule is not None:
         rule = candidate_by_id(ablation.rule)
         if rule is None:
@@ -390,7 +397,9 @@ def _fit_and_score(
             raise ValueError(msg)
         choice = rule.choose(plan)
         combination, weighting, branch = choice.combination, choice.weighting, choice.branch
-        flag_rule = choice.flags
+        flag_rule, bags = choice.flags, choice.bags
+        if bags > 1:
+            return _bagged_fit_and_score(train_df, holdout_df, ablation, choice, seed, review_budget)
 
     t0 = time.perf_counter()
     train_space = fit_features(train_df, plan, cfg)
@@ -425,6 +434,49 @@ def _fit_and_score(
     combined["anomaly_flag"] = np.asarray(combined["anomaly_flag"])[order]
     combined["policy_branch"] = branch
     return combined, fit_seconds, score_seconds
+
+
+def _bagged_fit_and_score(
+    train_df: pl.DataFrame,
+    holdout_df: pl.DataFrame,
+    ablation: AblationSpec,
+    choice: Any,
+    seed: int,
+    review_budget: float,
+) -> tuple[dict[str, Any], float, float]:
+    """Average the chosen combination's combined score over ``choice.bags`` subsample fits, then flag.
+
+    Each bag fits on a seeded 80% subsample of *train_df* (without replacement) and
+    scores the whole of *holdout_df*; the averaged score is flagged at the review
+    budget (``choice.flags`` must be ``"top_budget"``).
+    """
+    from dataclasses import replace  # noqa: PLC0415
+
+    from sorethumb_ml.scoring.combine import _exact_k_flags  # noqa: PLC0415
+
+    plain = replace(ablation, rule=None, combination=choice.combination, weighting=choice.weighting)
+    rng = np.random.default_rng(seed + 4049)
+    n_sub = max(2, round(len(train_df) * _STABILITY_SUBSAMPLE))
+    total = np.zeros(len(holdout_df), dtype=np.float64)
+    fit_seconds = score_seconds = 0.0
+    for i in range(choice.bags):
+        idx = np.sort(rng.choice(len(train_df), size=n_sub, replace=False))
+        combined, fit_s, score_s = _fit_and_score(
+            train_df[idx.tolist()], holdout_df, plain, seed + i, review_budget
+        )
+        total += np.asarray(combined["combined_score"], dtype=np.float64)
+        fit_seconds += fit_s
+        score_seconds += score_s
+    score = total / choice.bags
+    return (
+        {
+            "combined_score": score,
+            "anomaly_flag": _exact_k_flags(score, review_budget),
+            "policy_branch": choice.branch,
+        },
+        fit_seconds,
+        score_seconds,
+    )
 
 
 def _flag_jaccard(a: np.ndarray, b: np.ndarray) -> float:

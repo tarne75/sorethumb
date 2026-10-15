@@ -55,7 +55,10 @@ types, though. Whether a policy is better on *your* data is measured by
    significantly higher flag F1 (paired bootstrap, Holm-corrected across all the
    candidates tested at once, so trying several and keeping the best is accounted
    for), no more wrong flags than the review budget where the default stays within
-   it, and flags no less stable.
+   it, flags no less stable, and anomalies ranked no worse: mean average precision
+   no more than 10% below the default's (`--ranking-tolerance`). This is decision
+   rule 2. Rule 1, before 2026-10-15, had no ranking check, and a run no longer
+   relies on evidence decided under it: re-run `sorethumb backtest`.
 3. Each verdict is recorded in the workspace for this dataset and this
    configuration (everything but the policy itself and settings that cannot change
    a flag).

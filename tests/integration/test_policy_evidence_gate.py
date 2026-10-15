@@ -138,6 +138,14 @@ def test_evidence_against_the_policy_does_not_satisfy_the_gate(
     assert result.policy_evidence_id is None
 
 
+def test_evidence_decided_under_an_older_rule_does_not_count(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    record_evidence(cfg, decision_rule=1)
+    with pytest.warns(UnevidencedPolicyWarning, match="older rule"):
+        result = run_detection(cfg, no_report=True)
+    assert result.policy_evidence_id is None
+
+
 def test_evidence_from_another_configuration_does_not_count(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     record_evidence(cfg, scope_hash="another-configuration")
@@ -164,6 +172,8 @@ def test_a_labelled_backtest_records_evidence_a_run_then_relies_on(tmp_path: Pat
     assert row["verdict"] == verdict.verdict
     details = json.loads(str(row["details_json"]))
     assert len(details["per_replicate"]["composite-agreement@1"]) == 6
+    assert details["decision_rule"] == 2
+    assert details["ranking_tolerance"] == 0.10
 
     if verdict.verdict == "outperforms":
         run = run_detection(cfg, no_report=True)
@@ -356,6 +366,7 @@ def test_evidence_cli_lists_records_and_marks_the_current_scope(tmp_path: Path) 
     assert result.exit_code == 0, result.stdout
     rows = json.loads(result.stdout)
     applies = {r["evidence_id"]: r["applies_to_current_config"] for r in rows}
+    assert {r["decision_rule"] for r in rows} == {2}
     assert applies[in_scope] is True
     assert sorted(applies.values()) == [False, True]
     assert all("details_json" not in r for r in rows)

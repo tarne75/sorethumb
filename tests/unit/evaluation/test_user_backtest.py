@@ -33,14 +33,24 @@ def test_an_unknown_or_default_candidate_is_rejected(requested: list[str], messa
         candidate_policies(_cfg(), requested)
 
 
-def _reps(f1: list[float], fp: float = 0.5, jac: float = 0.8) -> list[dict[str, float]]:
-    return [{"flag_f1": v, "false_positive_budget_ratio": fp, "flag_jaccard_stability": jac} for v in f1]
+def _reps(f1: list[float], fp: float = 0.5, jac: float = 0.8, ap: float = 0.4) -> list[dict[str, float]]:
+    return [
+        {
+            "flag_f1": v,
+            "false_positive_budget_ratio": fp,
+            "flag_jaccard_stability": jac,
+            "average_precision": ap,
+        }
+        for v in f1
+    ]
 
 
 _BASE = [0.30, 0.32, 0.31, 0.29, 0.30, 0.33, 0.28, 0.31]
 
 
-def _decide(per: dict[str, list[dict[str, float]]], *, labelled: bool = True) -> dict[str, object]:
+def _decide(
+    per: dict[str, list[dict[str, float]]], *, labelled: bool = True, ranking_tolerance: float | None = 0.10
+) -> dict[str, object]:
     out = decide_candidates(
         per,
         [k for k in per if k != "intersection@1"],
@@ -48,6 +58,7 @@ def _decide(per: dict[str, list[dict[str, float]]], *, labelled: bool = True) ->
         alpha=0.05,
         stability_tolerance=0.05,
         n_resamples=2000,
+        ranking_tolerance=ranking_tolerance,
     )
     return {v.policy_id: v for v in out}
 
@@ -97,3 +108,17 @@ def test_the_evidence_scope_ignores_the_policy_and_what_cannot_change_a_flag() -
     assert base == policy_scope_hash(_cfg(scoring={"contamination": 0.05}, explain={"enabled": False}))
     assert base != policy_scope_hash(_cfg(scoring={"contamination": 0.1}))
     assert base != policy_scope_hash(_cfg(scoring={"contamination": 0.05}, detectors=[{"name": "lof"}]))
+
+
+def test_ranking_the_anomalies_worse_blocks_a_win_under_decision_rule_2() -> None:
+    per = {"intersection@1": _reps(_BASE, ap=0.40), "union@1": _reps([b + 0.2 for b in _BASE], ap=0.34)}
+    v = _decide(per)["union@1"]
+    assert v.verdict == "does_not_outperform"  # type: ignore[attr-defined]
+    assert "ranks the anomalies worse" in " ".join(v.reasons)  # type: ignore[attr-defined]
+    within = {"intersection@1": _reps(_BASE, ap=0.40), "union@1": _reps([b + 0.2 for b in _BASE], ap=0.37)}
+    assert _decide(within)["union@1"].verdict == "outperforms"  # type: ignore[attr-defined]
+
+
+def test_decision_rule_1_has_no_ranking_check() -> None:
+    per = {"intersection@1": _reps(_BASE, ap=0.40), "union@1": _reps([b + 0.2 for b in _BASE], ap=0.10)}
+    assert _decide(per, ranking_tolerance=None)["union@1"].verdict == "outperforms"  # type: ignore[attr-defined]

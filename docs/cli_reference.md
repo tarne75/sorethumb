@@ -375,7 +375,10 @@ and every policy is applied to the same fits, so the comparison is paired.
   candidate *outperforms* the default only if its flag F1 is significantly higher
   (paired bootstrap, Holm-corrected across every candidate tested in the call),
   it spends no more than the review budget on wrong rows where the default does
-  not, and its flags are no less stable across replicates.
+  not, its flags are no less stable across replicates, and it ranks the anomalies
+  no worse (mean average precision no more than `--ranking-tolerance` below the
+  default's, relative). This is decision rule 2; `run` does not rely on evidence
+  decided under rule 1, which had no ranking check.
 - **Without labels**: only flag volume and stability are reported, and the
   verdict is `not_assessable`.
 
@@ -402,6 +405,7 @@ sorethumb backtest --forward                         # fit each period, score th
 | `--subsample FLOAT` | `0.8` | Fraction of rows in each subsample, in [0.2, 1). |
 | `--no-record` | off | Measure only; write no evidence. |
 | `--forward` | off | Out of time: fit each `history.period_granularity` period and score the next with those fits (as `score --from-run` does), instead of random subsamples. Needs `columns.time_column` and at least 5 period pairs. |
+| `--ranking-tolerance FLOAT` | `0.10` | Relative drop in mean average precision below the default's that counts as ranking the anomalies worse. |
 | `--folds INT` | all pairs | With `--forward`: use only the last N period pairs (at least 5). |
 | `--json` | off | The full result (per-policy means, verdicts, evidence ids) as JSON. |
 
@@ -414,7 +418,7 @@ Plus `--config`, `--workdir`, `--log-level`, `--seed`.
 List the backtest evidence recorded in the workspace by
 [`sorethumb backtest`](#sorethumb-backtest), newest first: one row per candidate
 policy compared with the default, with its verdict, flag F1 difference and 95% CI,
-Holm-adjusted p-value and date. With a config, lists that dataset's records and
+Holm-adjusted p-value, decision rule and date. With a config, lists that dataset's records and
 marks which apply to the current configuration — the scope a `run` checks.
 
 ```bash

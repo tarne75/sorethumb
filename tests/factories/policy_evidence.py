@@ -9,13 +9,19 @@ they exercise.
 
 from __future__ import annotations
 
+import json
 import tomllib
 import uuid
 from pathlib import Path
 
 from sorethumb_ml.config import Config
 from sorethumb_ml.io.fingerprint import logical_dataset_id
-from sorethumb_ml.scoring.policies import DEFAULT_POLICY_ID, policy_scope_hash, resolve_policy
+from sorethumb_ml.scoring.policies import (
+    DEFAULT_POLICY_ID,
+    EVIDENCE_DECISION_RULE,
+    policy_scope_hash,
+    resolve_policy,
+)
 from sorethumb_ml.store.workspace import Workspace
 
 
@@ -25,7 +31,13 @@ def config_from_toml(path: Path) -> Config:
         return Config.model_validate(tomllib.load(fh))
 
 
-def record_evidence(config: Config, verdict: str = "outperforms", *, scope_hash: str | None = None) -> str:
+def record_evidence(
+    config: Config,
+    verdict: str = "outperforms",
+    *,
+    scope_hash: str | None = None,
+    decision_rule: int = EVIDENCE_DECISION_RULE,
+) -> str:
     """Record a backtest verdict for *config*'s policy on its dataset; return the evidence id."""
     root = Path(config.run.workdir)
     ws = Workspace.open(root) if (root / "sorethumb.db").exists() else Workspace.init(root)
@@ -60,7 +72,7 @@ def record_evidence(config: Config, verdict: str = "outperforms", *, scope_hash:
                 "n_replicates": 20,
                 "review_budget": 0.05,
                 "library_version": "test",
-                "details_json": "{}",
+                "details_json": json.dumps({"decision_rule": decision_rule}),
             }
         )
     return evidence_id
