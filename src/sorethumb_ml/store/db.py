@@ -641,14 +641,19 @@ class Store:
         timing_seconds: float | None = None,
         error: str | None = None,
         warnings_json: str | None = None,
+        explain_status: str | None = None,
+        n_explained: int | None = None,
+        n_explain_unavailable: int | None = None,
+        detection_digest: str | None = None,
     ) -> None:
-        """Insert or replace a run_group row."""
+        """Insert or replace a run_group row (see migration 012 for the explain_* columns)."""
         self._conn.execute(
             """
             INSERT INTO run_group
                 (run_id, group_key, group_values_json, group_label, status,
-                 record_count, anomaly_count, rate, timing_seconds, error, warnings_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 record_count, anomaly_count, rate, timing_seconds, error, warnings_json,
+                 explain_status, n_explained, n_explain_unavailable, detection_digest)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id, group_key) DO UPDATE SET
                 status = excluded.status,
                 record_count = excluded.record_count,
@@ -656,7 +661,11 @@ class Store:
                 rate = excluded.rate,
                 timing_seconds = excluded.timing_seconds,
                 error = excluded.error,
-                warnings_json = excluded.warnings_json
+                warnings_json = excluded.warnings_json,
+                explain_status = excluded.explain_status,
+                n_explained = excluded.n_explained,
+                n_explain_unavailable = excluded.n_explain_unavailable,
+                detection_digest = excluded.detection_digest
             """,
             (
                 run_id,
@@ -670,6 +679,10 @@ class Store:
                 timing_seconds,
                 error,
                 warnings_json,
+                explain_status,
+                n_explained,
+                n_explain_unavailable,
+                detection_digest,
             ),
         )
         self._conn.commit()

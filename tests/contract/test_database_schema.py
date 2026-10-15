@@ -170,6 +170,12 @@ def test_migration_011_adds_policy_evidence_and_the_run_link(tmp_path):
     } <= ev_cols
 
 
+def test_migration_012_records_the_explanation_outcome_separately(tmp_path):
+    with Store(tmp_path / "m.db") as store:
+        cols = {r[1] for r in store._conn.execute("PRAGMA table_info(run_group)")}
+    assert {"explain_status", "n_explained", "n_explain_unavailable", "detection_digest"} <= cols
+
+
 def test_migration_006_adds_period_execution_table(tmp_path):
     with Store(tmp_path / "m.db") as store:
         tables = {r[0] for r in store._conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}

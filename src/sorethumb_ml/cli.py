@@ -1238,6 +1238,16 @@ def score(
 # ---------------------------------------------------------------------------
 
 
+def _explain_cell(group_row: dict[str, Any]) -> str:
+    """Summarise a run_group row's explanation outcome for the `show` table."""
+    status = group_row.get("explain_status")
+    if not status:
+        return "—"  # recorded before detection and explanation were separated
+    if status in ("ok", "partial", "failed"):
+        return f"{status} ({group_row.get('n_explained') or 0} explained)"
+    return str(status).replace("_", " ")
+
+
 def _default_policy_id() -> str:
     from sorethumb_ml.scoring.policies import DEFAULT_POLICY_ID  # noqa: PLC0415
 
@@ -1940,6 +1950,7 @@ def show(
     table.add_column("Records", justify="right")
     table.add_column("Anomalies", justify="right")
     table.add_column("Rate %", justify="right")
+    table.add_column("Explanations")
 
     for g in groups:
         rate = g.get("rate")
@@ -1952,6 +1963,7 @@ def show(
             str(g.get("record_count", "") or ""),
             str(g.get("anomaly_count", "") or ""),
             rate_str,
+            _explain_cell(g),
         )
     console.print(table)
 
@@ -1996,13 +2008,14 @@ def anomalies(
             if not groups:
                 _fail(json_output, f"Run not found or has no groups: {run_id}", ExitCode.NOT_FOUND)
 
+            from sorethumb_ml.store.results import read_results  # noqa: PLC0415
+
             frames: list[pl.DataFrame] = []
             for g in groups:
-                parquet = ws.results_dir(run_id, g["group_key"]) / "anomalies.parquet"
-                if parquet.exists():
-                    df = pl.read_parquet(str(parquet))
-                    if len(df) > 0:
-                        frames.append(df.with_columns(pl.lit(str(g.get("group_label", ""))).alias("_group")))
+                # Detection rows with their explanations joined on (see store/results.py).
+                df = read_results(ws, run_id, g["group_key"])
+                if df is not None and len(df) > 0:
+                    frames.append(df.with_columns(pl.lit(str(g.get("group_label", ""))).alias("_group")))
     except SorethumbError as exc:
         _fail(json_output, str(exc), _classify_error(exc))
 
@@ -2654,9 +2667,11 @@ def _exit_code_for(result: RunResult) -> ExitCode:
       distinct from "nothing to do, all fine" (an empty groups list makes
       ``n_failed`` 0 too).
     - ``PARTIAL`` (4): results exist but something is missing: some groups failed
-      while at least one succeeded, or every group succeeded and the explicitly
-      requested report failed to render (the detection results are still right,
-      but a success-shaped exit would hide the missing report).
+      while at least one succeeded; or every group succeeded and the explicitly
+      requested report failed to render; or a group's explanation stage failed
+      (no flagged row explained); or, under ``run.strict``, the explanation
+      stage raised any warning. The detection results are right in each case,
+      but a success-shaped exit would hide what is missing.
     - ``RUNTIME`` (1): groups were attempted and none succeeded.
     - ``OK`` (0) otherwise.
     """
@@ -2665,6 +2680,11 @@ def _exit_code_for(result: RunResult) -> ExitCode:
     if result.n_failed:
         return ExitCode.PARTIAL if result.n_succeeded else ExitCode.RUNTIME
     if result.report_status == "failed":
+        return ExitCode.PARTIAL
+    succeeded = [g for g in result.groups if g.status == "success"]
+    if any(g.explain_status == "failed" for g in succeeded):
+        return ExitCode.PARTIAL
+    if result.strict and any(g.explain_warnings for g in succeeded):
         return ExitCode.PARTIAL
     return ExitCode.OK
 
@@ -2691,6 +2711,20 @@ def _print_run_summary(result: RunResult) -> None:
                 "  [yellow]No backtest evidence that this policy outperforms the default on this data "
                 "and configuration; see `sorethumb backtest`.[/yellow]"
             )
+
+    explain_failed = [g for g in result.groups if g.status == "success" and g.explain_status == "failed"]
+    explain_partial = [g for g in result.groups if g.status == "success" and g.explain_status == "partial"]
+    if explain_failed:
+        err_console.print(
+            f"  [red]Explanations failed for {len(explain_failed)} group(s); their flagged rows and "
+            "counts stand, without explanations (see warnings).[/red]"
+        )
+    if explain_partial:
+        unexplained = sum(g.n_explain_unavailable for g in explain_partial)
+        console.print(
+            f"  [yellow]Explanations incomplete in {len(explain_partial)} group(s): "
+            f"{unexplained} flagged row(s) unexplained, or an explainer warned (see warnings).[/yellow]"
+        )
 
     total_rows = sum(g.n_records for g in result.groups if g.status in ("success", "skipped"))
     if result.n_anomalies or total_rows:
@@ -2791,6 +2825,10 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
                 "error": g.error,
                 "elapsed_seconds": g.elapsed_seconds,
                 "warnings_issued": g.warnings_issued,
+                "explain_status": g.explain_status,
+                "n_explained": g.n_explained,
+                "n_explain_unavailable": g.n_explain_unavailable,
+                "detection_digest": g.detection_digest,
             }
             for g in result.groups
         ],
