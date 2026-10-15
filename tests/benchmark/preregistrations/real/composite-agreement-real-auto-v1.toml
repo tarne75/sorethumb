@@ -1,0 +1,23 @@
+# Pre-registered 2026-10-15, after the development run (development slices only) and
+# before any confirmation-slice run.
+candidate = "composite-agreement@1"
+baseline = "intersection@1"
+contamination = "auto"
+ranking_tolerance = 0.10
+hypothesis = """
+composite-agreement-real-v1 was judged with both policies at each dataset's review budget.
+This tests the shipped scoring.contamination = "auto": does composite-agreement@1 still
+outperform intersection@1 on the same datasets when both run at "auto", judged against
+the same review budgets (decision rule 2, with ranking)?
+"""
+datasets = ["kddcup99_sa", "covtype_2v4", "creditcard"]
+require = "all"
+alpha = 0.05
+stability_tolerance = 0.05
+n_resamples = 10000
+expected_outcome = """
+Does not outperform. On the development slices at "auto" the composite flagged 2.3x
+(KDD), 5.2x (Covertype) and 20x (card fraud) the review budget, with wrong flags 2.1x and
+4.4x the budget on KDD and Covertype, and lower flag F1 on card fraud (-0.05). Its flag
+F1 was higher on KDD and Covertype only because it flags many more rows.
+"""
