@@ -12,7 +12,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from sorethumb_ml._pipeline import _MIN_NORMAL_REFERENCE_ROWS, _attribution_reference
 from sorethumb_ml.detectors.isolation_forest import IsolationForestDetector
 from sorethumb_ml.detectors.lof import LOFDetector
 from sorethumb_ml.detectors.one_class_svm import OneClassSVMDetector
@@ -178,13 +177,13 @@ def test_tree_shap_gradient_fallback_scales_from_the_reference(monkeypatch):
     det.fit(population, seed=0)
     monkeypatch.setitem(sys.modules, "shap", None)  # shap "not installed" -> gradient fallback
     seen: dict[str, np.ndarray] = {}
-    real = gradient_mod.gradient_attributions
+    real = gradient_mod.gradient_attributions_detailed
 
     def _spy(detector, X, *, reference, **kw):
         seen["reference"] = reference
         return real(detector, X, reference=reference, **kw)
 
-    monkeypatch.setattr(gradient_mod, "gradient_attributions", _spy)
+    monkeypatch.setattr(gradient_mod, "gradient_attributions_detailed", _spy)
 
     with pytest.warns(UserWarning, match="shap is not installed"):
         _, tag = tree_shap_attributions(det, anomaly, reference=normal)
@@ -208,23 +207,3 @@ def test_reference_is_required_and_validated():
         gradient_attributions(det, x, reference=np.zeros((0, 3)))
     with pytest.raises(ExplainError, match="2-D"):
         gradient_attributions(det, x, reference=np.zeros(3))
-
-
-# ---------------------------------------------------------------------------
-# The pipeline's choice of reference
-# ---------------------------------------------------------------------------
-
-
-def test_attribution_reference_is_the_unflagged_rows():
-    X = np.arange(40, dtype=np.float64).reshape(20, 2)
-    flagged = np.array([3, 11])
-    ref = _attribution_reference(X, flagged)
-    assert ref.shape == (18, 2)
-    assert not any((ref == X[i]).all(axis=1).any() for i in flagged)
-
-
-def test_attribution_reference_falls_back_to_the_full_population_when_too_few_rows_are_normal():
-    n = _MIN_NORMAL_REFERENCE_ROWS + 3
-    X = np.random.default_rng(0).standard_normal((n, 2))
-    flagged = np.arange(n - (_MIN_NORMAL_REFERENCE_ROWS - 1))  # leaves 9 unflagged
-    assert _attribution_reference(X, flagged) is X

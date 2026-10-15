@@ -111,3 +111,45 @@ def blend(
 
     final_tag = _weakest_tag([tag for _, tag in sources])
     return blended, final_tag
+
+
+def blend_components(
+    matrices: list[np.ndarray],
+    weights: list[float],
+) -> tuple[list[np.ndarray], np.ndarray]:
+    """Decompose ``blend`` into each source's per-row term, for the explanation record.
+
+    Returns ``(scaled, row_weights)``: ``scaled[s]`` is source *s* in the units
+    it enters the blend (the matrix itself for a single source, each row
+    L2-normalised otherwise, zero where the row is uninformative), and
+    ``row_weights[:, s]`` is the weight it carries in each row after the
+    per-row renormalisation (zero where it is uninformative). By construction
+    ``sum_s row_weights[:, s, None] * scaled[s]`` equals ``blend``'s output, up
+    to floating-point rounding.
+    """
+    if len(matrices) != len(weights) or not matrices:
+        msg = "blend_components() requires one weight per source and at least one source."
+        raise ValueError(msg)
+    n_rows = matrices[0].shape[0]
+    if len(matrices) == 1:
+        return [np.asarray(matrices[0], dtype=np.float64)], np.ones((n_rows, 1), dtype=np.float64)
+
+    total_weight = sum(weights)
+    if total_weight == 0.0:
+        normed_weights = [1.0 / len(weights)] * len(weights)
+    else:
+        normed_weights = [w / total_weight for w in weights]
+
+    scaled: list[np.ndarray] = []
+    row_weights = np.zeros((n_rows, len(matrices)), dtype=np.float64)
+    for s_idx, (mat, w) in enumerate(zip(matrices, normed_weights, strict=True)):
+        norms = np.linalg.norm(mat, axis=1)
+        informative = _informative_rows(norms)
+        normed = np.zeros(mat.shape, dtype=np.float64)
+        normed[informative] = mat[informative] / norms[informative, None]
+        scaled.append(normed)
+        row_weights[:, s_idx] = w * informative
+    totals = row_weights.sum(axis=1)
+    has_weight = totals > 0.0
+    row_weights[has_weight] /= totals[has_weight, None]
+    return scaled, row_weights

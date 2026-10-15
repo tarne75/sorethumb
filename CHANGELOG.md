@@ -184,6 +184,58 @@ First public release.
   - Detection no longer depends on the explain settings. Turning explanations on
     used to upcast the detectors' input to float64, which shifted their scores
     slightly. Detection now always uses `features.dtype`.
+- **Structured warnings**: every project warning carries a stable `code` (e.g.
+  `explain.backend_failed`, `explain.rows_beyond_max_rows`), its stage and,
+  where they apply, the detector and rows affected. Warnings are persisted as
+  records in `run_group.warnings_json`, shown with their codes in the run
+  summary, `show` and the report, and listed in `run --json` (`warnings`).
+  Older plain-string warnings read back as `legacy`.
+  - Explanation problems that used to be silent are now warnings: a detector
+    with no attribution method, a failed PCA back-projection (previously only
+    logged), rows beyond `explain.max_rows`, and a reference that includes
+    flagged rows.
+  - Each explained row records `explain_status` (`ok`, `partial`,
+    `unavailable`) and `explain_issue`. An unavailable row's `reason_1` is now
+    null; it used to hold the text "unavailable (...)".
+- **Explanation record**: `attributions.parquet` records, for every reason, the
+  original field, its raw value, the reference value and the row's direction
+  against it, the signed contribution (positive toward anomaly) alongside the
+  magnitude reasons are ranked by, each detector's method, weight and share, the
+  transformed features behind the field, every approximation caveat that applies
+  (`approximation_flags`), the `explainer_version` (`explain@1`) and the
+  `reference_id`. `sorethumb anomalies --detail` shows it. Ranking and the
+  `reason_<k>` labels are unchanged.
+  - A row is now `partial`, with `explain_issue` naming the detectors, when a
+    detector that counts toward the score says nothing about that row: it is
+    beyond that detector's `explain.max_rows`, or its attribution there is zero.
+    Such rows used to show as `ok`.
+  - A row every source attributes as zero is now `unavailable`
+    (`no_attribution_signal`, warning `explain.no_signal`). It used to list its
+    first fields as reasons, all with zero weight.
+  - A group whose explanation stage fails no longer keeps an earlier attempt's
+    explanation files.
+- **Explanations measured against a consensus-normal reference** (`explain@2`):
+  - The reference is the rows no detector flags, falling back to the less
+    anomalous half of the unflagged rows. It used to be all unflagged rows, or
+    the whole group, flagged rows included, when fewer than 10 were unflagged.
+    When neither population has 10 rows, the flagged rows are `unavailable`
+    (`no_reference`, warning `explain.reference_unavailable`) rather than
+    explained against anomalies.
+  - Isolation Forest attributions use interventional TreeSHAP with that
+    reference as background, with shap's additivity check on. They used to be
+    path-dependent with the check off.
+  - KMeans centroid attributions are divided by each dimension's spread in the
+    reference.
+  - A fitting run saves the reference summary as
+    `models/<run>/<group>/reference.json`; `score --from-run` explains against
+    it, falling back with a warning when there is none.
+  - Explanation values and, in some rows, reasons change from `explain@1`. The
+    flags `treeshap_path_dependent` and `reference_includes_flagged_rows` are
+    gone; `treeshap_path_length` and `reference_lower_half` are new.
+  - Within one attribution source, gradient rows and marginal-deviation rows
+    are judged separately when deciding whether a row's attribution is
+    negligible, so a small real gradient is no longer discarded because the
+    same source attributed a far-out row by marginal deviation.
 - **Real-data policy evidence**: the pre-registered backtest protocol applied to
   KDD Cup 1999 (SA), Covertype (2 vs 4) and a time-ordered credit-card fraud
   dataset, with disjoint development and confirmation slices; results in

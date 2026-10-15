@@ -5,6 +5,11 @@ Every degradation point issues a specific named warning so that strict mode
 that a failed strict-mode run names the exact config field that controls it.
 """
 
+from __future__ import annotations
+
+import json
+from typing import Any, ClassVar
+
 
 class SorethumbError(Exception):
     """Base exception. All library errors are subclasses.
@@ -132,27 +137,59 @@ class SorethumbWarning(UserWarning):
 
     Each subclass corresponds to one degradation point. The name is what makes
     a strict-mode failure diagnosable — use the most specific subclass available.
+
+    Every warning is also a structured record (see :func:`warning_record`): a
+    stable ``code`` (the subclass default, or a more specific one passed in),
+    plus, where they apply, the ``detector`` concerned and the number of rows
+    affected. ``str(warning)`` is the human-readable message.
     """
+
+    code: ClassVar[str] = "warning"
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        code: str | None = None,
+        detector: str | None = None,
+        rows_affected: int | None = None,
+    ) -> None:
+        """Create a warning with *message*, optionally overriding ``code`` and naming a detector and row count."""
+        super().__init__(message)
+        if code is not None:
+            self.code = code  # type: ignore[misc]  # an instance-specific code
+        self.detector = detector
+        self.rows_affected = rows_affected
 
 
 class ColumnDroppedWarning(SorethumbWarning):
     """A column was dropped from the feature plan."""
 
+    code: ClassVar[str] = "profile.column_dropped"
+
 
 class FeatureWidthWarning(SorethumbWarning):
     """One-hot columns were demoted to frequency encoding to stay within max_feature_width."""
+
+    code: ClassVar[str] = "features.width_demoted"
 
 
 class LowVarianceWarning(SorethumbWarning):
     """PCA retained components explain less than pca_min_explained_variance of total variance."""
 
+    code: ClassVar[str] = "features.pca_low_variance"
+
 
 class SampleTruncatedWarning(SorethumbWarning):
     """A sample was truncated to fit within a row cap."""
 
+    code: ClassVar[str] = "data.sample_truncated"
+
 
 class FallbackAttributionWarning(SorethumbWarning):
     """TreeSHAP failed and the gradient method was used as a fallback attribution."""
+
+    code: ClassVar[str] = "explain.fallback_used"
 
 
 class AttributionBackendWarning(SorethumbWarning):
@@ -164,6 +201,8 @@ class AttributionBackendWarning(SorethumbWarning):
     ``partial`` instead of failing the group.
     """
 
+    code: ClassVar[str] = "explain.backend_failed"
+
 
 class ExplanationFailedWarning(SorethumbWarning):
     """No explanation could be produced for a group's flagged rows.
@@ -174,17 +213,43 @@ class ExplanationFailedWarning(SorethumbWarning):
     and the run exits ``partial``.
     """
 
+    code: ClassVar[str] = "explain.stage_failed"
+
+
+class ExplanationCoverageWarning(SorethumbWarning):
+    """Some flagged rows, or part of their score, could not be explained.
+
+    Codes: ``explain.rows_beyond_max_rows`` (rows past ``explain.max_rows`` for
+    every source that covers them), ``explain.pca_backprojection_failed`` (no
+    flagged row has an original-column explanation), ``explain.detector_unsupported``
+    (a detector with no vetted attribution method: its part of the score is not
+    explained), ``explain.no_signal`` (every source attributed some rows as all
+    zero), ``explain.reference_fallback`` (too few consensus-normal rows, so the
+    less anomalous half was the reference; or a score-forward run whose fitting
+    run saved no reference summary) and ``explain.reference_unavailable`` (no
+    population normal enough to explain against; no row explained). Never
+    changes detection output; under ``run.strict`` the run exits partial.
+    """
+
+    code: ClassVar[str] = "explain.coverage"
+
 
 class ModelSchemaDriftWarning(SorethumbWarning):
     """A persisted model's feature schema no longer matches; the group was refit."""
+
+    code: ClassVar[str] = "model.schema_drift"
 
 
 class ModelVersionMismatchWarning(SorethumbWarning):
     """A persisted model was fitted under different library versions; scores may not be reproducible."""
 
+    code: ClassVar[str] = "model.version_mismatch"
+
 
 class SlowStageWarning(SorethumbWarning):
     """A stage or group exceeded run.slow_stage_seconds."""
+
+    code: ClassVar[str] = "run.slow_stage"
 
 
 class AntiCorrelatedMemberWarning(SorethumbWarning):
@@ -195,6 +260,8 @@ class AntiCorrelatedMemberWarning(SorethumbWarning):
     quietly becoming two-way). The bad-member guard still drops members for
     combination="composite", where dropping does not change the decision rule.
     """
+
+    code: ClassVar[str] = "scoring.anticorrelated_member"
 
 
 class AmbiguousDateFormatWarning(SorethumbWarning):
@@ -209,6 +276,8 @@ class AmbiguousDateFormatWarning(SorethumbWarning):
     previously passing configuration into a failing one for no new risk.
     """
 
+    code: ClassVar[str] = "profile.ambiguous_date_format"
+
 
 class UnevidencedPolicyWarning(SorethumbWarning):
     """A non-default ensemble policy is in use without backtest evidence that it outperforms the default.
@@ -219,6 +288,8 @@ class UnevidencedPolicyWarning(SorethumbWarning):
     outperforms the default. The run proceeds; ``run.strict`` refuses it
     instead (:class:`UnevidencedPolicyError`). See docs/ensemble-policy.md.
     """
+
+    code: ClassVar[str] = "policy.unevidenced"
 
 
 class ZeroAnomalyWarning(SorethumbWarning):
@@ -233,6 +304,8 @@ class ZeroAnomalyWarning(SorethumbWarning):
     as alternatives to consider.
     """
 
+    code: ClassVar[str] = "scoring.zero_flagged"
+
 
 class ReportGenerationWarning(SorethumbWarning):
     """Report rendering failed after detection/scoring already succeeded.
@@ -245,3 +318,45 @@ class ReportGenerationWarning(SorethumbWarning):
     ("success" | "failed" | "skipped") is the authoritative, structured
     record of this outcome; this warning exists for visibility alongside it.
     """
+
+    code: ClassVar[str] = "report.failed"
+
+
+def warning_record(warning: Warning | str, *, group: str | None = None) -> dict[str, Any]:
+    """Return the structured form of *warning* persisted and reported by a run.
+
+    ``{"code", "stage", "message", "group", "detector", "rows_affected"}``:
+    ``stage`` is the part of ``code`` before the first dot. A warning that is
+    not a :class:`SorethumbWarning` gets the code ``external``.
+    """
+    code = warning.code if isinstance(warning, SorethumbWarning) else "external"
+    return {
+        "code": code,
+        "stage": code.split(".", 1)[0],
+        "message": str(warning),
+        "group": group,
+        "detector": getattr(warning, "detector", None),
+        "rows_affected": getattr(warning, "rows_affected", None),
+    }
+
+
+def warning_records_from_json(raw: str | None) -> list[dict[str, Any]]:
+    """Parse persisted ``warnings_json`` into records; older plain-string lists become ``legacy`` records."""
+    if not raw:
+        return []
+    records: list[dict[str, Any]] = []
+    for item in json.loads(raw):
+        if isinstance(item, dict):
+            records.append(item)
+        else:
+            records.append(
+                {
+                    "code": "legacy",
+                    "stage": "legacy",
+                    "message": str(item),
+                    "group": None,
+                    "detector": None,
+                    "rows_affected": None,
+                }
+            )
+    return records

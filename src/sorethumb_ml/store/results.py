@@ -12,8 +12,12 @@ Detection and explanation are separate files. ``anomalies.parquet`` holds the
 detection output only (scores, flags, ranks) and is written -- and its sha256
 digest recorded -- before any explanation is computed, so nothing the
 explanation stage does, or fails to do, can change which rows were flagged or
-how many. ``explanations.parquet`` holds the explanation for those rows.
-:func:`read_results` joins the two for readers.
+how many. ``explanations.parquet`` holds the explanation for those rows (one
+row each: status, attribution kind, ``reason_<k>`` labels), and
+``attributions.parquet`` the long-format record behind each reason (one row per
+flagged row and reason: method, signed contribution, transformed features, raw
+and reference value, approximation flags). :func:`read_results` joins the
+first two for readers; :func:`read_attributions` loads the third.
 
 Written atomically (sibling temp file + rename, see ``sorethumb_ml._atomic``): a
 crash mid-write, or a reader racing the writer, never sees a truncated file.
@@ -35,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 _RESULT_FILENAME = "anomalies.parquet"
 _EXPLANATION_FILENAME = "explanations.parquet"
+_ATTRIBUTION_FILENAME = "attributions.parquet"
 
 
 def write_results(
@@ -155,6 +160,67 @@ def write_explanations(workspace: Workspace, run_id: str, group_key: str, df: pl
         run_id=run_id,
     )
     return out_path
+
+
+def attributions_path(workspace: Workspace, run_id: str, group_key: str) -> Path:
+    """Return the attribution-record Parquet path for a (run_id, group_key), existing or not."""
+    return workspace.results_dir(run_id, group_key) / _ATTRIBUTION_FILENAME
+
+
+def write_attributions(workspace: Workspace, run_id: str, group_key: str, df: pl.DataFrame) -> Path:
+    """Write a group's long-format attribution records (one row per flagged row and reason).
+
+    Raises
+    ------
+    StoreError
+        If ``row_id`` or ``reason_rank`` is missing or null, or a
+        ``(row_id, reason_rank)`` pair repeats.
+
+    """
+    for col in ("row_id", "reason_rank"):
+        if col not in df.columns:
+            msg = f"Attribution frame is missing required column {col!r}."
+            raise StoreError(msg)
+        if df[col].null_count():
+            msg = f"Attribution frame has null {col!r} value(s)."
+            raise StoreError(msg)
+    if df.select(["row_id", "reason_rank"]).is_duplicated().any():
+        msg = "Attribution frame has a repeated (row_id, reason_rank) pair."
+        raise StoreError(msg)
+    out_path = attributions_path(workspace, run_id, group_key)
+    with atomic_write(out_path) as tmp:
+        df.write_parquet(str(tmp))
+    workspace.store.register_artifact(
+        artifact_id=f"{run_id}_{group_key}_attributions",
+        path=str(out_path),
+        kind="attributions",
+        byte_size=out_path.stat().st_size,
+        regenerable=False,
+        run_id=run_id,
+    )
+    return out_path
+
+
+def read_attributions(workspace: Workspace, run_id: str, group_key: str) -> pl.DataFrame | None:
+    """Load a group's attribution records, or None if absent (explanations off, failed, or an older run)."""
+    path = attributions_path(workspace, run_id, group_key)
+    if not path.exists():
+        return None
+    return pl.read_parquet(str(path))
+
+
+def remove_explanation_outputs(workspace: Workspace, run_id: str, group_key: str) -> None:
+    """Delete a group's explanation and attribution files, if present.
+
+    Called before a group's explanation stage runs, so a re-executed group
+    whose explanation now fails cannot leave an earlier attempt's files to be
+    read as this run's explanation.
+    """
+    for path in (
+        explanations_path(workspace, run_id, group_key),
+        attributions_path(workspace, run_id, group_key),
+    ):
+        path.unlink(missing_ok=True)
 
 
 def read_explanations(workspace: Workspace, run_id: str, group_key: str) -> pl.DataFrame | None:

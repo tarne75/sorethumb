@@ -152,9 +152,11 @@ Your *data* can live anywhere: only the workspace needs local storage.
 ```
 sorethumb.db            SQLite ledger: runs, groups, history, artefact index
 models/<run>/…          fitted feature plan, and per group and detector the
-                        estimator and calibrator as joblib/pickle files, plus a manifest
+                        estimator and calibrator as joblib/pickle files, plus a manifest;
+                        per group, reference.json (the explanation reference summary)
 results/<run>/<group>/  per-group results (Parquet): anomalies.parquet (detection: scores,
-                        flags, ranks; written and digested first) and explanations.parquet
+                        flags, ranks; written and digested first), explanations.parquet
+                        and attributions.parquet (the record behind each reason)
 reports/<run>/          rendered HTML / CSV / JSON reports
 cache/  tmp/  logs/     downloaded-dataset and feature caches, scratch, rotating logs
 ```
@@ -321,7 +323,7 @@ rows at all), which is not treated as an error.
 | `--limit-groups INT` | — | Cap the number of groups processed, applied after `--only-group`/`--group-filter`. Groups are sorted by label first, so the same limit always keeps the same groups. Must be >= 1 when given (exit code 2 otherwise). |
 | `--detectors STR`, `-d` | — | Comma-separated detector aliases, replacing the config list for this invocation only. Aliases: `if`=isolation_forest · `km`=kmeans_distance · `oc`=one_class_svm · `ecod` · `lof` · `hbos`. Full names also accepted. Never modifies `sorethumb.toml`. |
 | `--save-config / --no-save-config` | ask on a terminal, else no | With `data_file` and no `sorethumb.toml`: save (or don't save) this run's settings to `sorethumb.toml` without asking. No effect when the config file already exists. |
-| `--json` | off | Machine-readable JSON summary on stdout. Its `ensemble_policy` names the versioned rule that produced the flags (e.g. `intersection@1`; see [ensemble-policy.md](ensemble-policy.md)), and `policy_evidence_id` the [`sorethumb backtest`](#sorethumb-backtest) record a non-default policy relied on (`null` otherwise). |
+| `--json` | off | Machine-readable JSON summary on stdout. Its `warnings` (top level and per group) lists every warning as a structured record (`code`, `stage`, `message`, `group`, `detector`, `rows_affected`; see [explanations.md](explanations.md#detection-first-explanation-second)), alongside the plain `warnings_issued` messages. Per group it reports `explain_status`, `n_explained`, `n_explain_unavailable` and `detection_digest`. Its `ensemble_policy` names the versioned rule that produced the flags (e.g. `intersection@1`; see [ensemble-policy.md](ensemble-policy.md)), and `policy_evidence_id` the [`sorethumb backtest`](#sorethumb-backtest) record a non-default policy relied on (`null` otherwise). |
 | `--dry-run` | off | Resolve the plan and register the run, but fit no models. Still writes the workspace + schema migrations, the `dataset` / `dataset_snapshot` rows, and the `run` row (left in status `running`). Skips the feature plan, detector models, per-group results, history rows and the report. |
 
 ---
@@ -448,13 +450,15 @@ Plus `--config`, `--workdir`, `--log-level`.
 ## `sorethumb anomalies [run_id]`
 
 Print the flagged rows from a completed run, ordered by rank (1 = most
-anomalous), with SHAP-derived reason columns.
+anomalous), with their attribution-derived reason columns. `--detail` adds the
+record behind each reason (see [the explanation record](explanations.md#the-explanation-record)).
 
 ```bash
 sorethumb anomalies                      # latest run, top 3 reasons, all rows
 sorethumb anomalies abc12345             # specific run
 sorethumb anomalies --top 20            # limit to 20 rows
 sorethumb anomalies --reasons 5 --top 50
+sorethumb anomalies --detail --top 5     # method, signed contribution, reference value, flags
 sorethumb anomalies --json | jq '.[] | {rank, score: .composite_score}'
 ```
 
@@ -471,6 +475,7 @@ sorethumb anomalies --json | jq '.[] | {rank, score: .composite_score}'
 | `--config`, `--workdir`, `--log-level` | — | See [Common options](#common-options). |
 | `--top INT` | 0 (all) | Show only the top-N anomalies. |
 | `--reasons INT` | 3 | Number of reason columns to display. |
+| `--detail` | off | Also show the record behind each displayed reason: method per detector, signed contribution, reference value and direction, approximation flags. With `--json`, each row gains `row_id` and `reason_detail` (a list of records, one per displayed reason; empty for an unexplained row). |
 | `--json` | off | Machine-readable JSON on stdout. |
 
 ---

@@ -8,6 +8,13 @@ We take the absolute value of each component so the magnitude reflects how far e
 dimension is from the centroid, regardless of sign. This is comparable with
 attributions from other detectors after blending.
 
+Given a reference population, each dimension's distance is divided by that
+dimension's robust spread in the reference (IQR/1.349, see
+``explain/reference.py``): a one-unit gap means little in a dimension normal
+rows spread widely across and a lot in one they barely vary in, and the
+feature plan's scaling, fitted on the whole (contaminated) group, does not
+capture that.
+
 Contributions are recomputed from X and the detector's stored large-cluster centroids
 rather than read from mutable scorer state, making attribution deterministic and
 independent of call ordering.
@@ -24,6 +31,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from sorethumb_ml.explain.reference import ReferenceSummary, as_summary
+
 if TYPE_CHECKING:
     from sorethumb_ml.detectors.kmeans_distance import KMeansDetector
 
@@ -33,6 +42,8 @@ logger = logging.getLogger(__name__)
 def centroid_attributions(
     detector: KMeansDetector,
     X: np.ndarray,
+    *,
+    reference: np.ndarray | ReferenceSummary | None = None,
 ) -> tuple[np.ndarray, str]:
     """Return per-row attributions derived from centroid distance components.
 
@@ -42,6 +53,10 @@ def centroid_attributions(
         A fitted KMeansDetector (fit() must have been called).
     X:
         Feature matrix, shape (n_rows, n_features).
+    reference:
+        The reference population (matrix or summary). When given, each
+        dimension is divided by its robust spread there; when omitted the
+        distances are in the feature space's own units.
 
     Returns
     -------
@@ -63,4 +78,7 @@ def centroid_attributions(
     # tensor the old broadcast built (~d x larger; OOM on wide/large inputs).
     nearest, _ = _nearest_large_centroid(X, centres)
     contributions = X - centres[nearest]  # signed (x - c_nearest), (n, d)
-    return np.abs(contributions).astype(np.float64), "heuristic"
+    attributions = np.abs(contributions).astype(np.float64)
+    if reference is not None:
+        attributions /= as_summary(reference).scale
+    return attributions, "heuristic"

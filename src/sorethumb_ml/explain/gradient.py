@@ -43,6 +43,7 @@ import numpy as np
 
 from sorethumb_ml.detectors._protocol import score_samples_checked
 from sorethumb_ml.errors import ExplainError, FallbackAttributionWarning
+from sorethumb_ml.explain.reference import ReferenceSummary, as_summary, robust_scale
 
 logger = logging.getLogger(__name__)
 
@@ -54,37 +55,35 @@ _DEFAULT_STEP_FACTOR = 0.01  # step = factor * per-dimension std (of the referen
 _REFERENCE_SAMPLE_CAP = 10_000
 
 
-def _check_reference(X: np.ndarray, reference: np.ndarray, caller: str) -> None:
-    """Fail clearly if *reference* cannot stand in for the population *X* was drawn from."""
-    if reference.ndim != 2 or X.ndim != 2:
+def _check_reference(
+    X: np.ndarray, reference: np.ndarray | ReferenceSummary, caller: str
+) -> ReferenceSummary:
+    """Fail clearly if *reference* cannot stand in for the population *X* was drawn from; return its summary."""
+    if X.ndim != 2 or (isinstance(reference, np.ndarray) and reference.ndim != 2):
         msg = f"{caller}: X and reference must both be 2-D (n_rows, n_features)."
         raise ExplainError(msg)
-    if reference.shape[1] != X.shape[1]:
-        msg = (
-            f"{caller}: reference has {reference.shape[1]} feature(s) but the target rows have "
-            f"{X.shape[1]}; both must be in the detector's feature space."
-        )
-        raise ExplainError(msg)
-    if reference.shape[0] == 0:
+    if isinstance(reference, np.ndarray) and reference.shape[0] == 0:
         msg = (
             f"{caller}: reference has no rows; pass the full or normal population the detector was fitted on."
         )
         raise ExplainError(msg)
+    summary = as_summary(reference)
+    if summary.n_features != X.shape[1]:
+        msg = (
+            f"{caller}: reference has {summary.n_features} feature(s) but the target rows have "
+            f"{X.shape[1]}; both must be in the detector's feature space."
+        )
+        raise ExplainError(msg)
+    return summary
 
 
-def _robust_scale(reference: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Per-dimension (centre, scale) of *reference*: median, and IQR/1.349 -> MAD*1.4826 -> std -> 1."""
-    centre = np.median(reference, axis=0)
-    q75, q25 = np.percentile(reference, [75.0, 25.0], axis=0)
-    scale = (q75 - q25) / 1.349
-    mad = np.median(np.abs(reference - centre), axis=0) * 1.4826
-    scale = np.where(scale > 0, scale, mad)
-    scale = np.where(scale > 0, scale, reference.std(axis=0))
-    scale = np.where(scale > 0, scale, 1.0)
-    return centre, scale
+# Kept under its old name for callers of this module.
+_robust_scale = robust_scale
 
 
-def marginal_deviation_attributions(X: np.ndarray, *, reference: np.ndarray) -> tuple[np.ndarray, str]:
+def marginal_deviation_attributions(
+    X: np.ndarray, *, reference: np.ndarray | ReferenceSummary
+) -> tuple[np.ndarray, str]:
     """Reference-scaled marginal deviation ``|x - median| / scale`` per dimension.
 
     The fallback for a saturating score (see the module docstring): it ignores
@@ -110,15 +109,14 @@ def marginal_deviation_attributions(X: np.ndarray, *, reference: np.ndarray) -> 
         Always "heuristic".
 
     """
-    _check_reference(X, reference, "marginal_deviation_attributions")
-    centre, scale = _robust_scale(reference)
-    return np.abs(X - centre) / scale, "heuristic"
+    summary = _check_reference(X, reference, "marginal_deviation_attributions")
+    return np.abs(X - summary.median) / summary.scale, "heuristic"
 
 
-def _outside_reference_range(X: np.ndarray, reference: np.ndarray) -> np.ndarray:
+def _outside_reference_range(X: np.ndarray, reference: ReferenceSummary) -> np.ndarray:
     """Boolean mask: rows of *X* below the reference minimum or above its maximum in any dimension."""
-    below = np.less(X, reference.min(axis=0))
-    above = np.greater(X, reference.max(axis=0))
+    below = np.less(X, reference.minimum)
+    above = np.greater(X, reference.maximum)
     return np.asarray((below | above).any(axis=1))
 
 
@@ -126,12 +124,32 @@ def gradient_attributions(
     detector: Any,
     X: np.ndarray,
     *,
-    reference: np.ndarray,
+    reference: np.ndarray | ReferenceSummary,
     max_rows: int = 5000,
     step_factor: float = _DEFAULT_STEP_FACTOR,
     saturating: bool = False,
 ) -> tuple[np.ndarray, str]:
     """Compute central finite-difference attributions for each target row in X.
+
+    See ``gradient_attributions_detailed`` for the parameters; this returns
+    only ``(attributions, "heuristic")``.
+    """
+    attributions, _ = gradient_attributions_detailed(
+        detector, X, reference=reference, max_rows=max_rows, step_factor=step_factor, saturating=saturating
+    )
+    return attributions, "heuristic"
+
+
+def gradient_attributions_detailed(
+    detector: Any,
+    X: np.ndarray,
+    *,
+    reference: np.ndarray | ReferenceSummary,
+    max_rows: int = 5000,
+    step_factor: float = _DEFAULT_STEP_FACTOR,
+    saturating: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Finite-difference attributions, plus which rows used the marginal-deviation fallback.
 
     Parameters
     ----------
@@ -162,25 +180,28 @@ def gradient_attributions(
     -------
     attributions:
         Shape (n_rows, n_features). Positive = pushes toward anomaly.
-    tag:
-        Always "heuristic".
+    marginal_rows:
+        Boolean mask, shape (n_rows,): rows attributed with
+        ``marginal_deviation_attributions`` instead of a gradient (always
+        all-False unless *saturating*). The explanation record reports it per
+        row, because a marginal deviation is unsigned and ignores the detector.
 
     """
-    _check_reference(X, reference, "gradient_attributions")
+    summary = _check_reference(X, reference, "gradient_attributions")
     n_rows, n_features = X.shape
     if n_rows > max_rows:
         logger.warning("gradient_attributions: capping %d rows to max_rows=%d.", n_rows, max_rows)
         X = X[:max_rows]
         n_rows = max_rows
 
-    stds = reference.std(axis=0)
+    stds = summary.std
     # When the reference's std is zero (constant column), fall back to a step relative to
     # the feature's own magnitude so the perturbation is never negligibly small.
-    abs_mean = np.abs(reference).mean(axis=0)
+    abs_mean = summary.abs_mean
     fallback = np.where(abs_mean > 0, step_factor * abs_mean, 1e-3)
     steps = np.where(stds > 0, step_factor * stds, fallback)
 
-    use_marginal = _outside_reference_range(X, reference) if saturating else np.zeros(n_rows, dtype=bool)
+    use_marginal = _outside_reference_range(X, summary) if saturating else np.zeros(n_rows, dtype=bool)
     n_gradient_rows = int((~use_marginal).sum())
 
     projected_calls = 2 * n_gradient_rows * n_features
@@ -214,7 +235,7 @@ def gradient_attributions(
         # piecewise-constant score; an all-zero gradient says nothing about it.
         use_marginal |= ~attributions.any(axis=1)
         if use_marginal.any():
-            marginal, _ = marginal_deviation_attributions(X[use_marginal], reference=reference)
+            marginal, _ = marginal_deviation_attributions(X[use_marginal], reference=summary)
             attributions[use_marginal] = marginal
             logger.info(
                 "gradient_attributions: %d of %d row(s) outside the reference range or with a "
@@ -223,18 +244,34 @@ def gradient_attributions(
                 n_rows,
             )
 
-    return attributions, "heuristic"
+    return attributions, use_marginal
 
 
 def kernel_shap_attributions(
     detector: Any,
     X: np.ndarray,
     *,
-    reference: np.ndarray,
+    reference: np.ndarray | ReferenceSummary,
     background_k: int = 50,
     max_rows: int = 5000,
     saturating: bool = False,
 ) -> tuple[np.ndarray, str]:
+    """KernelSHAP attributions; see ``kernel_shap_attributions_detailed``. Returns ``(attributions, "heuristic")``."""
+    attributions, _, _ = kernel_shap_attributions_detailed(
+        detector, X, reference=reference, background_k=background_k, max_rows=max_rows, saturating=saturating
+    )
+    return attributions, "heuristic"
+
+
+def kernel_shap_attributions_detailed(
+    detector: Any,
+    X: np.ndarray,
+    *,
+    reference: np.ndarray | ReferenceSummary,
+    background_k: int = 50,
+    max_rows: int = 5000,
+    saturating: bool = False,
+) -> tuple[np.ndarray, str, np.ndarray]:
     """KernelSHAP attributions for the target rows *X*, against a k-means summary of *reference*.
 
     Much slower than gradient or TreeSHAP; the tag stays "heuristic".
@@ -266,35 +303,68 @@ def kernel_shap_attributions(
         Passed to the gradient fallback used when shap is not installed (see
         ``gradient_attributions``); KernelSHAP itself does not use it.
 
+    Returns
+    -------
+    attributions:
+        Shape (n_rows, n_features). Positive = pushes toward anomaly.
+    method:
+        ``"kernel_shap"``, or ``"finite_difference_gradient"`` after the
+        shap-not-installed fallback.
+    marginal_rows:
+        Rows the gradient fallback attributed by marginal deviation (all-False
+        for KernelSHAP itself).
+
     """
     try:
         import shap  # noqa: PLC0415
     except ImportError as exc:
         warnings.warn(
-            "shap is not installed; KernelSHAP attributions are unavailable. "
-            'Falling back to gradient attributions. Install with: pip install "sorethumb-ml[explain]".',
-            FallbackAttributionWarning,
+            FallbackAttributionWarning(
+                "shap is not installed; KernelSHAP attributions are unavailable. "
+                'Falling back to gradient attributions. Install with: pip install "sorethumb-ml[explain]".',
+                rows_affected=min(len(X), max_rows),
+            ),
             stacklevel=2,
         )
         logger.warning("KernelSHAP unavailable (shap not installed): %s", exc)
-        return gradient_attributions(
+        attributions, marginal_rows = gradient_attributions_detailed(
             detector, X, reference=reference, max_rows=max_rows, saturating=saturating
         )
+        return attributions, "finite_difference_gradient", marginal_rows
 
     _check_reference(X, reference, "kernel_shap_attributions")
     if X.shape[0] > max_rows:
         logger.warning("kernel_shap_attributions: capping %d rows to max_rows=%d.", X.shape[0], max_rows)
         X = X[:max_rows]
 
-    if reference.shape[0] > _REFERENCE_SAMPLE_CAP:
-        picked = np.random.default_rng(0).choice(
-            reference.shape[0], size=_REFERENCE_SAMPLE_CAP, replace=False
-        )
-        reference = reference[np.sort(picked)]
-    background = shap.kmeans(reference, min(background_k, reference.shape[0]))
+    background: Any
+    if isinstance(reference, ReferenceSummary) and len(reference.background):
+        # The summary's k-means centres, weighted by the share of rows each stands for.
+        background = _weighted_background(reference)
+    elif isinstance(reference, ReferenceSummary):
+        msg = "kernel_shap_attributions: the reference summary has no background rows."
+        raise ExplainError(msg)
+    else:
+        ref_rows = np.asarray(reference)
+        if ref_rows.shape[0] > _REFERENCE_SAMPLE_CAP:
+            picked = np.random.default_rng(0).choice(
+                ref_rows.shape[0], size=_REFERENCE_SAMPLE_CAP, replace=False
+            )
+            ref_rows = ref_rows[np.sort(picked)]
+        background = shap.kmeans(ref_rows, min(background_k, ref_rows.shape[0]))
     explainer = shap.KernelExplainer(detector.score_samples, background)
     # nworkers=-1 = use all CPUs
     shap_values = explainer.shap_values(X, nsamples="auto")
     # Negate: SHAP positive = more normal → negate for more anomalous
     attributions = -np.asarray(shap_values, dtype=np.float64)
-    return attributions, "heuristic"
+    return attributions, "kernel_shap", np.zeros(len(attributions), dtype=bool)
+
+
+def _weighted_background(summary: ReferenceSummary) -> Any:
+    """KernelSHAP background from a summary's centres, weighted as ``shap.kmeans`` weights its own."""
+    try:
+        from shap.utils._legacy import DenseData  # noqa: PLC0415  (what shap.kmeans returns)
+    except ImportError:  # pragma: no cover - shap moved it; unweighted centres are still a valid background
+        return summary.background
+    names = [str(n) for n in summary.feature_names]
+    return DenseData(summary.background, names, None, summary.background_weights.copy())

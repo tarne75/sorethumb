@@ -1238,6 +1238,19 @@ def score(
 # ---------------------------------------------------------------------------
 
 
+def _explain_kind_cell(row: dict[str, Any]) -> str:
+    """Return the `anomalies` table's "kind" cell: the attribution kind, or why a row has none."""
+    status = row.get("explain_status")
+    if status == "unavailable":
+        return f"unavailable: {row.get('explain_issue')}"
+    if status == "partial":
+        return f"{row.get('attribution_kind')} (partial)"
+    kind = row.get("attribution_kind")
+    if kind is None and "attribution_kind" not in row:
+        return "—"  # explanations disabled, or the explanation stage failed: see `sorethumb show`
+    return str(kind or "unexplained")
+
+
 def _explain_cell(group_row: dict[str, Any]) -> str:
     """Summarise a run_group row's explanation outcome for the `show` table."""
     status = group_row.get("explain_status")
@@ -1967,6 +1980,20 @@ def show(
         )
     console.print(table)
 
+    from sorethumb_ml.errors import warning_records_from_json  # noqa: PLC0415
+
+    group_warnings = [
+        (str(g.get("group_label", "")), rec)
+        for g in groups
+        for rec in warning_records_from_json(g.get("warnings_json"))
+    ]
+    if group_warnings:
+        console.print("[yellow bold]Warnings:[/yellow bold]")
+        for label, rec in group_warnings:
+            console.print(
+                f"  [yellow]{_e(label)}  \\[{_e(rec.get('code'))}] {_e(rec.get('message'))}[/yellow]"
+            )
+
 
 # ---------------------------------------------------------------------------
 # sorethumb anomalies
@@ -1983,13 +2010,24 @@ def anomalies(
     log_level: _LOG_LEVEL_OPT = None,
     top: Annotated[int, typer.Option("--top", help="Show only the top-N anomalies by rank.")] = 0,
     reasons: Annotated[int, typer.Option("--reasons", help="Number of reason columns to display.")] = 3,
+    detail: Annotated[
+        bool,
+        typer.Option(
+            "--detail",
+            help=(
+                "Also show the record behind each reason: method per detector, signed contribution, "
+                "reference value and direction, transformed features, approximation flags."
+            ),
+        ),
+    ] = False,
     json_output: _JSON_OPT = False,
 ) -> None:
-    """Print flagged rows with their SHAP-derived reasons for a completed run.
+    """Print flagged rows with their attribution-derived reasons for a completed run.
 
     Reads results from the workspace Parquet files written by ``sorethumb run``.
     Rows are ordered by rank (1 = most anomalous). Use --top to limit output and
-    --reasons to control how many contributing features are shown per row.
+    --reasons to control how many contributing features are shown per row;
+    --detail adds the record behind each reason (``attributions.parquet``).
     """
     import polars as pl  # noqa: PLC0415
 
@@ -2008,14 +2046,19 @@ def anomalies(
             if not groups:
                 _fail(json_output, f"Run not found or has no groups: {run_id}", ExitCode.NOT_FOUND)
 
-            from sorethumb_ml.store.results import read_results  # noqa: PLC0415
+            from sorethumb_ml.store.results import read_attributions, read_results  # noqa: PLC0415
 
             frames: list[pl.DataFrame] = []
+            detail_frames: list[pl.DataFrame] = []
             for g in groups:
+                label = str(g.get("group_label", ""))
                 # Detection rows with their explanations joined on (see store/results.py).
                 df = read_results(ws, run_id, g["group_key"])
                 if df is not None and len(df) > 0:
-                    frames.append(df.with_columns(pl.lit(str(g.get("group_label", ""))).alias("_group")))
+                    frames.append(df.with_columns(pl.lit(label).alias("_group")))
+                records = read_attributions(ws, run_id, g["group_key"]) if detail else None
+                if records is not None and len(records) > 0:
+                    detail_frames.append(records.with_columns(pl.lit(label).alias("_group")))
     except SorethumbError as exc:
         _fail(json_output, str(exc), _classify_error(exc))
 
@@ -2032,14 +2075,29 @@ def anomalies(
 
     reason_cols = [f"reason_{i + 1}" for i in range(reasons) if f"reason_{i + 1}" in all_rows.columns]
     multi_group = all_rows["_group"].n_unique() > 1
+    details = _reason_details(detail_frames, reasons) if detail else {}
 
     if json_output:
-        display = ["_group", "rank", "composite_score", "attribution_kind", *reason_cols]
+        display = [
+            "_group",
+            "rank",
+            "composite_score",
+            "explain_status",
+            "explain_issue",
+            "attribution_kind",
+            *reason_cols,
+        ]
+        if detail:
+            display.insert(1, "row_id")
         present = [c for c in display if c in all_rows.columns]
         # Re-encoded through json.dumps (ensure_ascii) like every other --json
         # output: polars writes non-ASCII as raw characters, which a narrow
         # output encoding (PYTHONIOENCODING=cp1252) would turn into "?".
-        typer.echo(json.dumps(json.loads(all_rows.select(present).rename({"_group": "group"}).write_json())))
+        payload = json.loads(all_rows.select(present).rename({"_group": "group"}).write_json())
+        if detail:
+            for item in payload:
+                item["reason_detail"] = details.get((item["group"], item.get("row_id")), [])
+        typer.echo(json.dumps(payload))
         return
 
     table = Table(
@@ -2061,7 +2119,7 @@ def anomalies(
         cells: list[str] = [
             str(row.get("rank", "")),
             f"{score_val:.4f}",
-            str(row.get("attribution_kind", "") or ""),
+            _explain_kind_cell(row),
         ]
         if multi_group:
             cells.append(str(row.get("_group", "")))
@@ -2070,9 +2128,56 @@ def anomalies(
         _add_row(table, *cells)
 
     console.print(table)
+    if detail:
+        console.print(_reason_detail_table(all_rows, details, multi_group=multi_group))
     console.print(
         f"  [dim]{_e(len(all_rows))} anomaly row(s)   run={_e(run_id)}   workspace={_e(ws_path)}[/dim]"
     )
+
+
+def _reason_details(frames: list[Any], reasons: int) -> dict[tuple[str, Any], list[dict[str, Any]]]:
+    """Map ``(group label, row_id)`` to its first *reasons* attribution records, in rank order."""
+    import polars as pl  # noqa: PLC0415
+
+    out: dict[tuple[str, Any], list[dict[str, Any]]] = {}
+    if not frames:
+        return out
+    records = pl.concat(frames, how="diagonal").filter(pl.col("reason_rank") <= reasons)
+    for rec in records.sort(["_group", "row_id", "reason_rank"]).iter_rows(named=True):
+        key = (rec.pop("_group"), rec["row_id"])
+        out.setdefault(key, []).append(rec)
+    return out
+
+
+def _reason_detail_table(
+    all_rows: Any, details: dict[tuple[str, Any], list[dict[str, Any]]], *, multi_group: bool
+) -> Table:
+    """One line per (anomaly, reason): the record behind each ``reason_<k>``."""
+    table = Table(title="Reason detail", show_header=True, header_style="bold")
+    table.add_column("#", justify="right", style="bold cyan", no_wrap=True)
+    if multi_group:
+        table.add_column("group")
+    for name in ("reason", "value", "reference", "direction", "signed", "methods", "flags"):
+        table.add_column(name, overflow="fold")
+    for row in all_rows.iter_rows(named=True):
+        for rec in details.get((row.get("_group"), row.get("row_id")), []):
+            methods = ", ".join(
+                f"{m['detector']}:{m['method']} w={m['weight']:.2f}" for m in rec.get("methods") or []
+            )
+            cells = [str(row.get("rank", ""))]
+            if multi_group:
+                cells.append(str(row.get("_group", "")))
+            cells += [
+                f"{rec['reason_rank']}. {rec['original_field']}",
+                str(rec.get("raw_value")),
+                str(rec.get("reference_value") if rec.get("reference_value") is not None else "—"),
+                str(rec.get("direction") or "—"),
+                f"{rec['signed_contribution']:+.4g}",
+                methods or "—",
+                ", ".join(rec.get("approximation_flags") or []) or "—",
+            ]
+            _add_row(table, *cells)
+    return table
 
 
 # ---------------------------------------------------------------------------
@@ -2768,7 +2873,11 @@ def _print_run_summary(result: RunResult) -> None:
                 f"    {_e(g.group_label):30s}  {g.elapsed_seconds:6.1f}s  anomalies={_e(g.n_anomalies)}{flag}"
             )
 
-    if result.warnings_issued:
+    if result.warning_records:
+        console.print("\n  [yellow bold]Warnings:[/yellow bold]")
+        for rec in result.warning_records:
+            console.print(f"    [yellow]\\[{_e(rec['code'])}] {_e(rec['message'])}[/yellow]")
+    elif result.warnings_issued:
         console.print("\n  [yellow bold]Warnings:[/yellow bold]")
         for msg in result.warnings_issued:
             console.print(f"    [yellow]{_e(msg)}[/yellow]")
@@ -2813,6 +2922,7 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
         "started_at": result.started_at,
         "finished_at": result.finished_at,
         "warnings_issued": result.warnings_issued,
+        "warnings": result.warning_records,
         "groups": [
             {
                 "group_key": g.group_key,
@@ -2825,6 +2935,7 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
                 "error": g.error,
                 "elapsed_seconds": g.elapsed_seconds,
                 "warnings_issued": g.warnings_issued,
+                "warnings": g.warning_records,
                 "explain_status": g.explain_status,
                 "n_explained": g.n_explained,
                 "n_explain_unavailable": g.n_explain_unavailable,

@@ -21,10 +21,23 @@ Explanation never changes detection. Each group runs in two stages:
    Detection always runs on the feature matrix at `features.dtype`, whatever the
    explain settings.
 2. **Explanation** then explains those flagged rows and writes
-   `explanations.parquet` (`row_id`, `attribution_kind`, `reason_<k>`). It works
-   on a read-only view of the flagged set, in its own error boundary.
+   `explanations.parquet`, one row per flagged row. It works on a read-only view
+   of the flagged set, in its own error boundary. The file's columns:
 
-Readers (`sorethumb anomalies`, the report) join the two files by `row_id`.
+   | column | meaning |
+   | --- | --- |
+   | `row_id` | the flagged row |
+   | `explain_status` | `ok`; `partial` (some detector's share of the score is unexplained for this row: no method, its explainer failed, the row is beyond its `explain.max_rows`, or its attribution for the row was zero); or `unavailable` (no explanation for this row) |
+   | `explain_issue` | null when `ok`; otherwise `detectors_unexplained:<names>`, `beyond_max_rows`, `no_attribution_signal`, `no_reference` or `pca_backprojection_failed` |
+   | `attribution_kind` | `exact`, `model_specific`, `heuristic`, or `unavailable` |
+   | `explainer_version` | the explanation logic that produced the row (`explain@2`); see "The explanation record" |
+   | `reason_<k>` | `field=value`, most important first. Null for an unavailable row: these columns hold reasons only |
+
+   Alongside it, `attributions.parquet` holds the record behind each reason;
+   see "The explanation record" below.
+
+Readers (`sorethumb anomalies`, the report) join `anomalies.parquet` and
+`explanations.parquet` by `row_id`.
 
 **Status.** Each group records an `explain_status`:
 
@@ -39,6 +52,25 @@ Readers (`sorethumb anomalies`, the report) join the two files by `row_id`.
 It also records `n_explained` and `n_explain_unavailable`. All of these appear in
 `run --json` (per group), on the group row in the workspace and in `sorethumb show`.
 
+**Every warning is a structured record.** Each one carries a stable `code`, its
+`stage` (the part before the dot), the `message`, the `group`, and, where they
+apply, the `detector` and `rows_affected`. Records are stored on the group row
+(`warnings_json`) and appear in `run --json` (`warnings`, top level and per group),
+the run summary, `sorethumb show` and the report. The explanation codes:
+
+| code | when |
+| --- | --- |
+| `explain.stage_failed` | the explanation stage raised; no flagged row in the group is explained |
+| `explain.no_source` | no attribution source explained any flagged row |
+| `explain.backend_failed` | one detector's explainer raised; its share of the score is unexplained (rows `partial`) |
+| `explain.detector_unsupported` | a detector has no vetted attribution method; its share is unexplained (rows `partial`) |
+| `explain.fallback_used` | TreeSHAP or KernelSHAP was unavailable or failed; a heuristic method was used instead |
+| `explain.rows_beyond_max_rows` | some flagged rows are beyond `explain.max_rows` for every source that covers them (rows `unavailable`) |
+| `explain.no_signal` | every source's attribution for some flagged rows was zero, so nothing distinguishes their fields (rows `unavailable`, issue `no_attribution_signal`) |
+| `explain.pca_backprojection_failed` | PCA-space attributions could not be mapped to original columns (all rows `unavailable`) |
+| `explain.reference_fallback` | fewer than 10 rows no detector flags, so the reference is the less anomalous half of the unflagged rows; or a `score --from-run` whose fitting run saved no usable reference, so it explains against its own rows |
+| `explain.reference_unavailable` | no population normal enough to explain against (see "The reference population"); the group's flagged rows are `unavailable` (`no_reference`) |
+
 **Failures are reported, never hidden.**
 - An explanation-stage failure raises `ExplanationFailedWarning`.
 - A single detector's explainer failing raises `AttributionBackendWarning`.
@@ -46,6 +78,97 @@ It also records `n_explained` and `n_explain_unavailable`. All of these appear i
 - A `failed` explanation stage makes the run exit `partial` (code 4).
 - Under `run.strict`, any explanation warning makes the run exit `partial`; it no
   longer fails the group, which would have discarded its detection output.
+
+---
+
+## The explanation record
+
+`reason_<k>` is a label. `attributions.parquet` (one row per explained flagged row
+and reason; read it with `store.results.read_attributions`, or
+`sorethumb anomalies --detail`) records how each one was produced:
+
+| column | meaning |
+| --- | --- |
+| `row_id`, `reason_rank` | the flagged row and the reason's position (`reason_rank = k` is `reason_<k>`) |
+| `original_field` | the input column |
+| `raw_value` | the row's value, as text (null when missing) |
+| `reference_value` | the reference population's typical value: median for numbers and dates, most common value otherwise (null when there is none) |
+| `direction` | where the row sits against it: `above`, `below`, `same`, `different` (categorical) or `missing` |
+| `signed_contribution` | the blended attribution summed over the field's transformed features. Positive pushes the row toward anomaly, negative toward normal |
+| `contribution_magnitude` | the sum of absolute values over those features. Reasons are ranked by this, so a field whose features pull both ways still ranks by how much it moved the score |
+| `attribution_kind` | the blended kind, as in `explanations.parquet` |
+| `methods` | per detector that informs the row: `detector`, `method`, `attribution_kind`, `weight` (its weight in this row's blend), `signed_contribution` (in the units it enters the blend). `signed_contribution` above is the weight-sum of these |
+| `transformed_features` | up to five derived features behind the field (scaled numerics, one-hot dummies, date parts), largest absolute contribution first, each with its signed contribution |
+| `approximation_flags` | every caveat that applies to this row (table below) |
+| `explainer_version` | `explain@2`. It changes whenever a change alters what an explanation means, so explanations from different logic are never compared as if alike. `explain@1` explained against all unflagged rows (or the whole group) with path-dependent TreeSHAP and unscaled centroid distances |
+| `reference_id` | the reference population: `consensus_normal` or `lower_half` (see "The reference population"), suffixed `:<run_id>` when a `score --from-run` used its fitting run's |
+
+Method names: `tree_shap`, `ecod_decomposition`, `hbos_decomposition`,
+`centroid_distance`, `finite_difference_gradient`, `kernel_shap`.
+
+Approximation flags (`<det>` is a detector name):
+
+| flag | meaning |
+| --- | --- |
+| `treeshap_path_length` | TreeSHAP decomposes the forest's expected path length, of which the score is a monotone, nonlinear transform: the shares rank the fields but do not sum to the score |
+| `treeshap_additivity_unchecked` | shap's additivity check failed, so the TreeSHAP values were computed without it |
+| `kernel_shap_sampled` | KernelSHAP estimated the values from sampled coalitions against a k-means background |
+| `unsigned_method:<det>` | the method (centroid distance) reports how far each dimension is from the centroid, not which way it pushes the score; its share is never negative |
+| `marginal_deviation_fallback` | the score was flat around the row, so it was attributed by its reference-scaled distance from the median per dimension: unsigned, and blind to the detector |
+| `fallback_used:<det>` | the detector's preferred method (TreeSHAP, KernelSHAP) was unavailable or failed; a heuristic ran instead |
+| `not_covered_by:<det>` | the row is beyond the detector's `explain.max_rows`; it contributes nothing to this row |
+| `no_signal_from:<det>` | the detector's attribution for the row was zero; it contributes nothing to it |
+| `not_explained:<det>` | the detector has no method or its explainer failed; its share of the score is unexplained |
+| `pca_back_projected` | attributions were mapped back from PCA components through absolute loadings, which do not carry a loading's sign |
+| `reference_lower_half` | fewer than 10 rows no detector flags, so the reference is the less anomalous half of the unflagged rows |
+
+`not_covered_by`, `no_signal_from` and `not_explained` are the per-row form of
+`explain_status = partial`: a row carrying any of them is `partial`, and
+`explain_issue` names those detectors.
+
+`raw_value` and `reference_value` are on the original column's scale. The
+signed contributions are attribution units, which differ by method; compare
+them within a row, not across runs with different detectors.
+
+---
+
+## The reference population
+
+Explanations compare each flagged row with "normal". Every method needs that
+population: gradient step sizes and the marginal-deviation fallback use its
+per-dimension spread, TreeSHAP and KernelSHAP use it as their background,
+centroid distances are scaled by it, and the explanation record compares each
+raw value with its typical value. Explaining an anomaly against a population
+that contains anomalies measures its distance from other anomalies, so the
+reference is chosen as follows and is never the whole group:
+
+1. **`consensus_normal`**: rows no detector flags, neither the ensemble nor
+   any single detector's own boundary. Used when at least 10 rows qualify.
+2. **`lower_half`**: otherwise, the unflagged rows whose composite score is at
+   or below the group's median (warning `explain.reference_fallback`, flag
+   `reference_lower_half`).
+3. Otherwise there is no reference. The group's flagged rows are reported
+   `unavailable` with issue `no_reference` (warning
+   `explain.reference_unavailable`), not explained against a population made
+   of anomalies.
+
+The chosen rows are summarised: per-dimension median, robust scale (IQR/1.349,
+then scaled MAD, then standard deviation), standard deviation, mean absolute
+value and range; a background of at most 50 k-means centres with the share of
+rows each stands for; and each original field's typical raw value (median for
+numbers and dates, most common value otherwise). A fitting run saves the
+summary as `models/<run>/<group>/reference.json`, even for a group with nothing
+flagged. It is plain JSON and is never unpickled.
+
+**`score --from-run`** explains new rows against the *fitting run's* summary,
+the same "normal" the models were fitted on, rather than against whatever else
+is in the new batch (`reference_id` gains the suffix `:<fitting run>`). If the
+fitting run saved none (explanations were off, or it predates `explain@2`) or
+its summary cannot be read, the new rows' own reference is used instead, with
+an `explain.reference_fallback` warning that says why.
+
+The reference is still chosen by an unsupervised decision, so it is only
+*mostly* normal: an anomaly that no detector flags stays in it.
 
 ---
 
@@ -87,25 +210,29 @@ below.
 
 ### TreeSHAP (Isolation Forest only)
 
-**Method:** SHAP values computed by path enumeration over all trees in the
-Isolation Forest ensemble, via `shap.TreeExplainer` with
-`check_additivity=False`.
+**Method:** interventional TreeSHAP over all trees in the Isolation Forest
+ensemble (`shap.TreeExplainer` with `feature_perturbation="interventional"`),
+against a background drawn from the reference population: its k-means centres
+(at most 50), each repeated in proportion to the share of reference rows it
+stands for, about 100 rows in all.
 
-**What it measures:** Each feature's contribution to the row's path length
-relative to the expected path length across the training set. A short path
-means the record was isolated early, which is what anomaly means for IF.
+**What it measures:** each feature's contribution to the row's expected path
+length, relative to the *reference rows* having that feature's value. A short
+path means the record was isolated early, which is what anomaly means for IF.
+The earlier path-dependent form (no background) weighed each branch by the
+share of training rows that took it, anomalies included; the interventional
+form asks the question an anomaly explanation needs: what changes when normal
+rows' values are swapped in.
 
-**Note:** this is *not* tagged `exact`, for two separate reasons.
-`check_additivity=False` is required because the path-length trick breaks the
-strict SHAP additivity assumption (the sum of SHAP values does not equal the
-model output in the usual sense), so additivity is unverified at runtime. And
-even where the decomposition holds exactly, what it decomposes is path
-length — IsolationForest's score is a nonlinear transform of that, so an
-exact accounting of path length is still not an exact accounting of the score
-itself. `model_specific` reflects that this uses the fitted trees' actual
-structure (more principled than a generic gradient/centroid heuristic)
-without claiming the guarantee `exact` would imply. The values are still
-directionally correct and comparable across features within a row.
+**Note:** shap's additivity check runs (the values plus the base value must
+sum to the forest's output); if it ever fails, the values are recomputed
+without it and flagged `treeshap_additivity_unchecked`. The result is still
+*not* tagged `exact`: what it decomposes is path length, and
+IsolationForest's score is a monotone, nonlinear transform of that, so an exact
+accounting of path length is not an exact accounting of the score itself
+(flag `treeshap_path_length`). `model_specific` reflects that this uses the
+fitted trees' actual structure without claiming the guarantee `exact` would
+imply. The values rank features correctly within a row.
 
 **Label in output:** `model_specific`.
 
@@ -124,7 +251,9 @@ with the out-of-range fallback switched on, and the label becomes `heuristic`.
 its nearest *large-cluster* centroid (the same CBLOF reference set the detector
 scores against — small clusters are excluded). The contribution of feature *i*
 is the absolute difference between the row's value and the centroid's value on
-feature *i*, scaled by that feature's importance in the distance measure.
+feature *i*, divided by feature *i*'s robust spread (IQR/1.349) in the reference
+population: a gap of one unit means little in a dimension normal rows spread
+widely across, and a lot in one they barely vary in.
 
 **What it measures:** Which features are most responsible for the row being far
 from any large cluster's centre. This is not a Shapley value — it does not have the
@@ -223,9 +352,11 @@ back to their source column. A row that triggers `cat__A = 1, cat__B = 0` does
 not produce two separate explanation entries for `cat__A` and `cat__B`; it
 produces one entry for `cat` with the combined attribution weight.
 
-`top_n_reasons` then returns the `explain.top_n` features with the highest
-absolute attribution weights. These are the features that most distinguish the
-anomalous row from the rest of the population.
+Two sums are kept per original field. The *magnitude* adds absolute values, so
+dummies cannot cancel; reasons are ranked by it, and the `explain.top_n` largest
+become `reason_<k>`. The *signed* sum keeps direction (positive toward anomaly),
+so `cat__A = +0.4` and `cat__B = -0.4` give magnitude 0.8 and signed 0. Both are
+in the explanation record, with the transformed features behind them.
 
 ---
 

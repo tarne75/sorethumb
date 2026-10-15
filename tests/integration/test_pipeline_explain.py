@@ -132,9 +132,14 @@ def test_rows_beyond_max_rows_cap_are_marked_unavailable_not_fabricated(tmp_path
         f"rows beyond explain.max_rows must be marked unavailable; got kinds={kinds}"
     )
 
-    unavailable_reasons = df.filter(pl.col("attribution_kind") == "unavailable")["reason_1"].to_list()
-    assert unavailable_reasons
-    assert all(r is not None and "unavailable" in r for r in unavailable_reasons)
+    unavailable = df.filter(pl.col("attribution_kind") == "unavailable")
+    assert unavailable.height
+    # Stated in the status columns; the reason columns hold reasons only.
+    assert (unavailable["explain_status"] == "unavailable").all()
+    assert (unavailable["explain_issue"] == "beyond_max_rows").all()
+    assert unavailable["reason_1"].is_null().all()
+    (warning,) = [r for r in result.groups[0].warning_records if r["code"] == "explain.rows_beyond_max_rows"]
+    assert warning["rows_affected"] == unavailable.height
 
     explained_reasons = df.filter(pl.col("attribution_kind") != "unavailable")["reason_1"].to_list()
     assert explained_reasons
@@ -212,7 +217,10 @@ def test_pca_back_projection_failure_marks_all_flagged_rows_unavailable(
     kinds = df_anomalies["attribution_kind"].to_list()
     reasons = df_anomalies["reason_1"].to_list()
     assert all(k == "unavailable" for k in kinds), f"expected every flagged row unavailable; got {kinds}"
-    assert all(r == "unavailable (PCA back-projection failed)" for r in reasons), reasons
+    assert all(r is None for r in reasons), reasons
+    assert (df_anomalies["explain_issue"] == "pca_backprojection_failed").all()
+    assert any(r["code"] == "explain.pca_backprojection_failed" for r in result.groups[0].warning_records)
+    assert result.groups[0].explain_status == "failed"
 
 
 def test_ecod_hbos_get_exact_native_attributions(tmp_path: Path) -> None:
@@ -274,7 +282,7 @@ def test_dropped_detector_as_sole_would_be_producer_yields_no_attribution(
     def _raise(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("forced attribution failure")
 
-    monkeypatch.setattr(shap_tree_mod, "tree_shap_attributions", _raise)
+    monkeypatch.setattr(shap_tree_mod, "tree_shap_attributions_detailed", _raise)
     monkeypatch.setattr(native_mod, "ecod_attributions", _raise)
 
     csv = tmp_path / "data.csv"

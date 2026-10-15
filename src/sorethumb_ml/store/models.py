@@ -10,6 +10,11 @@ by detector so several detectors can share a group directory:
 The run's fitted FeaturePlan is written once per run at models/<run_id>/plan.json
 (save_plan / load_plan) for score-forward reuse.
 
+Each group's explanation reference summary (see ``explain/reference.py``) is
+written at models/<run_id>/<group_key>/reference.json (save_reference_summary /
+load_reference_summary): plain JSON, so a later score-forward explains new rows
+against the population the models were fitted on without unpickling anything.
+
 Every write is atomic (sibling temp file + fsync + os.replace, see
 sorethumb_ml._atomic), so a crash mid write never leaves a half-written model
 file for a later score-forward run.
@@ -44,6 +49,7 @@ from sorethumb_ml.errors import (
     NotFoundError,
     StoreError,
 )
+from sorethumb_ml.explain.reference import REFERENCE_FILENAME, ReferenceSummary
 from sorethumb_ml.scoring.calibrate import Calibrator
 from sorethumb_ml.store.workspace import Workspace
 
@@ -448,3 +454,33 @@ def score_with_existing(
         "missing": missing,
         "drifted": drifted,
     }
+
+
+def save_reference_summary(
+    workspace: Workspace, run_id: str, group_key: str, summary: ReferenceSummary
+) -> Path:
+    """Write a group's explanation reference summary next to its models and register it."""
+    path = workspace.models_dir(run_id, group_key) / REFERENCE_FILENAME
+    atomic_write_text(path, summary.to_json())
+    workspace.store.register_artifact(
+        artifact_id=f"{run_id}_{group_key}_reference",
+        path=str(path),
+        kind="reference",
+        byte_size=path.stat().st_size,
+        regenerable=False,
+        run_id=run_id,
+    )
+    return path
+
+
+def load_reference_summary(
+    workspace: Workspace, run_id: str, group_key: str
+) -> tuple[ReferenceSummary | None, str | None]:
+    """Load a group's reference summary: ``(summary, None)``, or ``(None, why not)`` when absent or unreadable."""
+    path = workspace.root / "models" / run_id / group_key / REFERENCE_FILENAME
+    if not path.is_file():
+        return None, "none was saved"
+    try:
+        return ReferenceSummary.from_json(path.read_text(encoding="utf-8"), source_run_id=run_id), None
+    except (OSError, ValueError) as exc:
+        return None, f"unreadable: {exc}"

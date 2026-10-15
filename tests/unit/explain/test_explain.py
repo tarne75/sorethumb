@@ -311,7 +311,7 @@ def test_tree_shap_fallback_on_single_node(monkeypatch):
     import shap as _shap_mod  # ensure shap is loaded into sys.modules first
 
     class _BadExplainer:
-        def __init__(self, model):
+        def __init__(self, model, **_kw):
             pass
 
         def shap_values(self, X, **kwargs):
