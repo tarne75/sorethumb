@@ -252,16 +252,32 @@ resolves itself rather than delegating to polars: an ambiguous sample (every day
 and month ≤ 12) is never guessed, left as text with a warning naming
 `columns.datetime_formats` as the fix.
 
-## `auto` contamination — median of natural flag rates
+## `auto` contamination — each detector's own boundary
 
-When `scoring.contamination = "auto"`, the review budget is derived as the median
-of each enabled detector's natural flag rate (the fraction of rows the detector's
-own boundary flags as anomalous). This is a heuristic — it does not produce a
-calibrated estimate of the true anomaly rate, and the per-detector rates it takes
-the median of routinely disagree by 2–3×. The run summary and `sorethumb run --json`
-report each detector's realised rate so the resulting flag count is read as a
-shortlist size, not a measurement. Validation against labelled benchmark datasets
-is ongoing; see the benchmark table in the README.
+`scoring.contamination = "auto"` (the default) means no review budget is set. Each
+detector flags by its own heuristic boundary (the OneClassSVM zero-hyperplane, the
+KMeans Tukey fence, the IsolationForest offset). What happens next depends on the
+policy:
+
+- **`intersection` (the default):** a row is flagged only if every detector's
+  boundary flags it. No median is taken. The count is whatever the boundaries agree
+  on.
+- **`union`:** a row is flagged if any detector's boundary flags it.
+- **`composite`:** the combined score is cut at a rate taken as the median of the
+  detectors' natural flag rates.
+
+None of these estimates the true anomaly rate, and the per-detector rates routinely
+disagree by 2–3×. The run summary and `sorethumb run --json` report each detector's
+realised rate so the flag count is read as a shortlist size, not a measurement.
+
+Measured against labelled data (see
+[ensemble-policy.md](ensemble-policy.md#where-things-stand-2026-10-15)):
+
+- **The default** (`intersection` at `"auto"`) flagged between 0.18x and 8.4x a
+  review budget's worth of rows on three real datasets. Its flags were 5x-41x the
+  base rate in precision.
+- **A composite at `"auto"`** flagged 2x-17x a review budget, and lost to the default
+  in pre-registered comparisons. Pair a composite with a numeric `contamination`.
 
 ## Full-pipeline scenario benchmark — training contamination masks rather than swamps
 
@@ -283,21 +299,27 @@ seed -> same draw, differing only by the injected contamination), both
 scored against `swamping_at_risk_holdout` -- genuinely normal points
 *selected* (not fabricated) as the tail nearest the contamination region,
 the population actually susceptible to the claimed effect. Measured this
-way, for the shipped default ensemble (`combination="intersection"`), the
+way, for the default *policy* (`combination="intersection"`), the
 contaminated fit's `flag_false_positive_rate` on these at-risk points is
-consistently *lower* than the clean fit's (~0.010 vs. ~0.011, stable across
-20 seeds) -- the opposite of the original premise. The mechanism is
-straightforward once measured: `intersection`/`union` combination modes
-flag by each detector's own `natural_flag` boundary, a percentile of that
-detector's *own training-score distribution* (see `scoring/combine.py`). The
-injected contamination sits at the extreme tail of the training data by
-construction, so it inflates the top of that training distribution and
-widens the resulting natural-flag threshold -- the detector becomes
-*less*, not more, willing to flag a moderately-extreme point. This is
-**masking** (contamination causing genuine anomalies/near-anomalies to
-look more normal by comparison), a well-documented but *different*
-phenomenon from swamping (normal points looking more anomalous by
-comparison) -- the two are often confused in casual usage of the terms.
+consistently *lower* than the clean fit's (~0.010 vs. ~0.011 on a 2026-09-29
+reference run of 20 seeds; 0.009 vs. 0.011 in the current 10-seed policy
+matrix) -- the opposite of the original premise. Note what this benchmark runs:
+like every pipeline-benchmark ablation, it sets `scoring.contamination` to the
+scenario's review budget, so each detector flags a fixed share of the
+holdout. It does not use the shipped `"auto"`, where each detector flags by its
+own boundary.
+
+An earlier version of this note explained the result through the
+`"auto"` mechanism. Under `"auto"`, the injected contamination would sit at the
+extreme tail of the training data and widen each detector's natural-flag
+threshold, making it *less* willing to flag a moderately-extreme point. That is
+**masking**: contamination making near-anomalies look more normal by comparison,
+a different phenomenon from swamping, though the two are often confused. That
+explanation is plausible for `"auto"`, but this benchmark never runs `"auto"`, so
+it is not what was measured. At a fixed budget, the lower rate means the detectors'
+top-k sets *agree* on fewer at-risk rows after a contaminated fit. Contamination
+shifts each detector's ranking of those rows differently. The measured direction is
+the finding; its mechanism at `"auto"` is untested.
 `composite` mode and any ablation with only one detector select a fixed
 top-`k` fraction of the holdout by score regardless of fit, which makes
 `flag_false_positive_rate` uninformative there by construction (`k` is
@@ -346,7 +368,9 @@ random, and both are floor-tested under the default ablation (see
 
 The *flag* decision itself (an AND of all three detectors' independent
 votes, deliberately unchanged by the ranking fix) is a separate matter and
-remains a genuine, current limitation on these two scenarios: intersection's
+remains a genuine, current limitation on these two scenarios. It was measured,
+like every pipeline-benchmark flag figure, with each detector at the scenario's
+review budget, not at the shipped `"auto"`: intersection's
 conservative, unanimous-agreement requirement still produces very few actual
 flags there, and those it does produce are not reliably true positives
 (`flag_precision`/`flag_recall` measured at 0.0 on both scenarios even

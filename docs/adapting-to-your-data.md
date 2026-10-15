@@ -135,12 +135,20 @@ each detector fall back to its own heuristic boundary; the flagged count is
 whatever those boundaries produce, and the run output prints each detector's
 realised rate so you can see they disagree.
 
-Set it explicitly to a fixed shortlist size — e.g. "I have capacity to review
-the top 2% each day":
+Set it explicitly to a fixed shortlist size, e.g. "I have capacity to review
+the top 2% each day". To get exactly that share, use a composite policy as well:
+under the default `intersection`, each detector flags its top 2% and only rows all
+of them flag are kept, usually far fewer.
 ```toml
 [scoring]
-contamination = 0.02  # flag the top 2% of the ranking for review
+contamination = 0.02      # flag the top 2% of the ranking for review
+combination   = "composite"
+weighting     = "agreement"  # composite-agreement@1: the evidenced choice at a fixed budget
 ```
+Never pair a composite with `"auto"`; see
+[ensemble-policy.md](ensemble-policy.md#where-things-stand-2026-10-15). A run with
+this non-default policy warns until `sorethumb backtest` has produced evidence for it
+on your data.
 
 A labelled validation set can tell you which budget gives acceptable
 precision/recall; `contamination` itself never measures prevalence.

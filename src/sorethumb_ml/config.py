@@ -399,10 +399,13 @@ class ScoringConfig(BaseModel):
     contamination: str | float = Field(
         "auto",
         description=(
-            "Review-budget knob: the fraction of rows to flag. NOT an estimate of "
-            "how many anomalies the data contains -- it sizes the shortlist you are "
-            "willing to review. A float in (0, 0.5] makes each detector flag exactly "
-            "that fraction and sets the OneClassSVM nu to match. 'auto' lets each "
+            "Review-budget knob. NOT an estimate of how many anomalies the data "
+            "contains -- it sizes the shortlist you are willing to review. A float in "
+            "(0, 0.5] makes each detector flag exactly that fraction and sets the "
+            "OneClassSVM nu to match. How many rows the run then flags depends on "
+            "scoring.combination: exactly that fraction for 'composite'; only rows every "
+            "detector flags for 'intersection' (the default -- usually far fewer); rows "
+            "any detector flags for 'union' (usually more). 'auto' lets each "
             "detector use its own heuristic boundary (OCSVM zero-hyperplane, KMeans "
             "Tukey fence, IsolationForest offset); these rates differ per detector and "
             "the run output reports the realised rate of each. Pair a composite combination "
@@ -415,10 +418,12 @@ class ScoringConfig(BaseModel):
         "intersection",
         description=(
             "'composite' averages normalised detector scores and applies a single global threshold. "
-            "'intersection' thresholds each detector independently then flags rows where ALL detectors agree (high precision). "
-            "'union' thresholds each detector independently then flags rows where ANY detector agrees (high recall). "
+            "'intersection' thresholds each detector independently then flags rows where ALL detectors agree. "
+            "'union' thresholds each detector independently then flags rows where ANY detector agrees. "
             "The default, 'intersection', is a deliberate design decision that accepts known limitations "
-            "(it can flag few or no rows on local, varying-density and contextual anomalies); choose "
+            "(it can flag few or no rows on local, varying-density and contextual anomalies, and at "
+            "'auto' you do not control how many rows it flags); with a fixed review budget the "
+            "evidenced choice is composite with weighting 'agreement' and a numeric contamination. Choose "
             "another policy on measured evidence: `sorethumb backtest` measures it on your own labelled "
             "data, and a run with a non-default policy that has no such evidence warns (run.strict "
             "refuses it) -- see docs/ensemble-policy.md."
