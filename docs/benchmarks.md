@@ -59,7 +59,10 @@ is the metric that actually demonstrates the mechanism (see
 per guarded (scenario, ablation) cell — this is what makes the harness
 capable of rejecting a default configuration: a real accuracy regression
 fails that suite. It runs on every pull request (the required
-`pipeline-accuracy-floors` check), not only on a schedule. It also documents where the *shipped default* combination
+`pipeline-accuracy-floors` check), not only on a schedule. The same check guards the
+one alternative policy with published backtest evidence, `composite-agreement@1`, on
+what that evidence rests on: its flag F1 on the hypothesis scenarios, and never more
+wrong flags than the review budget. It also documents where the *shipped default* combination
 mode (`intersection`) genuinely underperforms (`local`, `varying_density` —
 see [`approximations.md`](approximations.md)) rather than asserting something the data shows
 is false. `scripts/run_benchmark.py` itself refuses to publish a

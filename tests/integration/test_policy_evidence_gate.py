@@ -109,6 +109,18 @@ def test_outperforming_evidence_in_scope_is_recorded_on_the_run(tmp_path: Path) 
     assert _run_row(cfg, result.run_id)["policy_evidence_id"] == evidence_id
 
 
+def test_a_repeat_run_records_evidence_recorded_since_its_first_attempt(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    with pytest.warns(UnevidencedPolicyWarning):
+        first = run_detection(cfg, no_report=True)
+    assert _run_row(cfg, first.run_id)["policy_evidence_id"] is None
+    evidence_id = record_evidence(cfg)
+    again = run_detection(cfg, no_report=True)  # same deterministic run_id; groups already complete
+    assert again.run_id == first.run_id
+    assert again.policy_evidence_id == evidence_id
+    assert _run_row(cfg, first.run_id)["policy_evidence_id"] == evidence_id
+
+
 @pytest.mark.parametrize(
     ("verdict", "message"),
     [
@@ -296,3 +308,97 @@ def test_a_grouped_backtest_fits_each_group_and_skips_small_ones_as_a_run_does(t
     assert as_json["labelled"] is True
     union = next(s for s in result.summaries if s.policy_id == "union@1")
     assert union.flag_count > 0  # only the big group is fitted and flagged
+
+
+# ---------------------------------------------------------------------------
+# Seeing the evidence: sorethumb evidence, show, the run summary
+# ---------------------------------------------------------------------------
+
+
+def _toml_for(cfg: Config, tmp_path: Path) -> Path:
+    path = tmp_path / "sorethumb.toml"
+    path.write_text(
+        f"""[source]
+uri = {json.dumps(cfg.source.uri)}
+format = "csv"
+[run]
+workdir = {json.dumps(cfg.run.workdir)}
+seed = 0
+[columns]
+reference_column = "label"
+[scoring]
+contamination = 0.05
+combination = "composite"
+weighting = "agreement"
+[explain]
+enabled = false
+[[detectors]]
+name = "isolation_forest"
+[[detectors]]
+name = "kmeans_distance"
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_evidence_cli_lists_records_and_marks_the_current_scope(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from sorethumb_ml.cli import app
+
+    cfg = _cfg(tmp_path)
+    toml = _toml_for(cfg, tmp_path)
+    in_scope = record_evidence(cfg)
+    record_evidence(cfg, "does_not_outperform", scope_hash="another-configuration")
+
+    result = CliRunner().invoke(app, ["evidence", "--config", str(toml), "--json"])
+    assert result.exit_code == 0, result.stdout
+    rows = json.loads(result.stdout)
+    applies = {r["evidence_id"]: r["applies_to_current_config"] for r in rows}
+    assert applies[in_scope] is True
+    assert sorted(applies.values()) == [False, True]
+    assert all("details_json" not in r for r in rows)
+
+    human = CliRunner().invoke(app, ["evidence", "--config", str(toml), "--all"])
+    assert human.exit_code == 0, human.stdout
+    assert "Backtest evidence (2)" in human.stdout
+
+
+def test_evidence_cli_says_when_nothing_is_recorded(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from sorethumb_ml.cli import app
+
+    cfg = _cfg(tmp_path)
+    toml = _toml_for(cfg, tmp_path)
+    Workspace.init(Path(cfg.run.workdir)).close()
+    result = CliRunner().invoke(app, ["evidence", "--config", str(toml)])
+    assert result.exit_code == 0, result.stdout
+    assert "No backtest evidence" in result.stdout
+
+
+def test_run_summary_and_show_name_the_evidence_or_its_absence(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from sorethumb_ml.cli import app
+
+    cfg = _cfg(tmp_path)
+    toml = _toml_for(cfg, tmp_path)
+    runner = CliRunner()
+
+    bare = runner.invoke(app, ["run", "--config", str(toml), "--no-report"])
+    assert bare.exit_code == 0, bare.stdout
+    assert "No backtest evidence" in bare.stdout
+    with Workspace.open(Path(cfg.run.workdir)) as ws:
+        run_id = str(ws.store.list_runs(limit=1)[0]["run_id"])
+    shown = runner.invoke(app, ["show", run_id, "--config", str(toml)])
+    assert "none recorded" in shown.stdout
+
+    evidence_id = record_evidence(cfg)
+    rerun = runner.invoke(app, ["run", "--config", str(toml), "--no-report"])
+    assert evidence_id in rerun.stdout
+    shown = runner.invoke(app, ["show", run_id, "--config", str(toml)])
+    assert f"Evidence: {evidence_id}" in shown.stdout
+    doc = json.loads(runner.invoke(app, ["show", run_id, "--config", str(toml), "--json"]).stdout)
+    assert doc["policy_evidence"]["evidence_id"] == evidence_id

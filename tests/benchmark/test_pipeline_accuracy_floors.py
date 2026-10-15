@@ -1,6 +1,9 @@
 """Pipeline-benchmark accuracy floors: the harness's "reject a default
 configuration" gate. Every guarded (scenario, ablation) cell must clear
-a committed ROC-AUC floor on the network-free synthetic scenarios.
+a committed ROC-AUC floor on the network-free synthetic scenarios, and the
+one alternative policy with published backtest evidence (composite-agreement@1)
+must keep the flag behaviour that evidence describes. Runs on every PR
+(release-validation ``pipeline-accuracy-floors``); the full policy matrix runs weekly.
 
 Marked ``benchmark``, so it is deselected by default and run explicitly::
 
@@ -96,14 +99,33 @@ _FLOORS: dict[tuple[str, str], float] = {
 _SANITY_ONLY: list[tuple[str, str]] = [("contextual", "default")]
 _SANITY_FLOOR = 0.35
 
+# The evidenced alternative policy, guarded on every PR on what its evidence rests on
+# (docs/ensemble-policy.md, round 2: composite-agreement-v2). Not ROC-AUC -- the
+# flag decision: flag F1 on its hypothesis scenarios, and never more wrong flags than
+# the review budget (false_positive_budget_ratio <= 1.0, the budgets-v3 bound) where
+# it cannot rank the anomalies. Observed values: docs/benchmark-results/
+# policy-matrix.json (10 seeds); floors leave room for 3-seed noise. A change that
+# breaks these changes the behaviour the published evidence describes -- which also
+# means the policy's version must move (scoring/policies.py).
+_EVIDENCED_ABLATION = "combination_composite_agreement"
+_FLAG_F1_FLOORS: dict[str, float] = {
+    "point": 0.5,  # observed 0.69
+    "clustered": 0.45,  # observed 0.64
+    "masking": 0.2,  # observed 0.33
+    "irrelevant_columns": 0.4,  # observed 0.59
+}
+_FP_BUDGET_SCENARIOS = ["point", "local", "varying_density", "masking"]  # observed 0.37-0.99
+
 
 @pytest.fixture(scope="session")
 def pipeline_rows() -> dict[tuple[str, str], PipelineBenchmarkRow]:
     """Run every guarded (scenario, ablation) cell once, 3 seeds each."""
     from sorethumb_ml.evaluate.pipeline_benchmark import PipelineBenchmarkConfig, run_pipeline_benchmark
 
-    scenarios = sorted({s for s, _ in [*_FLOORS, *_SANITY_ONLY]})
-    ablations = sorted({a for _, a in [*_FLOORS, *_SANITY_ONLY]})
+    scenarios = sorted(
+        {s for s, _ in [*_FLOORS, *_SANITY_ONLY]} | set(_FLAG_F1_FLOORS) | set(_FP_BUDGET_SCENARIOS)
+    )
+    ablations = sorted({a for _, a in [*_FLOORS, *_SANITY_ONLY]} | {_EVIDENCED_ABLATION})
     cfg = PipelineBenchmarkConfig(
         scenario_names=scenarios,
         ablation_names=ablations,
@@ -146,6 +168,32 @@ def test_cell_not_catastrophically_broken(
         f"{scenario}/{ablation}: ROC-AUC {row.roc_auc:.4f} is well below the near-chance "
         f"range this scenario normally sits in ({_SANITY_FLOOR:.2f}) -- likely a real regression, "
         "not the documented 'contextual is hard' limitation."
+    )
+
+
+@pytest.mark.parametrize("scenario", sorted(_FLAG_F1_FLOORS))
+def test_evidenced_policy_keeps_its_flag_f1(
+    pipeline_rows: dict[tuple[str, str], PipelineBenchmarkRow], scenario: str
+) -> None:
+    row = pipeline_rows[scenario, _EVIDENCED_ABLATION]
+    assert row.error is None, f"{scenario}/{_EVIDENCED_ABLATION} errored: {row.error}"
+    assert row.flag_f1 is not None
+    assert row.flag_f1 >= _FLAG_F1_FLOORS[scenario], (
+        f"{scenario}/{_EVIDENCED_ABLATION}: flag F1 {row.flag_f1:.4f} < floor {_FLAG_F1_FLOORS[scenario]:.2f} "
+        "-- the behaviour the published backtest evidence describes has changed."
+    )
+
+
+@pytest.mark.parametrize("scenario", _FP_BUDGET_SCENARIOS)
+def test_evidenced_policy_never_spends_more_than_the_review_budget_on_wrong_rows(
+    pipeline_rows: dict[tuple[str, str], PipelineBenchmarkRow], scenario: str
+) -> None:
+    row = pipeline_rows[scenario, _EVIDENCED_ABLATION]
+    assert row.error is None, f"{scenario}/{_EVIDENCED_ABLATION} errored: {row.error}"
+    assert row.false_positive_budget_ratio is not None
+    assert row.false_positive_budget_ratio <= 1.0, (
+        f"{scenario}/{_EVIDENCED_ABLATION}: false-positive budget ratio "
+        f"{row.false_positive_budget_ratio:.3f} > 1.0 (budgets v3)."
     )
 
 
