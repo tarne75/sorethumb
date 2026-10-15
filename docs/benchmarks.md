@@ -129,6 +129,13 @@ every registered [ensemble policy](ensemble-policy.md), each identified by its
 versioned id. The default policy, `intersection@1`, is a deliberate design
 decision; this matrix is the evidence any other choice should be made on.
 
+Every policy here runs at the scenario's review budget (`scoring.contamination` set to
+it, so each detector flags exactly that share), not at the shipped `"auto"`. The
+shipped default, `intersection@1` at `"auto"`, flags what every detector's own
+boundary agrees on. It is compared separately; composite policies at `"auto"` are not
+a configuration to use: see
+[ensemble-policy.md](ensemble-policy.md#recommended-setup-if-you-have-a-review-budget).
+
 Per cell, over every seed (mean, 95% CI where shown):
 
 - **Precision and recall** of the actual flag decision (`flag_precision`,

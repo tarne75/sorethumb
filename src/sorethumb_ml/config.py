@@ -405,7 +405,10 @@ class ScoringConfig(BaseModel):
             "that fraction and sets the OneClassSVM nu to match. 'auto' lets each "
             "detector use its own heuristic boundary (OCSVM zero-hyperplane, KMeans "
             "Tukey fence, IsolationForest offset); these rates differ per detector and "
-            "the run output reports the realised rate of each."
+            "the run output reports the realised rate of each. Pair a composite combination "
+            "with a float: under 'auto' a composite thresholds at the median of those rates "
+            "and has flagged several times a 5% shortlist on the benchmarks -- see "
+            "docs/ensemble-policy.md."
         ),
     )
     combination: Literal["composite", "intersection", "union"] = Field(
