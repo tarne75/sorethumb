@@ -390,6 +390,7 @@ that scope: without one it warns, and `--strict` refuses (exit code `2`). See
 sorethumb backtest                                   # every registered policy
 sorethumb backtest --policy composite-agreement@1    # one candidate
 sorethumb backtest --replicates 40 --json
+sorethumb backtest --forward                         # fit each period, score the next
 ```
 
 **Options:**
@@ -400,6 +401,8 @@ sorethumb backtest --replicates 40 --json
 | `--replicates INT` | `20` | Random subsamples to fit; at least 5. |
 | `--subsample FLOAT` | `0.8` | Fraction of rows in each subsample, in [0.2, 1). |
 | `--no-record` | off | Measure only; write no evidence. |
+| `--forward` | off | Out of time: fit each `history.period_granularity` period and score the next with those fits (as `score --from-run` does), instead of random subsamples. Needs `columns.time_column` and at least 5 period pairs. |
+| `--folds INT` | all pairs | With `--forward`: use only the last N period pairs (at least 5). |
 | `--json` | off | The full result (per-policy means, verdicts, evidence ids) as JSON. |
 
 Plus `--config`, `--workdir`, `--log-level`, `--seed`.

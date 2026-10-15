@@ -10,7 +10,8 @@ A row is flagged only when every configured detector flags it on its own boundar
 This is the default deliberately, not by accident:
 
 - **Precision first.** A flagged row is one every detector independently found unusual,
-  so a short review list is mostly worth reviewing.
+  so a short review list is mostly worth reviewing. This holds on the synthetic suite,
+  but not on the real datasets tested so far; see [Real data](#real-data).
 - **Bounded false positives.** No single detector's quirks can add rows on its own.
 - **Explainable.** "All three detectors agreed" is a reason a reviewer can act on.
 
@@ -226,6 +227,60 @@ which is why confirmation is a separate step:
   less stable across refits (Jaccard 0.70 against the default's 0.76, beyond the 0.05
   tolerance). Rows near the budget cut-off change between refits, which a unanimous
   vote mostly avoids by flagging fewer rows.
+
+### Real data
+
+The rounds above are synthetic. The same protocol, run through the same code as
+`sorethumb backtest`, is applied to three real labelled datasets
+(`scripts/run_real_backtest.py`, `sorethumb_ml.evaluate.real_backtest`):
+
+| dataset | rows | anomalies | how it is tested | review budget |
+| --- | --- | --- | --- | --- |
+| KDD Cup 1999, SA subset (network intrusion) | 100,655, mixed numeric and categorical | ~3.4% | random subsamples of 10,000-row slices | 5% |
+| UCI Covertype, class 2 vs 4 (ODDS) | 286,048 | ~1% | random subsamples of 10,000-row slices | 1% |
+| Credit-card transactions, Sept 2013 (OpenML 42175) | 284,807 over two days | ~0.17% fraud | forward: fit each hour, score the next | 0.5% |
+
+Each dataset has a development slice, on which the hypothesis is formed, and a
+disjoint confirmation slice, judged once: different random rows for KDD and
+Covertype, day 1 and day 2 for the card data. The pre-registration
+(`tests/benchmark/preregistrations/real/`) is committed before the confirmation run,
+and per-dataset p-values are Holm-corrected across the datasets the hypothesis names.
+
+<!-- real-backtest-results-start -->
+<!-- AUTO-GENERATED — do not edit manually; run `python scripts/run_real_backtest.py --phase confirmation` to add a result. -->
+
+**[`composite-agreement-real-v1`](benchmark-results/real-backtests/composite-agreement-real-v1.json)**: `composite-agreement@1` vs `intersection@1` -- **outperforms**. The round-2 synthetic result carries over to real labelled data: at each dataset's
+review budget, composite-agreement@1 flags anomalies with higher flag F1 than the
+unanimous default, on network-intrusion traffic (KDD Cup 1999 SA), forest cover types
+(Covertype 2 vs 4) and card fraud scored out of time (each hour fitted, the next scored),
+without spending more than the review budget on wrong rows where the default does not and
+without less stable flags.
+
+| dataset | slice | flag F1 difference | 95% CI | p (Holm) | improved | regressions |
+| --- | --- | --- | --- | --- | --- | --- |
+| kddcup99_sa | 10,000 random rows (rows 10,001-20,000 of a seed-2026 permutation) | +0.1619 | [+0.1452, +0.1794] | 0.0006 | yes | -- |
+| covtype_2v4 | 10,000 random rows (rows 10,001-20,000 of a seed-2026 permutation) | +0.1848 | [+0.1657, +0.2031] | 0.0006 | yes | -- |
+| creditcard | day 2, hourly periods | +0.0433 | [+0.0094, +0.0868] | 0.0072 | yes | -- |
+<!-- real-backtest-results-end -->
+
+#### What the real data shows (2026-10-15)
+
+`composite-agreement@1` outperforms the default on all three held-out slices, as
+pre-registered, without spending more than the review budget on wrong rows and with no
+loss of flag stability. The card-fraud gain is the smallest (+0.04 flag F1, against
++0.18 on the development day): fraud is rare enough that a few hours decide it.
+
+The absolute numbers matter as much as the comparison. On real data the default's
+unanimous vote does **not** buy precision. Its flags were 1.4% precise on KDD (where
+3.1% of rows are attacks, so worse than flagging at random), 29% on Covertype and 2.2%
+on card fraud. It flagged only 5-14% of the review budget, so it also caught almost
+nothing (recall 0.3-4%). `composite-agreement@1` spends the whole budget at 8-25%
+precision. That is a lift of 4x (KDD), 27x (Covertype) and over 50x (card fraud) on the
+base rate, and it recalls 8-26% of the anomalies. The "precision first" rationale above
+holds on the synthetic suite. On these datasets the default bounds false positives but
+does not make the short list worth reviewing. The default is unchanged by this result:
+changing it follows the process below. It is the strongest evidence so far for running
+`sorethumb backtest` before relying on the default.
 
 ## Versioning
 

@@ -1,0 +1,24 @@
+# Pre-registered 2026-10-15, after the development run (development slices only) and
+# before any confirmation-slice run.
+candidate = "composite-agreement@1"
+baseline = "intersection@1"
+hypothesis = """
+The round-2 synthetic result carries over to real labelled data: at each dataset's
+review budget, composite-agreement@1 flags anomalies with higher flag F1 than the
+unanimous default, on network-intrusion traffic (KDD Cup 1999 SA), forest cover types
+(Covertype 2 vs 4) and card fraud scored out of time (each hour fitted, the next scored),
+without spending more than the review budget on wrong rows where the default does not and
+without less stable flags.
+"""
+datasets = ["kddcup99_sa", "covtype_2v4", "creditcard"]
+require = "all"
+alpha = 0.05
+stability_tolerance = 0.05
+n_resamples = 10000
+expected_outcome = """
+Outperforms. On the development slices flag F1 improved on all three datasets -- KDD
++0.14 (95% CI +0.12 to +0.16), Covertype +0.13 (+0.12 to +0.15), card fraud +0.18 (+0.08
+to +0.29) -- each at Holm p 0.0006, with no false-positive-budget or stability
+regression. The card-fraud interval is the widest (few frauds per hour), so it is the
+dataset most likely to change the verdict.
+"""
