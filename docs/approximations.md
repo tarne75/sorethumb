@@ -102,17 +102,23 @@ prevent.
 
 ## Attribution reference population — targets are explained against normal rows
 
-Gradient and KernelSHAP attributions take the rows to explain (`X`, only the flagged
-rows in `_pipeline.py::_compute_attributions`) separately from a required `reference`
-matrix in the same feature space. The finite-difference step for each feature is
-`step_factor` times the *reference* standard deviation, and the KernelSHAP background is
-`shap.kmeans` of the *reference* — never of the targets. The pipeline's reference is the
-unflagged rows; if fewer than 10 rows are unflagged it falls back to the whole
-population. Deriving scale from the flagged rows themselves would make an explanation
-depend on which other rows happened to be flagged alongside it, and a lone flagged row
-would have zero standard deviation. A reference over 10,000 rows is subsampled
-deterministically (seed 0) for the KernelSHAP background. The reference is still the
-output of an unsupervised flag decision, so it is only *mostly* normal (see below).
+Every attribution method takes the rows to explain (`X`, only the flagged rows in
+`_pipeline.py::_compute_attributions`) separately from a required `reference` in the
+same feature space: a matrix, or the pipeline's `ReferenceSummary`
+(`explain/reference.py`). The finite-difference step for each feature is `step_factor`
+times the *reference* standard deviation, the KernelSHAP and TreeSHAP backgrounds are
+k-means centres of the *reference*, and centroid distances are divided by its robust
+spread — never derived from the targets. Deriving scale from the flagged rows themselves
+would make an explanation depend on which other rows happened to be flagged alongside
+it, and a lone flagged row would have zero standard deviation.
+
+The pipeline's reference is the rows no detector flags (`consensus_normal`), falling back
+to the less anomalous half of the unflagged rows (`lower_half`), and to no explanation at
+all when fewer than 10 rows qualify either way — never the whole group, anomalies
+included. A reference over 10,000 rows is subsampled deterministically (seed 0) before
+its k-means background is computed. The reference is still the output of an
+unsupervised decision, so it is only *mostly* normal (see below). See
+[the reference population](explanations.md#the-reference-population).
 
 ## Contaminated fitting — no clean reference set
 

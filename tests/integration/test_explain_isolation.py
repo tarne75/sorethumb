@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import polars as pl
 import pytest
 
@@ -27,6 +28,7 @@ from sorethumb_ml.config import (
 from sorethumb_ml.store.results import file_digest, read_results
 from sorethumb_ml.store.workspace import Workspace
 from tests.factories.frames import write_planted_csv
+from tests.factories.results import joined_results as read_results_joined
 
 pytestmark = pytest.mark.integration
 
@@ -207,7 +209,7 @@ def test_a_detector_with_no_vetted_explainer_is_reported_not_silently_skipped(
     assert group.explain_status == "partial"
 
 
-def test_a_group_with_too_few_normal_rows_says_its_reference_includes_flagged_rows(tmp_path: Path) -> None:
+def test_a_group_with_too_few_normal_rows_is_not_explained_against_its_anomalies(tmp_path: Path) -> None:
     csv = tmp_path / "small.csv"
     write_planted_csv(csv, n_normal=10, n_anomaly=4, seed=3)
     cfg = Config(
@@ -219,8 +221,41 @@ def test_a_group_with_too_few_normal_rows_says_its_reference_includes_flagged_ro
         explain=ExplainConfig(top_n=2),
     )
     result = run_detection(cfg, no_report=True)
-    codes = [r["code"] for r in result.groups[0].warning_records]
-    assert "explain.reference_fallback" in codes
+    group = result.groups[0]
+    codes = [r["code"] for r in group.warning_records]
+    assert "explain.reference_unavailable" in codes
+    assert group.explain_status == "failed"
+    assert group.n_anomalies > 0
+    assert group.results_path is not None
+    rows = read_results_joined(group.results_path).filter(pl.col("flagged"))
+    assert rows.height == group.n_anomalies  # detection output intact
+    assert set(rows["explain_status"].to_list()) == {"unavailable"}
+    assert set(rows["explain_issue"].to_list()) == {"no_reference"}
+    assert rows["reason_1"].null_count() == rows.height
+
+
+def test_too_few_consensus_normal_rows_falls_back_to_the_less_anomalous_half(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sorethumb_ml.store.results import read_attributions
+
+    real = pipeline_mod.select_reference_rows
+
+    def _every_row_flagged_by_someone(**kw: object):
+        n = int(kw["n_rows"])  # type: ignore[call-overload]
+        return real(**{**kw, "natural_flags": {"loud": np.ones(n, dtype=bool)}})  # type: ignore[arg-type]
+
+    monkeypatch.setattr(pipeline_mod, "select_reference_rows", _every_row_flagged_by_someone)
+    cfg = _cfg(tmp_path, "a")
+    result = run_detection(cfg, no_report=True)
+    group = result.groups[0]
+    assert "explain.reference_fallback" in {r["code"] for r in group.warning_records}
+    with Workspace.open(tmp_path / "a") as ws:
+        records = read_attributions(ws, result.run_id, group.group_key)
+    assert records is not None
+    assert records.height > 0
+    assert set(records["reference_id"].to_list()) == {"lower_half"}
+    assert all("reference_lower_half" in f for f in records["approximation_flags"].to_list())
 
 
 def test_the_run_summary_and_json_show_warning_codes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

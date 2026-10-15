@@ -223,9 +223,12 @@ class ExplanationCoverageWarning(SorethumbWarning):
     every source that covers them), ``explain.pca_backprojection_failed`` (no
     flagged row has an original-column explanation), ``explain.detector_unsupported``
     (a detector with no vetted attribution method: its part of the score is not
-    explained) and ``explain.reference_fallback`` (too few unflagged rows for a
-    normal reference; the whole population was used). Never changes detection
-    output; under ``run.strict`` the run exits partial.
+    explained), ``explain.no_signal`` (every source attributed some rows as all
+    zero), ``explain.reference_fallback`` (too few consensus-normal rows, so the
+    less anomalous half was the reference; or a score-forward run whose fitting
+    run saved no reference summary) and ``explain.reference_unavailable`` (no
+    population normal enough to explain against; no row explained). Never
+    changes detection output; under ``run.strict`` the run exits partial.
     """
 
     code: ClassVar[str] = "explain.coverage"

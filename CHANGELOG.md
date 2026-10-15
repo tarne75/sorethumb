@@ -214,6 +214,28 @@ First public release.
     first fields as reasons, all with zero weight.
   - A group whose explanation stage fails no longer keeps an earlier attempt's
     explanation files.
+- **Explanations measured against a consensus-normal reference** (`explain@2`):
+  - The reference is the rows no detector flags, falling back to the less
+    anomalous half of the unflagged rows. It used to be all unflagged rows, or
+    the whole group, flagged rows included, when fewer than 10 were unflagged.
+    When neither population has 10 rows, the flagged rows are `unavailable`
+    (`no_reference`, warning `explain.reference_unavailable`) rather than
+    explained against anomalies.
+  - Isolation Forest attributions use interventional TreeSHAP with that
+    reference as background, with shap's additivity check on. They used to be
+    path-dependent with the check off.
+  - KMeans centroid attributions are divided by each dimension's spread in the
+    reference.
+  - A fitting run saves the reference summary as
+    `models/<run>/<group>/reference.json`; `score --from-run` explains against
+    it, falling back with a warning when there is none.
+  - Explanation values and, in some rows, reasons change from `explain@1`. The
+    flags `treeshap_path_dependent` and `reference_includes_flagged_rows` are
+    gone; `treeshap_path_length` and `reference_lower_half` are new.
+  - Within one attribution source, gradient rows and marginal-deviation rows
+    are judged separately when deciding whether a row's attribution is
+    negligible, so a small real gradient is no longer discarded because the
+    same source attributed a far-out row by marginal deviation.
 - **Real-data policy evidence**: the pre-registered backtest protocol applied to
   KDD Cup 1999 (SA), Covertype (2 vs 4) and a time-ordered credit-card fraud
   dataset, with disjoint development and confirmation slices; results in

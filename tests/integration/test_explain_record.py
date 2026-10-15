@@ -72,7 +72,7 @@ def test_every_reason_has_a_record_that_reproduces_its_label(tmp_path: Path) -> 
 
     for rec in records.iter_rows(named=True):
         assert rec["explainer_version"] == EXPLAINER_VERSION
-        assert rec["reference_id"] == "unflagged_rows"
+        assert rec["reference_id"] == "consensus_normal"
         assert {m["detector"] for m in rec["methods"]} == {"isolation_forest", "ecod"}
         assert {m["method"] for m in rec["methods"]} <= {
             "tree_shap",
@@ -103,7 +103,8 @@ def test_tree_shap_and_centroid_caveats_are_flagged(tmp_path: Path) -> None:
     methods = {m["method"] for ms in records["methods"].to_list() for m in ms}
     assert "unsigned_method:kmeans_distance" in flags
     if "tree_shap" in methods:
-        assert {"treeshap_additivity_unchecked", "treeshap_path_dependent"} <= flags
+        assert "treeshap_path_length" in flags
+        assert "treeshap_path_dependent" not in flags
     else:  # shap not installed in this environment
         assert "fallback_used:isolation_forest" in flags
 

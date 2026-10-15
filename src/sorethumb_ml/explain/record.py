@@ -40,18 +40,19 @@ from sorethumb_ml.explain.project import aggregate_signed_to_original, aggregate
 # Bump when a change alters what an explanation means (method, reference,
 # aggregation), so stored explanations from different logic are never compared
 # as if they were alike.
-EXPLAINER_VERSION = "explain@1"
+EXPLAINER_VERSION = "explain@2"
 
 # Derived features listed per reason.
 _TOP_TRANSFORMED = 5
 
 # Every flag a record can carry. ``<det>`` is a detector name.
 APPROXIMATION_FLAGS: dict[str, str] = {
-    "treeshap_additivity_unchecked": (
-        "TreeSHAP ran with check_additivity=False and decomposes path length, not the score itself."
+    "treeshap_path_length": (
+        "TreeSHAP decomposes the forest's expected path length, of which the score is a monotone, "
+        "nonlinear transform; the shares rank the fields but do not sum to the score."
     ),
-    "treeshap_path_dependent": (
-        "TreeSHAP used the trees' own training-path weights as its background, not the reference population."
+    "treeshap_additivity_unchecked": (
+        "shap's additivity check failed, so the TreeSHAP values were computed without it."
     ),
     "kernel_shap_sampled": "KernelSHAP estimated the values from sampled coalitions against a k-means background.",
     "unsigned_method:<det>": (
@@ -70,8 +71,8 @@ APPROXIMATION_FLAGS: dict[str, str] = {
         "Attributions were mapped from PCA components back to features through |loadings|; "
         "a loading's sign is not carried back."
     ),
-    "reference_includes_flagged_rows": (
-        "Too few unflagged rows, so the reference population includes the flagged rows."
+    "reference_lower_half": (
+        "Too few rows no detector flags, so the reference is the less anomalous half of the unflagged rows."
     ),
 }
 
@@ -91,8 +92,18 @@ class SourceAttribution:
     informative: np.ndarray = field(init=False)  # (n_flagged,) bool: covered and a non-negligible vector
 
     def __post_init__(self) -> None:
-        """Mark the rows this source actually says something about (see ``blend._informative_rows``)."""
-        self.informative = self.covered & _informative_rows(np.linalg.norm(self.values, axis=1))
+        """Mark the rows this source actually says something about (see ``blend._informative_rows``).
+
+        Gradient rows and marginal-deviation rows are on different scales (score
+        units per feature unit vs. reference spreads), so each is judged against
+        its own kind: a small but real gradient is not "negligible" just because
+        the same source attributed some far-out rows by marginal deviation.
+        """
+        norms = np.linalg.norm(self.values, axis=1)
+        informative = np.zeros(len(norms), dtype=bool)
+        for part in (self.marginal_rows, ~self.marginal_rows):
+            informative[part] = _informative_rows(norms[part])
+        self.informative = self.covered & informative
 
 
 @dataclass

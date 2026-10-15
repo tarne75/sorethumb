@@ -282,14 +282,15 @@ def test_explain_kernel_shap_routes_non_tree_detectors(
 def test_explain_passes_flagged_targets_and_a_disjoint_normal_reference(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Gradient/KernelSHAP get only the flagged rows as targets and, separately, the unflagged rows
-    as the reference -- never the targets standing in for their own scale/background."""
+    """Gradient/KernelSHAP get only the flagged rows as targets and, separately, a summary of the
+    consensus-normal rows as the reference -- never the targets standing in for their own scale/background."""
     import sorethumb_ml.explain.gradient as gradient
+    from sorethumb_ml.explain.reference import ReferenceSummary
 
-    calls: list[tuple[np.ndarray, np.ndarray]] = []
+    calls: list[tuple[np.ndarray, ReferenceSummary]] = []
 
     def _spy(_det, x, *, reference, **_k):
-        calls.append((np.asarray(x), np.asarray(reference)))
+        calls.append((np.asarray(x), reference))
         return np.ones(x.shape, dtype=np.float64), np.zeros(x.shape[0], dtype=bool)
 
     monkeypatch.setattr(gradient, "gradient_attributions_detailed", _spy)
@@ -301,10 +302,11 @@ def test_explain_passes_flagged_targets_and_a_disjoint_normal_reference(
 
     assert calls, "the gradient explainer was never reached"
     targets, reference = calls[0]
-    assert 0 < len(targets) < len(reference)
-    target_rows = {tuple(r) for r in targets}
-    assert not any(tuple(r) in target_rows for r in reference), "reference must not contain flagged rows"
-    assert len(targets) + len(reference) == 120  # every row is exactly one or the other
+    assert isinstance(reference, ReferenceSummary)
+    assert reference.reference_id == "consensus_normal"
+    assert 0 < len(targets) < reference.n_rows
+    assert len(targets) + reference.n_rows <= 120  # flagged rows are never part of the reference
+    assert len(reference.background) > 0
 
 
 # ---------------------------------------------------------------------------

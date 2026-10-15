@@ -152,7 +152,8 @@ Your *data* can live anywhere: only the workspace needs local storage.
 ```
 sorethumb.db            SQLite ledger: runs, groups, history, artefact index
 models/<run>/…          fitted feature plan, and per group and detector the
-                        estimator and calibrator as joblib/pickle files, plus a manifest
+                        estimator and calibrator as joblib/pickle files, plus a manifest;
+                        per group, reference.json (the explanation reference summary)
 results/<run>/<group>/  per-group results (Parquet): anomalies.parquet (detection: scores,
                         flags, ranks; written and digested first), explanations.parquet
                         and attributions.parquet (the record behind each reason)

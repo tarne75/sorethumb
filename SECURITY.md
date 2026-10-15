@@ -26,6 +26,15 @@ file also controls the digest recorded alongside it, so a hostile workspace
 can carry a digest that "matches" perfectly. Do not treat a passing digest
 check as evidence that a workspace is safe to load.
 
+Each group's explanation reference summary (`models/<run>/<group>/reference.json`)
+is plain JSON and is parsed, never unpickled, so it adds no code-execution path.
+It does hold values derived from your data: per-feature medians, spreads and
+ranges and up to 50 k-means centres of the group's normal rows (in the
+transformed feature space), plus the typical raw value of every input field
+(a median, or the most common value). `attributions.parquet` stores the same
+typical values next to each flagged row's own raw values. Protect a workspace as
+you would the data it was built from.
+
 ## Source downloads: SSRF-adjacent hardening, not a sandbox
 
 `source.uri` pointed at `http(s)://` is fetched with `httpx`. Redirects are

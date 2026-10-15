@@ -54,6 +54,7 @@ from sorethumb_ml.explain import record as explain_record
 from sorethumb_ml.explain.blend import blend
 from sorethumb_ml.explain.record import GroupAttribution, SourceAttribution
 from sorethumb_ml.explain.record import decompose as decompose_blend
+from sorethumb_ml.explain.reference import MIN_REFERENCE_ROWS, ReferenceSummary, select_reference_rows
 from sorethumb_ml.features.build import apply_feature_plan, fit_features
 from sorethumb_ml.features.space import FeatureSpace
 from sorethumb_ml.io.fingerprint import (
@@ -85,9 +86,11 @@ from sorethumb_ml.scoring.policies import (
 from sorethumb_ml.store.models import (
     load_model,
     load_plan,
+    load_reference_summary,
     plan_digest,
     save_model,
     save_plan,
+    save_reference_summary,
     score_with_existing,
 )
 from sorethumb_ml.store.results import (
@@ -1904,6 +1907,7 @@ def _score_forward_group(
         natural_flags_map=res["natural_flags"],
         det_instances=res["detectors"],
         drifted=bool(res["drifted"]),
+        source_run_id=source_run_id,
     )
 
 
@@ -1951,6 +1955,7 @@ def _finalize_group(
     natural_flags_map: dict[str, np.ndarray],
     det_instances: dict[str, Any],
     drifted: bool,
+    source_run_id: str | None = None,
 ) -> GroupSummary:
     """Ensemble-combine, threshold, explain, and write one group's results.
 
@@ -2033,6 +2038,9 @@ def _finalize_group(
         flagged_idx=flagged_idx,
         det_instances=det_instances,
         weights_used=weights_used,
+        natural_flags=natural_flags_map,
+        composite_score=composite_score,
+        source_run_id=source_run_id,
     )
 
     return _group_summary(
@@ -2080,6 +2088,9 @@ def _explain_group(
     flagged_idx: np.ndarray,
     det_instances: dict[str, Any],
     weights_used: dict[str, float],
+    natural_flags: dict[str, np.ndarray],
+    composite_score: np.ndarray,
+    source_run_id: str | None = None,
 ) -> _ExplainOutcome:
     """Explain a group's flagged rows and write ``explanations.parquet``. Never raises.
 
@@ -2089,14 +2100,19 @@ def _explain_group(
     failure, so the detection output stands. Project warnings raised in this
     stage are captured and returned (not raised, even under ``run.strict``,
     which would otherwise fail the group and lose its detection output).
+
+    The reference population comes first (see ``explain/reference.py``): a
+    fitting run chooses it from its own rows and saves its summary next to the
+    group's models, even when nothing is flagged, so a later
+    ``score --from-run`` (*source_run_id* set) explains against it.
     """
     n_flagged = len(flagged_idx)
     if not config.explain.enabled:
         return _ExplainOutcome("not_requested", 0, 0, [])
-    if n_flagged == 0:
-        return _ExplainOutcome("no_flagged_rows", 0, 0, [])
 
+    frames: tuple[pl.DataFrame, pl.DataFrame] | None = None
     frame: pl.DataFrame | None = None
+    failed = False
     remove_explanation_outputs(ws, run_id, group_key)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", SorethumbWarning)
@@ -2105,32 +2121,49 @@ def _explain_group(
             # gradients need float64; this copy is the explanation stage's own
             # (copy=False: no copy when features.dtype is already float64).
             X = X.astype(np.float64, copy=False)
-            frames = _explanation_frame(
-                config=config,
+            reference = _group_reference(
+                ws=ws,
+                run_id=run_id,
+                group_key=group_key,
+                group_label=group_label,
                 plan=plan,
                 df_group=df_group,
                 group_space=group_space,
                 X=X,
-                row_ids=row_ids,
                 flagged_idx=flagged_idx,
-                det_instances=det_instances,
-                weights_used=weights_used,
-                group_label=group_label,
+                natural_flags=natural_flags,
+                composite_score=composite_score,
+                source_run_id=source_run_id,
             )
-            if frames is None:
-                warnings.warn(
-                    ExplanationFailedWarning(
-                        f"No attribution source explained any of the {n_flagged} flagged row(s) in group "
-                        f"{group_label!r}; they keep their detection results without an explanation.",
-                        code="explain.no_source",
-                        rows_affected=n_flagged,
-                    ),
-                    stacklevel=2,
+            if n_flagged:
+                frames = _explanation_frame(
+                    config=config,
+                    plan=plan,
+                    df_group=df_group,
+                    group_space=group_space,
+                    X=X,
+                    row_ids=row_ids,
+                    flagged_idx=flagged_idx,
+                    det_instances=det_instances,
+                    weights_used=weights_used,
+                    group_label=group_label,
+                    reference=reference,
                 )
-            else:
-                frame, attributions = frames
-                write_explanations(ws, run_id, group_key, frame)
-                write_attributions(ws, run_id, group_key, attributions)
+                if frames is None:
+                    failed = True
+                    warnings.warn(
+                        ExplanationFailedWarning(
+                            f"No attribution source explained any of the {n_flagged} flagged row(s) in group "
+                            f"{group_label!r}; they keep their detection results without an explanation.",
+                            code="explain.no_source",
+                            rows_affected=n_flagged,
+                        ),
+                        stacklevel=2,
+                    )
+                else:
+                    frame, attributions = frames
+                    write_explanations(ws, run_id, group_key, frame)
+                    write_attributions(ws, run_id, group_key, attributions)
         except Exception as exc:
             cause = f"{type(exc).__name__}: {exc}"
             logger.warning("Explanation stage failed for group %r: %s", group_label, cause, exc_info=True)
@@ -2143,6 +2176,7 @@ def _explain_group(
                 stacklevel=2,
             )
             frame = None
+            failed = True
             remove_explanation_outputs(ws, run_id, group_key)
     explain_warnings: list[dict[str, Any]] = []
     for w in caught:
@@ -2151,6 +2185,8 @@ def _explain_group(
         else:  # not ours to capture: pass it on as it was raised
             warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
 
+    if n_flagged == 0 and not failed:
+        return _ExplainOutcome("no_flagged_rows", 0, 0, explain_warnings)
     if frame is None:
         return _ExplainOutcome("failed", 0, 0, explain_warnings)
     n_unavailable = int((frame["explain_status"] == "unavailable").sum())
@@ -2162,6 +2198,96 @@ def _explain_group(
     else:
         status = "ok"
     return _ExplainOutcome(status, n_explained, n_unavailable, explain_warnings)
+
+
+def _reference_fields(plan: FeaturePlan, group_space: FeatureSpace) -> list[str]:
+    """Original fields the group's features derive from (pre-PCA when PCA is on)."""
+    names = (
+        plan.pre_pca_feature_names
+        if plan.pca_components is not None and plan.pre_pca_feature_names
+        else group_space.feature_names
+    )
+    return list(dict.fromkeys(plan.derived_to_original.get(n, n) for n in names))
+
+
+def _group_reference(
+    *,
+    ws: Workspace,
+    run_id: str,
+    group_key: str,
+    group_label: str,
+    plan: FeaturePlan,
+    df_group: pl.DataFrame,
+    group_space: FeatureSpace,
+    X: np.ndarray,
+    flagged_idx: np.ndarray,
+    natural_flags: dict[str, np.ndarray],
+    composite_score: np.ndarray,
+    source_run_id: str | None,
+) -> ReferenceSummary | None:
+    """Return the reference this group's rows are explained against (see ``explain/reference.py``).
+
+    A fitting run builds it from its own consensus-normal rows (or the
+    less anomalous half) and saves it; score-forward loads the fitting run's,
+    falling back -- with an ``explain.reference_fallback`` warning -- to its own
+    rows when the fitting run has none (explanations were off, or it predates
+    reference summaries). None, with ``explain.reference_unavailable``, when no
+    population qualifies.
+    """
+    n_flagged = len(flagged_idx)
+    if source_run_id is not None:
+        loaded, problem = load_reference_summary(ws, source_run_id, group_key)
+        if loaded is not None and loaded.feature_names != list(group_space.feature_names):
+            loaded, problem = None, "its feature names differ from this run's"
+        if loaded is not None:
+            return loaded
+        warnings.warn(
+            ExplanationCoverageWarning(
+                f"Group {group_label!r}: fitting run {source_run_id!r} has no usable reference summary "
+                f"({problem}); explaining against this run's own normal rows instead.",
+                code="explain.reference_fallback",
+                rows_affected=n_flagged,
+            ),
+            stacklevel=2,
+        )
+
+    mask, reference_id = select_reference_rows(
+        n_rows=len(X), flagged_idx=flagged_idx, natural_flags=natural_flags, composite_score=composite_score
+    )
+    if mask is None or reference_id is None:
+        warnings.warn(
+            ExplanationCoverageWarning(
+                f"Group {group_label!r} has fewer than {MIN_REFERENCE_ROWS} rows that are normal enough to "
+                "explain against (unflagged by every detector, or the less anomalous half); its flagged "
+                "rows have no explanation.",
+                code="explain.reference_unavailable",
+                rows_affected=n_flagged,
+            ),
+            stacklevel=2,
+        )
+        return None
+    if reference_id != "consensus_normal":
+        warnings.warn(
+            ExplanationCoverageWarning(
+                f"Group {group_label!r} has fewer than {MIN_REFERENCE_ROWS} rows no detector flags; "
+                "explanations use the less anomalous half of the unflagged rows as the reference.",
+                code="explain.reference_fallback",
+                rows_affected=n_flagged,
+            ),
+            stacklevel=2,
+        )
+    raw_values = explain_record.reference_values(
+        df_group.filter(pl.Series(mask)), _reference_fields(plan, group_space)
+    )
+    summary = ReferenceSummary.from_rows(
+        X[mask],
+        reference_id=reference_id,
+        feature_names=list(group_space.feature_names),
+        raw_values=raw_values,
+    )
+    if source_run_id is None:
+        save_reference_summary(ws, run_id, group_key, summary)
+    return summary
 
 
 def _explanation_frame(
@@ -2176,28 +2302,41 @@ def _explanation_frame(
     det_instances: dict[str, Any],
     weights_used: dict[str, float],
     group_label: str,
+    reference: ReferenceSummary | None,
 ) -> tuple[pl.DataFrame, pl.DataFrame] | None:
     """Return ``(explanations, attributions)`` for the flagged rows; None if nothing explained.
+
+    With no *reference* (too few normal rows, see ``explain/reference.py``)
+    every flagged row is ``unavailable`` with issue ``no_reference``.
 
     ``explanations`` has one row per flagged row: ``row_id``;
     ``explain_status`` (``ok``, ``partial`` -- some detector's share of the
     score is unexplained for that row -- or ``unavailable``); ``explain_issue``
     (null, ``detectors_unexplained:<names>``, ``beyond_max_rows``,
-    ``no_attribution_signal`` or ``pca_backprojection_failed``);
+    ``no_attribution_signal``, ``no_reference`` or ``pca_backprojection_failed``);
     ``attribution_kind``; ``explainer_version``; ``reason_<k>`` (null for an
     unavailable row). ``attributions`` is the long-format record behind each
     reason (see ``explain/record.py``); an unavailable row has none.
     """
-    computed = _compute_attributions(
-        config=config,
-        det_instances=det_instances,
-        weights_used=weights_used,
-        X=X,
-        flagged_idx=flagged_idx,
-        plan=plan,
-        group_space=group_space,
-        group_label=group_label,
-    )
+    if reference is None:
+        computed: tuple[GroupAttribution | None, str, dict[int, str], list[str]] | None = (
+            None,
+            "unavailable",
+            dict.fromkeys(range(len(flagged_idx)), "no_reference"),
+            [],
+        )
+    else:
+        computed = _compute_attributions(
+            config=config,
+            det_instances=det_instances,
+            weights_used=weights_used,
+            X=X,
+            flagged_idx=flagged_idx,
+            plan=plan,
+            group_space=group_space,
+            group_label=group_label,
+            reference=reference,
+        )
     if computed is None:
         return None
     group_attr, attr_kind, unavailable_reasons, _ = computed
@@ -2228,19 +2367,14 @@ def _explanation_frame(
     explained = [r for r in range(n_flagged) if r not in unavailable_reasons]
     reasons: dict[int, list[tuple[str, Any]]] = {}
     records: list[dict[str, Any]] = []
-    if group_attr is not None and explained:
-        reference_rows = np.ones(len(X), dtype=bool)
-        if group_attr.reference_id == "unflagged_rows":
-            reference_rows[flagged_idx] = False
-        fields = list(dict.fromkeys(plan.derived_to_original.get(f, f) for f in group_attr.feature_names))
-        reference = explain_record.reference_values(df_group.filter(pl.Series(reference_rows)), fields)
+    if group_attr is not None and reference is not None and explained:
         reasons, records = explain_record.build(
             group_attr,
             rows=explained,
             derived_to_original=plan.derived_to_original,
             raw_rows=raw_rows,
             row_ids=flagged_ids,
-            reference=reference,
+            reference=reference.raw_values,
             top_n=top_n,
         )
 
@@ -2287,30 +2421,6 @@ def _explanation_frame(
     return explanations, attributions
 
 
-# Fewer unflagged rows than this and the "normal population" is too small to give
-# perturbation scales or a SHAP background worth trusting; the full population
-# (flagged rows included) is used instead.
-_MIN_NORMAL_REFERENCE_ROWS = 10
-
-
-def _attribution_reference(X: np.ndarray, flagged_idx: np.ndarray) -> np.ndarray:
-    """Return the reference population for attribution: the group's normal (unflagged) rows.
-
-    Per-dimension perturbation scales (finite-difference gradients) and the
-    KernelSHAP background must describe what the detector considers *normal*,
-    never the handful of flagged target rows being explained -- their own spread
-    is tiny and contaminated by the anomalies themselves, and depends on which
-    other rows happen to be flagged. Falls back to the full population when
-    fewer than ``_MIN_NORMAL_REFERENCE_ROWS`` rows are unflagged (a group where
-    almost everything is flagged has no meaningful "normal" subset).
-    """
-    unflagged = np.ones(len(X), dtype=bool)
-    unflagged[flagged_idx] = False
-    if int(unflagged.sum()) < _MIN_NORMAL_REFERENCE_ROWS:
-        return X
-    return X[unflagged]
-
-
 def _compute_attributions(
     config: Config,
     det_instances: dict[str, Any],
@@ -2320,6 +2430,7 @@ def _compute_attributions(
     plan: FeaturePlan,
     group_space: FeatureSpace,
     group_label: str,
+    reference: ReferenceSummary,
 ) -> tuple[GroupAttribution | None, str, dict[int, str], list[str]] | None:
     """Compute blended attributions for flagged rows. Returns None if no source explained anything.
 
@@ -2399,27 +2510,12 @@ def _compute_attributions(
     if len(flagged_idx) == 0:
         return None
 
-    n_rows = len(X)
     n_features = X.shape[1]
     n_flagged = len(flagged_idx)
-    # Targets vs reference: explainers get only the flagged rows to
-    # explain, and, separately, the normal population to scale/background against.
+    # Targets vs reference: explainers get only the flagged rows to explain
+    # and, separately, the reference summary (see explain/reference.py) to
+    # scale and background against.
     X_flagged = X[flagged_idx]
-    reference = _attribution_reference(X, flagged_idx)
-    n_unflagged = n_rows - n_flagged
-    reference_id = "unflagged_rows"
-    if n_unflagged < _MIN_NORMAL_REFERENCE_ROWS:
-        reference_id = "all_rows"
-        warnings.warn(
-            ExplanationCoverageWarning(
-                f"Group {group_label!r} has only {n_unflagged} unflagged row(s) (fewer than "
-                f"{_MIN_NORMAL_REFERENCE_ROWS}): the reference for perturbation scales and SHAP "
-                "backgrounds is the whole group, flagged rows included.",
-                code="explain.reference_fallback",
-                rows_affected=n_flagged,
-            ),
-            stacklevel=2,
-        )
 
     sources: list[SourceAttribution] = []
     covered = np.zeros(n_flagged, dtype=bool)  # True where >=1 source has a real value
@@ -2459,14 +2555,12 @@ def _compute_attributions(
             if isinstance(det, IsolationForestDetector):
                 # Flagged rows only (each row's SHAP values are independent of
                 # the others); never capped.
-                attr, tag, method, marginal = tree_shap_attributions_detailed(
+                attr, tag, method, marginal, flags = tree_shap_attributions_detailed(
                     det, X_flagged, group_name=det_name, reference=reference
                 )
                 preferred = "tree_shap"
-                # Path-dependent: shap.TreeExplainer(model) with no background.
-                flags = ["treeshap_additivity_unchecked", "treeshap_path_dependent"]
             elif isinstance(det, KMeansDetector):
-                attr, tag = centroid_attributions(det, X_flagged)  # also uncapped
+                attr, tag = centroid_attributions(det, X_flagged, reference=reference)  # also uncapped
                 method = preferred = "centroid_distance"
                 flags = [f"unsigned_method:{det_name}"]
             elif isinstance(det, ECODDetector):
@@ -2601,7 +2695,7 @@ def _compute_attributions(
     # every feature after a demotion changed which columns survived.
     feature_attributions = blended
     feature_names = group_space.feature_names
-    group_flags = ["reference_includes_flagged_rows"] if reference_id == "all_rows" else []
+    group_flags = ["reference_lower_half"] if reference.reference_id == "lower_half" else []
     if plan.pca_components is not None:
         from sorethumb_ml.explain.project import back_project_pca  # noqa: PLC0415
 
@@ -2657,7 +2751,7 @@ def _compute_attributions(
         scaled=scaled,
         row_weights=row_weights,
         unexplained_detectors=unexplained_detectors,
-        reference_id=reference_id,
+        reference_id=reference.label,
         group_flags=group_flags,
     )
     return group_attr, blend_tag, unavailable_reasons, unexplained_detectors

@@ -155,7 +155,7 @@ def _two_source_group() -> record.GroupAttribution:
             marginal_rows=marginal,
         ),
     ]
-    return _group(sources, names, group_flags=["reference_includes_flagged_rows"], reference_id="all_rows")
+    return _group(sources, names, group_flags=["reference_lower_half"], reference_id="lower_half")
 
 
 def test_build_ranks_like_top_n_reasons_and_records_the_decomposition() -> None:
@@ -192,8 +192,8 @@ def test_build_ranks_like_top_n_reasons_and_records_the_decomposition() -> None:
         assert rec["signed_contribution"] == pytest.approx(total)
         assert rec["contribution_magnitude"] >= abs(rec["signed_contribution"]) - 1e-12
         assert rec["explainer_version"] == record.EXPLAINER_VERSION
-        assert rec["reference_id"] == "all_rows"
-        assert "reference_includes_flagged_rows" in rec["approximation_flags"]
+        assert rec["reference_id"] == "lower_half"
+        assert "reference_lower_half" in rec["approximation_flags"]
 
     first = records[0]
     assert (first["row_id"], first["reason_rank"], first["original_field"]) == (10, 1, "amount")
@@ -249,6 +249,19 @@ def test_unexplained_detectors_and_source_flags_reach_every_row() -> None:
     assert "treeshap_additivity_unchecked" not in record.row_flags(attr, 1)
 
 
+def test_gradient_and_marginal_rows_are_judged_on_their_own_scales() -> None:
+    # Row 0: a small but real gradient. Rows 1-2: marginal deviations, far larger.
+    values = np.array([[1e-4, 2e-4], [40.0, 3.0], [50.0, 1.0]])
+    marginal = np.array([False, True, True])
+    src = _source(
+        "ocsvm", values, marginal_rows=marginal, method="finite_difference_gradient", kind="heuristic"
+    )
+    assert src.informative.tolist() == [True, True, True]
+    attr = _group([src], ["x", "y"])
+    assert record.has_signal(attr, 0)
+    assert record.row_gaps(attr, 0) == []
+
+
 def test_a_row_only_a_zero_weight_source_informs_has_no_signal() -> None:
     a = np.array([[0.0, 0.0], [1.0, 1.0]])
     dropped = np.array([[5.0, 1.0], [1.0, 1.0]])
@@ -288,7 +301,7 @@ def test_every_flag_the_pipeline_emits_is_documented() -> None:
     documented = {k.split(":", 1)[0] for k in record.APPROXIMATION_FLAGS}
     emitted = {
         "treeshap_additivity_unchecked",
-        "treeshap_path_dependent",
+        "treeshap_path_length",
         "kernel_shap_sampled",
         "unsigned_method",
         "marginal_deviation_fallback",
@@ -297,7 +310,7 @@ def test_every_flag_the_pipeline_emits_is_documented() -> None:
         "no_signal_from",
         "not_explained",
         "pca_back_projected",
-        "reference_includes_flagged_rows",
+        "reference_lower_half",
     }
     assert emitted == documented
 
@@ -333,6 +346,6 @@ def test_tree_shap_detailed_reports_the_fallback_method(monkeypatch: pytest.Monk
     det.fit(np.vstack([normal, targets]), seed=0)
     monkeypatch.setitem(sys.modules, "shap", None)
     with pytest.warns(UserWarning, match="shap is not installed"):
-        _, tag, method, marginal = tree_shap_attributions_detailed(det, targets, reference=normal)
-    assert (tag, method) == ("heuristic", "finite_difference_gradient")
+        _, tag, method, marginal, flags = tree_shap_attributions_detailed(det, targets, reference=normal)
+    assert (tag, method, flags) == ("heuristic", "finite_difference_gradient", [])
     assert marginal[0]
