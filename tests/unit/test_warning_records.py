@@ -64,3 +64,18 @@ def test_plain_string_warnings_from_older_runs_read_back_as_legacy_records() -> 
     assert (old["code"], old["message"]) == ("legacy", "an old warning")
     assert new["code"] == "explain.backend_failed"
     assert warning_records_from_json(None) == []
+
+
+def test_the_anomalies_table_says_why_a_row_has_no_full_explanation() -> None:
+    from sorethumb_ml.cli import _explain_kind_cell
+
+    assert _explain_kind_cell({"explain_status": "unavailable", "explain_issue": "beyond_max_rows"}) == (
+        "unavailable: beyond_max_rows"
+    )
+    assert (
+        _explain_kind_cell({"explain_status": "partial", "attribution_kind": "heuristic"})
+        == "heuristic (partial)"
+    )
+    assert _explain_kind_cell({"explain_status": "ok", "attribution_kind": "exact"}) == "exact"
+    assert _explain_kind_cell({"attribution_kind": None, "explain_status": None}) == "unexplained"
+    assert _explain_kind_cell({"rank": 1}) == "—"
