@@ -45,6 +45,7 @@ def _pre(tmp_path: Path, require: str = "all", extra: str = "") -> Any:
         ('\nrequire = "most"', "require"),
         ("\nalpha = 2.0", "alpha"),
         ("\nn_resamples = 10", "n_resamples"),
+        ('\ncontamination = "sometimes"', "contamination must be"),
     ],
 )
 def test_an_invalid_real_preregistration_is_rejected(tmp_path: Path, extra: str, message: str) -> None:

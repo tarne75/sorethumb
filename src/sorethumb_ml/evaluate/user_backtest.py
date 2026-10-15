@@ -577,6 +577,35 @@ def _measure(
 # ---------------------------------------------------------------------------
 
 
+def _review_budget(config: Config, review_budget: float | None) -> float:
+    """Return the review budget flags are judged against (see ``backtest_dataset``).
+
+    Raises:
+        ConfigError: no budget is available, or the two disagree.
+
+    """
+    contamination = config.scoring.contamination
+    if isinstance(contamination, float):
+        if review_budget is not None and review_budget != contamination:
+            msg = (
+                f"review_budget {review_budget} differs from scoring.contamination {contamination}; "
+                "a numeric contamination is the review budget."
+            )
+            raise ConfigError(msg)
+        return contamination
+    if review_budget is None:
+        msg = (
+            "sorethumb backtest judges flags against a review budget: with scoring.contamination = "
+            "'auto', pass the fraction of rows you can review as --review-budget (e.g. 0.05), or set "
+            "scoring.contamination to that number."
+        )
+        raise ConfigError(msg)
+    if not 0.0 < review_budget <= 0.5:
+        msg = f"review_budget must be in (0, 0.5]; got {review_budget}."
+        raise ConfigError(msg)
+    return review_budget
+
+
 def backtest_dataset(
     config: Config,
     *,
@@ -590,6 +619,7 @@ def backtest_dataset(
     record: bool = True,
     mode: str = "random",
     folds: int | None = None,
+    review_budget: float | None = None,
 ) -> DatasetBacktest:
     """Compare ensemble policies with the default on the configured dataset; record the evidence.
 
@@ -598,7 +628,9 @@ def backtest_dataset(
     subsamples with time order: every ``history.period_granularity`` period is
     fitted and the next one scored with those fits (the last *folds* such pairs,
     default all, at least 5); stability compares those flags with a refit on
-    *subsample* of the fitted period.
+    *subsample* of the fitted period. Policies run at ``scoring.contamination``;
+    when that is ``"auto"``, *review_budget* is the budget flags are judged
+    against (required then), and evidence then applies to runs at ``"auto"``.
 
     Raises:
         ConfigError: ``scoring.contamination`` is ``"auto"`` (a backtest needs a
@@ -608,14 +640,7 @@ def backtest_dataset(
     """
     from sorethumb_ml.store.workspace import Workspace  # noqa: PLC0415
 
-    budget = config.scoring.contamination
-    if not isinstance(budget, float):
-        msg = (
-            "sorethumb backtest needs a fixed review budget: set scoring.contamination to the "
-            "fraction of rows you can review (e.g. 0.05) instead of 'auto'. Evidence is only "
-            "valid for runs at that same budget."
-        )
-        raise ConfigError(msg)
+    budget = _review_budget(config, review_budget)
     if mode not in ("random", "forward"):
         msg = f"mode must be 'random' or 'forward'; got {mode!r}."
         raise ConfigError(msg)

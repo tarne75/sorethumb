@@ -58,6 +58,9 @@ class RealPreregistration:
     sha256: str
     # None: decision rule 1, as pre-registrations made before rule 2 were judged.
     ranking_tolerance: float | None = None
+    # "budget": policies run at each dataset's review budget; "auto": at
+    # scoring.contamination="auto", judged against the same budgets.
+    contamination: str = "budget"
 
 
 def load_real_preregistration(path: Path) -> RealPreregistration:
@@ -82,6 +85,7 @@ def load_real_preregistration(path: Path) -> RealPreregistration:
         expected_outcome=str(raw.get("expected_outcome", "")).strip(),
         sha256=hashlib.sha256(raw_bytes).hexdigest(),
         ranking_tolerance=float(raw["ranking_tolerance"]) if "ranking_tolerance" in raw else None,
+        contamination=str(raw.get("contamination", "budget")),
     )
     problems = []
     if policy_by_id(pre.candidate) is None:
@@ -93,6 +97,8 @@ def load_real_preregistration(path: Path) -> RealPreregistration:
     unknown = [d for d in pre.datasets if d not in REAL_DATASETS]
     if not pre.datasets or unknown or len(set(pre.datasets)) != len(pre.datasets):
         problems.append(f"datasets must be distinct, from {list(REAL_DATASETS)}; unknown: {unknown}")
+    if pre.contamination not in {"budget", "auto"}:
+        problems.append("contamination must be 'budget' or 'auto'")
     if pre.require not in {"all", "any"}:
         problems.append("require must be 'all' or 'any'")
     if not 0.0 < pre.alpha < 1.0:

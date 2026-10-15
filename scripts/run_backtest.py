@@ -171,18 +171,20 @@ def main(argv: list[str] | None = None) -> int:
     seeds = CONFIRMATION_ROUNDS[OPEN_ROUND] if confirming else DEVELOPMENT_SEEDS
     budgets = load_budgets(BUDGETS_PATH)
     kinds = backtest_scenarios()
-    cache: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    cache: dict[tuple[str, bool], dict[str, list[dict[str, Any]]]] = {}
 
-    def seeds_for(policy_id: str) -> dict[str, list[dict[str, Any]]]:
-        if policy_id not in cache:
-            print(f"Running {policy_id} on {len(kinds)} scenarios x {len(seeds)} {args.phase} seeds...")
-            cache[policy_id] = run_policy_seeds(policy_id, seeds)
-        return cache[policy_id]
+    def seeds_for(policy_id: str, auto: bool) -> dict[str, list[dict[str, Any]]]:
+        if (policy_id, auto) not in cache:
+            at = ' at contamination="auto"' if auto else ""
+            print(f"Running {policy_id}{at} on {len(kinds)} scenarios x {len(seeds)} {args.phase} seeds...")
+            cache[policy_id, auto] = run_policy_seeds(policy_id, seeds, contamination_auto=auto)
+        return cache[policy_id, auto]
 
     cfg = PipelineBenchmarkConfig(seed=seeds[0], n_seeds=len(seeds), n_bootstrap=STABILITY_REFITS)
     for path, prereg in preregs:
         try:
-            base, cand = seeds_for(prereg.baseline), seeds_for(prereg.candidate)
+            auto = prereg.contamination == "auto"
+            base, cand = seeds_for(prereg.baseline, auto), seeds_for(prereg.candidate, auto)
         except RuntimeError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1

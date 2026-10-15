@@ -111,6 +111,16 @@ def test_false_positive_budget_ratio_counts_wrong_flags_against_the_whole_row_bu
     assert out["false_positive_budget_ratio"] <= 1.0  # an exact-k policy never exceeds its budget
 
 
+def test_an_auto_contamination_ablation_runs_the_ensemble_at_auto() -> None:
+    budget = _fit_score_one_seed_pipeline("point", None, _ABLATION["combination_composite_agreement"], seed=0)
+    auto = _fit_score_one_seed_pipeline(
+        "point", None, _ABLATION["combination_composite_agreement_auto"], seed=0
+    )
+    assert budget["flag_count"] == round(0.05 * budget["n_holdout"])  # exact-k at the review budget
+    assert auto["flag_count"] != budget["flag_count"]  # each detector's own boundary decides instead
+    assert auto["over_flag_ratio"] == pytest.approx(auto["flag_count"] / (0.05 * auto["n_holdout"]))
+
+
 def test_an_unknown_scenario_is_rejected() -> None:
     with pytest.raises(ValueError, match="Unknown scenario"):
         _fit_score_one_seed_pipeline("nope", None, _ABLATION["default"], seed=0)

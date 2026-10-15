@@ -191,14 +191,14 @@ def _registration_commit(path: Path) -> str | None:
     return _git("log", "-1", "--format=%H", "--", rel) or None
 
 
-def _config(ds: RealDataset, data_path: Path, workdir: Path) -> Any:
+def _config(ds: RealDataset, data_path: Path, workdir: Path, contamination: str = "budget") -> Any:
     from sorethumb_ml.config import Config  # noqa: PLC0415
 
     raw: dict[str, Any] = {
         "source": {"uri": str(data_path), "format": "parquet"},
         "run": {"workdir": str(workdir), "seed": 0},
         "columns": {"reference_column": "label"},
-        "scoring": {"contamination": ds.review_budget},
+        "scoring": {"contamination": "auto" if contamination == "auto" else ds.review_budget},
         "explain": {"enabled": False},
     }
     if ds.mode == "forward":
@@ -207,7 +207,15 @@ def _config(ds: RealDataset, data_path: Path, workdir: Path) -> Any:
     return Config.model_validate(raw)
 
 
-def _measure(ds: RealDataset, candidate: str, phase: str, cache: Path, n_resamples: int) -> dict[str, Any]:
+def _measure(
+    ds: RealDataset,
+    candidate: str,
+    phase: str,
+    cache: Path,
+    n_resamples: int,
+    contamination: str = "budget",
+    ranking_tolerance: float | None = None,
+) -> dict[str, Any]:
     from sorethumb_ml.evaluate.user_backtest import backtest_dataset  # noqa: PLC0415
 
     frame, slice_desc = ds.slice(ds.load(cache), phase)
@@ -215,18 +223,21 @@ def _measure(ds: RealDataset, candidate: str, phase: str, cache: Path, n_resampl
     frame.write_parquet(data_path)
     with tempfile.TemporaryDirectory() as tmp:
         result = backtest_dataset(
-            _config(ds, data_path, Path(tmp) / "ws"),
+            _config(ds, data_path, Path(tmp) / "ws", contamination),
             policies=[candidate],
             replicates=REPLICATES,
             mode=ds.mode,
             n_resamples=n_resamples,
             record=False,
+            review_budget=ds.review_budget if contamination == "auto" else None,
+            ranking_tolerance=ranking_tolerance if ranking_tolerance is not None else 0.10,
         )
     return {
         "slice": slice_desc,
         "rows": len(frame),
         "anomalies": int(frame["label"].sum()),
         "review_budget": ds.review_budget,
+        "contamination": contamination,
         "mode": ds.mode,
         "replicates": result.replicates,
         "periods": list(result.periods),
@@ -304,7 +315,13 @@ def main(argv: list[str] | None = None) -> int:
         for dataset_id in pre.datasets:
             print(f"{pre.id}: {dataset_id} ({args.phase})...", flush=True)
             measured[dataset_id] = _measure(
-                DATASETS[dataset_id], pre.candidate, args.phase, args.cache_dir, pre.n_resamples
+                DATASETS[dataset_id],
+                pre.candidate,
+                args.phase,
+                args.cache_dir,
+                pre.n_resamples,
+                pre.contamination,
+                pre.ranking_tolerance,
             )
         decision = decide_real(pre, {d: m["per_replicate"] for d, m in measured.items()})
         verdict = "OUTPERFORMS" if decision.outperforms else "does not outperform"

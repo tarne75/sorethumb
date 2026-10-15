@@ -1312,6 +1312,16 @@ def backtest(
         int | None,
         typer.Option("--folds", help="With --forward: use only the last N period pairs (at least 5)."),
     ] = None,
+    review_budget: Annotated[
+        float | None,
+        typer.Option(
+            "--review-budget",
+            help=(
+                "With scoring.contamination = 'auto': the fraction of rows you can review, which "
+                "flags are judged against (policies still run at 'auto')."
+            ),
+        ),
+    ] = None,
     ranking_tolerance: Annotated[
         float,
         typer.Option(
@@ -1347,7 +1357,7 @@ def backtest(
     if not json_output:
         console.print(
             f"[bold]sorethumb backtest[/bold]  workspace={_e(cfg.run.workdir)}  "
-            f"replicates={replicates}  review budget={_e(cfg.scoring.contamination)}"
+            f"replicates={replicates}  contamination={_e(cfg.scoring.contamination)}"
         )
     try:
         result = backtest_dataset(
@@ -1359,6 +1369,7 @@ def backtest(
             mode="forward" if forward else "random",
             folds=folds,
             ranking_tolerance=ranking_tolerance,
+            review_budget=review_budget,
         )
     except SorethumbError as exc:
         _fail(json_output, f"backtest failed: {exc}", _classify_error(exc))

@@ -105,6 +105,7 @@ def test_a_preregistration_records_its_hash_and_defaults(tmp_path: Path) -> None
         ({"alpha": 1.5}, "alpha"),
         ({"n_resamples": 10}, "n_resamples"),
         ({"stability_metric": "flag_f1"}, "stability_metric"),
+        ({"contamination": "sometimes"}, "contamination must be"),
     ],
 )
 def test_an_invalid_preregistration_is_rejected(tmp_path: Path, extra: dict[str, Any], message: str) -> None:
@@ -218,6 +219,13 @@ def test_every_policy_a_backtest_names_has_a_default_settings_ablation() -> None
     assert ablation_for("rule:discrete-composite@1").name == "rule_discrete_composite"
     assert ablation_for("rule:discrete-budget@1").name == "rule_discrete_budget"
     assert ablation_for("rule:discrete-budget@2").name == "rule_discrete_budget_v2"
+    assert ablation_for("intersection@1", contamination_auto=True).name == "default_auto"
+    assert (
+        ablation_for("composite-agreement@1", contamination_auto=True).name
+        == "combination_composite_agreement_auto"
+    )
+    with pytest.raises(ValueError, match='contamination="auto"'):
+        ablation_for("union@1", contamination_auto=True)
     with pytest.raises(ValueError, match="no benchmark ablation"):
         ablation_for("composite-manual@1")
 

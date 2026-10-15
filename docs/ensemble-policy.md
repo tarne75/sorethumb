@@ -47,8 +47,8 @@ types, though. Whether a policy is better on *your* data is measured by
 `sorethumb backtest` ([CLI reference](cli_reference.md#sorethumb-backtest)):
 
 1. Set `columns.reference_column` to a 0/1 label column (used only for evaluation,
-   never for fitting) and `scoring.contamination` to the fraction of rows you can
-   review.
+   never for fitting). Set `scoring.contamination` to the fraction of rows you can
+   review, or keep `"auto"` and pass that fraction as `--review-budget`.
 2. Run `sorethumb backtest`. It fits your configured pipeline on random subsamples
    of your rows, applies the default and every candidate to the same fits, and
    decides each candidate with the same rule as the synthetic backtests:
