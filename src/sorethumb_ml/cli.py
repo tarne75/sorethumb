@@ -1298,6 +1298,20 @@ def backtest(
     no_record: Annotated[
         bool, typer.Option("--no-record", help="Measure only; write no evidence to the workspace.")
     ] = False,
+    forward: Annotated[
+        bool,
+        typer.Option(
+            "--forward",
+            help=(
+                "Out of time: fit each history.period_granularity period and score the next with "
+                "those fits (as score --from-run does). Needs columns.time_column."
+            ),
+        ),
+    ] = False,
+    folds: Annotated[
+        int | None,
+        typer.Option("--folds", help="With --forward: use only the last N period pairs (at least 5)."),
+    ] = None,
     json_output: _JSON_OPT = False,
 ) -> None:
     """Compare ensemble policies with the default on your own data, and record the evidence.
@@ -1327,7 +1341,13 @@ def backtest(
         )
     try:
         result = backtest_dataset(
-            cfg, policies=policy or None, replicates=replicates, subsample=subsample, record=not no_record
+            cfg,
+            policies=policy or None,
+            replicates=replicates,
+            subsample=subsample,
+            record=not no_record,
+            mode="forward" if forward else "random",
+            folds=folds,
         )
     except SorethumbError as exc:
         _fail(json_output, f"backtest failed: {exc}", _classify_error(exc))
@@ -1339,9 +1359,13 @@ def backtest(
     def _f(v: float, fmt: str = ".3f") -> str:
         return "—" if v != v else format(v, fmt)  # noqa: PLR0124 -- NaN check
 
+    unit = (
+        f"{result.replicates} periods scored forward ({_e(result.periods[0])} .. {_e(result.periods[-1])})"
+        if result.mode == "forward" and result.periods
+        else f"{result.replicates} replicates"
+    )
     table = Table(
-        title=f"Policies on {_e(result.dataset_fp)} ({result.n_rows} rows, {result.replicates} replicates)",
-        show_header=True,
+        title=f"Policies on {_e(result.dataset_fp)} ({result.n_rows} rows, {unit})", show_header=True
     )
     for col in ("Policy", "Flags/budget", "Wrong/budget", "Precision", "Recall", "F1", "AP", "Stability"):
         table.add_column(col, justify="left" if col == "Policy" else "right")

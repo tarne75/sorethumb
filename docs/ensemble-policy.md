@@ -227,6 +227,27 @@ which is why confirmation is a separate step:
   tolerance). Rows near the budget cut-off change between refits, which a unanimous
   vote mostly avoids by flagging fewer rows.
 
+### Real data
+
+The rounds above are synthetic. The same protocol, run through the same code as
+`sorethumb backtest`, is applied to three real labelled datasets
+(`scripts/run_real_backtest.py`, `sorethumb_ml.evaluate.real_backtest`):
+
+| dataset | rows | anomalies | how it is tested | review budget |
+| --- | --- | --- | --- | --- |
+| KDD Cup 1999, SA subset (network intrusion) | 100,655, mixed numeric and categorical | ~3.4% | random subsamples of 10,000-row slices | 5% |
+| UCI Covertype, class 2 vs 4 (ODDS) | 286,048 | ~1% | random subsamples of 10,000-row slices | 1% |
+| Credit-card transactions, Sept 2013 (OpenML 42175) | 284,807 over two days | ~0.17% fraud | forward: fit each hour, score the next | 0.5% |
+
+Each dataset has a development slice, on which the hypothesis is formed, and a
+disjoint confirmation slice, judged once: different random rows for KDD and
+Covertype, day 1 and day 2 for the card data. The pre-registration
+(`tests/benchmark/preregistrations/real/`) is committed before the confirmation run,
+and per-dataset p-values are Holm-corrected across the datasets the hypothesis names.
+
+<!-- real-backtest-results-start -->
+<!-- real-backtest-results-end -->
+
 ## Versioning
 
 A policy's version identifies its behaviour. Any change to which rows a policy flags or

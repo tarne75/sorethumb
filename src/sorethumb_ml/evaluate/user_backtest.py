@@ -20,6 +20,12 @@ statistics, on your rows and your configuration:
   ``stability_tolerance``.
 * **No labels.** Accuracy cannot be assessed: the backtest reports flag volume
   and stability only, and records the verdict ``not_assessable``.
+* **Forward mode** (``mode="forward"``, ``--forward``). Instead of random
+  subsamples, every ``history.period_granularity`` period is fitted and the
+  next one scored with those fits and calibrators -- what ``score --from-run``
+  does from one period to the next. Each scored period is one paired
+  replicate; stability compares its flags with those of a refit on a
+  subsample of the fitted period.
 
 Each comparison is recorded in the workspace (``policy_evidence``), scoped to
 the logical dataset and to the configuration apart from the policy
@@ -29,6 +35,7 @@ for an ``outperforms`` record in that scope -- see ``docs/ensemble-policy.md``.
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import math
@@ -107,10 +114,18 @@ class DatasetBacktest:
     verdicts: tuple[CandidateVerdict, ...]
     scope_hash: str
     notes: tuple[str, ...] = field(default=())
+    mode: str = "random"  # "random" subsamples, or "forward": fit period t, score t+1
+    periods: tuple[str, ...] = ()  # forward mode: the scored period labels, in order
+    # Per policy, one metrics dict per replicate (random) or scored period (forward),
+    # in the same order for every policy. Not part of as_dict: it is the raw material
+    # the verdicts rest on, recorded in the evidence's details instead.
+    per_replicate: dict[str, list[dict[str, float]]] = field(default_factory=dict, repr=False)
 
     def as_dict(self) -> dict[str, Any]:
-        """JSON-ready form (NaN becomes None)."""
-        return dict(_clean(asdict(self)))
+        """JSON-ready form (NaN becomes None), without the per-replicate values."""
+        d = asdict(self)
+        d.pop("per_replicate")
+        return dict(_clean(d))
 
 
 def _clean(value: Any) -> Any:
@@ -175,15 +190,26 @@ class _Flags:
 
 
 def _fit_frame(
-    df: pl.DataFrame, config: Config, parsed_temporal: Any, policies: list[EnsemblePolicy]
+    df: pl.DataFrame,
+    config: Config,
+    parsed_temporal: Any,
+    policies: list[EnsemblePolicy],
+    score_df: pl.DataFrame | None = None,
 ) -> _Flags:
-    """Fit the configured pipeline on *df* (per group, as a run does) and apply every policy."""
+    """Fit the configured pipeline on *df* (per group, as a run does) and apply every policy.
+
+    Flags *df* itself, as a run does -- or, with *score_df*, scores those rows
+    with the detectors and calibrators fitted on *df*, as ``score --from-run``
+    does for a later period. A *score_df* group with no fitted counterpart, or
+    one too small to fit, is skipped.
+    """
     from sorethumb_ml._pipeline import (  # noqa: PLC0415
         _fit_detector,
         _group_label,
         _slice_group_frame,
     )
     from sorethumb_ml.detectors import registry  # noqa: PLC0415
+    from sorethumb_ml.detectors._protocol import score_and_flag  # noqa: PLC0415
     from sorethumb_ml.features.build import apply_feature_plan, fit_features  # noqa: PLC0415
     from sorethumb_ml.profiling.plan import build_feature_plan  # noqa: PLC0415
     from sorethumb_ml.scoring.combine import ScoreEnsemble  # noqa: PLC0415
@@ -205,12 +231,19 @@ def _fit_frame(
         df_group = _slice_group_frame(df, group_by, group_values, plan)
         if len(df_group) < config.scoring.min_records:
             continue  # a run skips it too; its rows are never flagged or evaluated
-        space = apply_feature_plan(df_group, plan)
-        X = space.matrix
+        fit_space = apply_feature_plan(df_group, plan)
+        space = fit_space
+        if score_df is not None:
+            target = _slice_group_frame(score_df, group_by, group_values, plan)
+            if len(target) == 0:
+                continue
+            space = apply_feature_plan(target, plan)
         calibrated: dict[str, np.ndarray] = {}
         natural: dict[str, np.ndarray] = {}
         for name in enabled:
-            _, raw, nat, cal, _ = _fit_detector(name, X, config)
+            det, raw, nat, cal, _ = _fit_detector(name, fit_space.matrix, config)
+            if score_df is not None:
+                raw, nat = score_and_flag(det, space.matrix)
             calibrated[name] = cal.transform(raw)
             natural[name] = nat
         ids = np.asarray(space.row_ids, dtype=np.int64)
@@ -391,6 +424,135 @@ def decide_candidates(
 
 
 # ---------------------------------------------------------------------------
+# Forward (out-of-time) folds
+# ---------------------------------------------------------------------------
+
+
+def period_frames(df: pl.DataFrame, config: Config) -> list[tuple[str, pl.DataFrame]]:
+    """Split *df* into its ``history.period_granularity`` periods, in time order.
+
+    Each period's rows are exactly what ``sorethumb run --period LABEL`` (or a
+    backfill of that label) would process. Periods with no rows are dropped.
+
+    Raises:
+        ConfigError: no ``columns.time_column`` is configured.
+        SchemaError: the time column is missing or entirely null.
+
+    """
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    from sorethumb_ml._pipeline import _period_window_expr  # noqa: PLC0415
+    from sorethumb_ml.history.periods import period_bounds, period_range, resolve_period  # noqa: PLC0415
+
+    time_col = config.columns.time_column
+    if not time_col:
+        msg = "A forward backtest needs columns.time_column: it fits one period and scores the next."
+        raise ConfigError(msg)
+    if time_col not in df.columns:
+        msg = f"columns.time_column={time_col!r} is not in the dataset."
+        raise SchemaError(msg)
+    observed = df[time_col].drop_nulls()
+    if len(observed) == 0:
+        msg = f"columns.time_column={time_col!r} has no values."
+        raise SchemaError(msg)
+
+    def _as_datetime(value: Any) -> datetime:
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=UTC)
+        if isinstance(value, str):
+            parsed = datetime.fromisoformat(value)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+        return datetime(value.year, value.month, value.day, tzinfo=UTC)  # a date
+
+    granularity = config.history.period_granularity
+    roll = config.history.roll_non_business
+    first = resolve_period(_as_datetime(observed.min()), granularity, roll)[2]
+    last = resolve_period(_as_datetime(observed.max()), granularity, roll)[2]
+    frames = []
+    for label in period_range(first, last, granularity):
+        lo, hi = period_bounds(label, granularity)
+        frame = df.filter(_period_window_expr(time_col, df[time_col].dtype, lo, hi))
+        if len(frame):
+            frames.append((label, frame))
+    return frames
+
+
+def _forward_folds(
+    periods: list[tuple[str, pl.DataFrame]],
+    config: Config,
+    parsed_temporal: Any,
+    policies: list[EnsemblePolicy],
+    labels: dict[int, int] | None,
+    budget: float,
+    subsample: float,
+) -> tuple[list[str], dict[str, list[dict[str, float]]]]:
+    """Fit each period, score the next; stability from a refit on a subsample of the fitted period."""
+    per_fold: dict[str, list[dict[str, float]]] = {p.id: [] for p in policies}
+    scored: list[str] = []
+    for i, ((_, train), (label, test)) in enumerate(itertools.pairwise(periods)):
+        if len(train) < config.scoring.min_records:
+            continue
+        main = _fit_frame(train, config, parsed_temporal, policies, score_df=test)
+        if len(main.row_ids) == 0:
+            continue
+        rng = np.random.default_rng(config.run.seed + 7919 * (i + 1))
+        n_sub = max(2, round(len(train) * subsample))
+        idx = np.sort(rng.choice(len(train), size=n_sub, replace=False))
+        refit = _fit_frame(train[idx.tolist()], config, parsed_temporal, policies, score_df=test)
+        scored.append(label)
+        for p in policies:
+            per_fold[p.id].append(_replicate_metrics(main, p.id, refit, labels, budget))
+    return scored, per_fold
+
+
+def _measure(
+    df: pl.DataFrame,
+    config: Config,
+    parsed_temporal: Any,
+    all_policies: list[EnsemblePolicy],
+    labels: dict[int, int] | None,
+    budget: float,
+    *,
+    mode: str,
+    folds: int | None,
+    replicates: int,
+    subsample: float,
+) -> tuple[list[str], dict[str, list[dict[str, float]]], int]:
+    """Fit and score every replicate (or period pair); return (scored periods, per-replicate metrics, count)."""
+    scored_periods: list[str] = []
+    with warnings.catch_warnings():
+        # Per-fit advisories (an empty intersection, an anti-correlated member)
+        # are expected across replicates and say nothing about the comparison.
+        warnings.simplefilter("ignore", SorethumbWarning)
+        if mode == "forward":
+            periods = period_frames(df, config)
+            if folds is not None:
+                periods = periods[-(folds + 1) :]
+            scored_periods, per_replicate = _forward_folds(
+                periods, config, parsed_temporal, all_policies, labels, budget, subsample
+            )
+            if len(scored_periods) < 5:
+                msg = (
+                    f"A forward backtest needs at least 5 scorable period pairs at "
+                    f"history.period_granularity={config.history.period_granularity!r}; the data "
+                    f"has {len(scored_periods)}. Use a finer granularity or more history."
+                )
+                raise ConfigError(msg)
+            replicates = len(scored_periods)
+        else:
+            full = _fit_frame(df, config, parsed_temporal, all_policies)
+            per_replicate = {p.id: [] for p in all_policies}
+            n_sub = max(2, round(len(df) * subsample))
+            for r in range(replicates):
+                rng = np.random.default_rng(config.run.seed + 7919 * (r + 1))
+                idx = np.sort(rng.choice(len(df), size=n_sub, replace=False))
+                fitted = _fit_frame(df[idx.tolist()], config, parsed_temporal, all_policies)
+                for p in all_policies:
+                    per_replicate[p.id].append(_replicate_metrics(fitted, p.id, full, labels, budget))
+    return scored_periods, per_replicate, replicates
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -405,11 +567,17 @@ def backtest_dataset(
     stability_tolerance: float = 0.05,
     n_resamples: int = 10_000,
     record: bool = True,
+    mode: str = "random",
+    folds: int | None = None,
 ) -> DatasetBacktest:
     """Compare ensemble policies with the default on the configured dataset; record the evidence.
 
     See the module docstring for the method. *record* False measures without
-    writing evidence to the workspace.
+    writing evidence to the workspace. *mode* ``"forward"`` replaces the random
+    subsamples with time order: every ``history.period_granularity`` period is
+    fitted and the next one scored with those fits (the last *folds* such pairs,
+    default all, at least 5); stability compares those flags with a refit on
+    *subsample* of the fitted period.
 
     Raises:
         ConfigError: ``scoring.contamination`` is ``"auto"`` (a backtest needs a
@@ -427,8 +595,14 @@ def backtest_dataset(
             "valid for runs at that same budget."
         )
         raise ConfigError(msg)
-    if replicates < 5:
+    if mode not in ("random", "forward"):
+        msg = f"mode must be 'random' or 'forward'; got {mode!r}."
+        raise ConfigError(msg)
+    if mode == "random" and replicates < 5:
         msg = f"replicates must be at least 5 for a paired bootstrap to mean anything; got {replicates}."
+        raise ConfigError(msg)
+    if folds is not None and folds < 5:
+        msg = f"folds must be at least 5 for a paired bootstrap to mean anything; got {folds}."
         raise ConfigError(msg)
     if not 0.2 <= subsample < 1.0:
         msg = f"subsample must be in [0.2, 1.0); got {subsample}."
@@ -445,7 +619,7 @@ def backtest_dataset(
     ws_path = Path(config.run.workdir)
     ws = Workspace.open(ws_path) if (ws_path / "sorethumb.db").exists() else Workspace.init(ws_path)
     with ws:
-        df, parsed_temporal, ident = _load_frame(config, ws)
+        df, parsed_temporal, ident = _load_frame(config, ws, filter_period=mode == "random")
         dataset_fp, snapshot_fp = ident["dataset_fp"], ident["snapshot_fp"]
 
         ref = config.columns.reference_column
@@ -464,19 +638,18 @@ def backtest_dataset(
             subsample * 100,
             [p.id for p in all_policies],
         )
-        with warnings.catch_warnings():
-            # Per-fit advisories (an empty intersection, an anti-correlated member)
-            # are expected across replicates and say nothing about the comparison.
-            warnings.simplefilter("ignore", SorethumbWarning)
-            full = _fit_frame(df, config, parsed_temporal, all_policies)
-            per_replicate: dict[str, list[dict[str, float]]] = {p.id: [] for p in all_policies}
-            n_sub = max(2, round(len(df) * subsample))
-            for r in range(replicates):
-                rng = np.random.default_rng(config.run.seed + 7919 * (r + 1))
-                idx = np.sort(rng.choice(len(df), size=n_sub, replace=False))
-                fitted = _fit_frame(df[idx.tolist()], config, parsed_temporal, all_policies)
-                for p in all_policies:
-                    per_replicate[p.id].append(_replicate_metrics(fitted, p.id, full, labels, budget))
+        scored_periods, per_replicate, replicates = _measure(
+            df,
+            config,
+            parsed_temporal,
+            all_policies,
+            labels,
+            budget,
+            mode=mode,
+            folds=folds,
+            replicates=replicates,
+            subsample=subsample,
+        )
 
         verdicts = decide_candidates(
             per_replicate,
@@ -497,6 +670,8 @@ def backtest_dataset(
                 labelled=labels is not None,
                 scope=scope,
                 settings={
+                    "mode": mode,
+                    "periods": scored_periods,
                     "replicates": replicates,
                     "subsample": subsample,
                     "alpha": alpha,
@@ -517,6 +692,9 @@ def backtest_dataset(
         verdicts=tuple(verdicts),
         scope_hash=scope,
         notes=tuple(notes),
+        mode=mode,
+        periods=tuple(scored_periods),
+        per_replicate=per_replicate,
     )
 
 
@@ -524,8 +702,13 @@ def _nan_none(value: float) -> float | None:
     return None if math.isnan(value) else value
 
 
-def _load_frame(config: Config, ws: Any) -> tuple[pl.DataFrame, Any, dict[str, Any]]:
-    """Load and prepare the dataset exactly as a run does (before group fitting)."""
+def _load_frame(
+    config: Config, ws: Any, *, filter_period: bool = True
+) -> tuple[pl.DataFrame, Any, dict[str, Any]]:
+    """Load and prepare the dataset exactly as a run does (before group fitting).
+
+    *filter_period* False keeps every period (a forward backtest walks them all).
+    """
     from sorethumb_ml._pipeline import (  # noqa: PLC0415
         _apply_row_cap,
         _resolve_and_filter_period,
@@ -552,7 +735,8 @@ def _load_frame(config: Config, ws: Any) -> tuple[pl.DataFrame, Any, dict[str, A
     snapshot_fp = snapshot_fingerprint(content_fp, schema_fp)
     df = _stamp_source_row_id(df)
     df, parsed_temporal = parse_temporal_columns(df, config.columns)
-    df, _, _ = _resolve_and_filter_period(df, config, None)
+    if filter_period:
+        df, _, _ = _resolve_and_filter_period(df, config, None)
     df = _apply_row_cap(df, config.run.max_rows)
 
     ident = {

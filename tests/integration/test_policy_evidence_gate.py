@@ -402,3 +402,131 @@ def test_run_summary_and_show_name_the_evidence_or_its_absence(tmp_path: Path) -
     assert f"Evidence: {evidence_id}" in shown.stdout
     doc = json.loads(runner.invoke(app, ["show", run_id, "--config", str(toml), "--json"]).stdout)
     assert doc["policy_evidence"]["evidence_id"] == evidence_id
+
+
+# ---------------------------------------------------------------------------
+# Forward (out-of-time) backtests
+# ---------------------------------------------------------------------------
+
+
+def _write_timed_csv(path: Path, *, days: int = 7, per_day: int = 200, seed: int = 0) -> None:
+    from datetime import datetime, timedelta
+
+    rng = np.random.default_rng(seed)
+    n = days * per_day
+    x = rng.normal(size=(n, 3))
+    y = np.zeros(n, dtype=int)
+    hit = rng.choice(n, n // 25, replace=False)
+    x[hit] += 5.0
+    y[hit] = 1
+    minutes = np.sort(rng.integers(0, days * 24 * 60, n))
+    ts = [datetime(2026, 1, 5) + timedelta(minutes=int(m)) for m in minutes]
+    pl.DataFrame({"ts": ts, "a": x[:, 0], "b": x[:, 1], "c": x[:, 2], "label": y}).write_csv(path)
+
+
+def _timed_cfg(tmp_path: Path, **over: object) -> Config:
+    csv = tmp_path / "timed.csv"
+    if not csv.exists():
+        _write_timed_csv(csv)
+    raw: dict[str, object] = {
+        "source": {"uri": str(csv), "format": "csv"},
+        "run": {"workdir": str(tmp_path / "ws"), "seed": 0},
+        "columns": {"reference_column": "label", "time_column": "ts"},
+        "detectors": [{"name": "isolation_forest"}, {"name": "kmeans_distance"}],
+        "scoring": {"contamination": 0.05, "combination": "composite", "weighting": "agreement"},
+        "history": {"period_granularity": "day", "roll_non_business": False},
+        "explain": {"enabled": False},
+    }
+    raw.update(over)
+    return Config.model_validate(raw)
+
+
+def test_period_frames_match_what_a_run_would_process_per_period(tmp_path: Path) -> None:
+    from sorethumb_ml.evaluate.user_backtest import period_frames
+    from sorethumb_ml.profiling.temporal import parse_temporal_columns
+
+    cfg = _timed_cfg(tmp_path)
+    df, _ = parse_temporal_columns(pl.read_csv(tmp_path / "timed.csv"), cfg.columns)
+    frames = period_frames(df, cfg)
+    assert [label for label, _ in frames] == [f"2026-01-{d:02d}" for d in range(5, 12)]
+    assert sum(len(f) for _, f in frames) == len(df)
+
+
+def test_a_forward_backtest_fits_each_period_and_scores_the_next(tmp_path: Path) -> None:
+    cfg = _timed_cfg(tmp_path)
+    result = backtest_dataset(
+        cfg, policies=["composite-agreement@1"], mode="forward", record=True, n_resamples=2000
+    )
+    assert result.mode == "forward"
+    assert result.periods == tuple(f"2026-01-{d:02d}" for d in range(6, 12))  # day 1 is only ever fitted
+    assert result.replicates == 6
+    assert len(result.per_replicate["composite-agreement@1"]) == 6
+    with Workspace.open(Path(cfg.run.workdir)) as ws:
+        (row,) = ws.store.list_policy_evidence(result.dataset_fp)
+    details = json.loads(str(row["details_json"]))
+    assert details["mode"] == "forward"
+    assert details["periods"] == list(result.periods)
+
+    last5 = backtest_dataset(
+        cfg, policies=["union@1"], mode="forward", folds=5, record=False, n_resamples=2000
+    )
+    assert last5.periods == result.periods[-5:]
+
+
+@pytest.mark.parametrize(
+    ("over", "kwargs", "error", "message"),
+    [
+        ({"columns": {"reference_column": "label"}}, {}, ConfigError, "time_column"),
+        ({"history": {"period_granularity": "week"}}, {}, ConfigError, "at least 5 scorable"),
+        ({}, {"folds": 3}, ConfigError, "folds must be at least 5"),
+        ({}, {"mode": "sideways"}, ConfigError, "mode must be"),
+    ],
+)
+def test_a_forward_backtest_refuses_what_it_cannot_measure(
+    tmp_path: Path, over: dict[str, object], kwargs: dict[str, object], error: type[Exception], message: str
+) -> None:
+    cfg = _timed_cfg(tmp_path, **over)
+    with pytest.raises(error, match=message):
+        backtest_dataset(cfg, **{"mode": "forward", "record": False, **kwargs})  # type: ignore[arg-type]
+
+
+def test_backtest_cli_forward_reports_the_scored_periods(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from sorethumb_ml.cli import app
+
+    cfg = _timed_cfg(tmp_path)
+    toml = tmp_path / "sorethumb.toml"
+    toml.write_text(
+        f"""[source]
+uri = {json.dumps(cfg.source.uri)}
+format = "csv"
+[run]
+workdir = {json.dumps(cfg.run.workdir)}
+[columns]
+reference_column = "label"
+time_column = "ts"
+[scoring]
+contamination = 0.05
+[history]
+period_granularity = "day"
+roll_non_business = false
+[[detectors]]
+name = "isolation_forest"
+[[detectors]]
+name = "kmeans_distance"
+""",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(
+        app, ["backtest", "--config", str(toml), "--forward", "--policy", "union@1", "--no-record", "--json"]
+    )
+    assert result.exit_code == 0, result.stdout
+    doc = json.loads(result.stdout)
+    assert doc["mode"] == "forward"
+    assert len(doc["periods"]) == 6
+    assert "per_replicate" not in doc
+    human = CliRunner().invoke(
+        app, ["backtest", "--config", str(toml), "--forward", "--policy", "union@1", "--no-record"]
+    )
+    assert "periods scored forward" in human.stdout

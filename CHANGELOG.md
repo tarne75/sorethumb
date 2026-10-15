@@ -155,6 +155,12 @@ First public release.
   on is recorded as `run.policy_evidence_id` and in `--json` output, and shown by
   `sorethumb show` and the run summary; `sorethumb evidence` lists the recorded
   evidence and which records apply to the current configuration.
+  `sorethumb backtest --forward` tests out of time instead: each period is fitted
+  and the next scored with those fits, as `score --from-run` does.
+- **Real-data policy evidence**: the pre-registered backtest protocol applied to
+  KDD Cup 1999 (SA), Covertype (2 vs 4) and a time-ordered credit-card fraud
+  dataset, with disjoint development and confirmation slices; results in
+  `docs/ensemble-policy.md`.
 
 ### Security
 
