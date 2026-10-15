@@ -105,6 +105,29 @@ def aggregate_to_original(
     return original_cols
 
 
+def aggregate_signed_to_original(
+    feature_attributions: np.ndarray,
+    feature_names: list[str],
+    derived_to_original: dict[str, str],
+) -> dict[str, np.ndarray]:
+    """Sum *signed* feature attributions per original column.
+
+    The signed companion of ``aggregate_to_original``: positive means the field
+    pushes the row toward anomaly, negative toward normal. Opposite-signed
+    derived features of one field (two one-hot dummies, say) partly cancel
+    here, which is why reasons are still *ranked* by the absolute sum.
+    """
+    original_cols: dict[str, np.ndarray] = {}
+    for feat_idx, feat_name in enumerate(feature_names):
+        orig = derived_to_original.get(feat_name, feat_name)
+        col_contrib = np.asarray(feature_attributions[:, feat_idx], dtype=np.float64)
+        if orig in original_cols:
+            original_cols[orig] = original_cols[orig] + col_contrib
+        else:
+            original_cols[orig] = col_contrib.copy()
+    return original_cols
+
+
 def top_n_reasons(
     row_idx: int,
     original_attributions: dict[str, np.ndarray],

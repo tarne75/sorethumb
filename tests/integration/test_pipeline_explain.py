@@ -282,7 +282,7 @@ def test_dropped_detector_as_sole_would_be_producer_yields_no_attribution(
     def _raise(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("forced attribution failure")
 
-    monkeypatch.setattr(shap_tree_mod, "tree_shap_attributions", _raise)
+    monkeypatch.setattr(shap_tree_mod, "tree_shap_attributions_detailed", _raise)
     monkeypatch.setattr(native_mod, "ecod_attributions", _raise)
 
     csv = tmp_path / "data.csv"

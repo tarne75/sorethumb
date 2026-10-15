@@ -197,6 +197,23 @@ First public release.
   - Each explained row records `explain_status` (`ok`, `partial`,
     `unavailable`) and `explain_issue`. An unavailable row's `reason_1` is now
     null; it used to hold the text "unavailable (...)".
+- **Explanation record**: `attributions.parquet` records, for every reason, the
+  original field, its raw value, the reference value and the row's direction
+  against it, the signed contribution (positive toward anomaly) alongside the
+  magnitude reasons are ranked by, each detector's method, weight and share, the
+  transformed features behind the field, every approximation caveat that applies
+  (`approximation_flags`), the `explainer_version` (`explain@1`) and the
+  `reference_id`. `sorethumb anomalies --detail` shows it. Ranking and the
+  `reason_<k>` labels are unchanged.
+  - A row is now `partial`, with `explain_issue` naming the detectors, when a
+    detector that counts toward the score says nothing about that row: it is
+    beyond that detector's `explain.max_rows`, or its attribution there is zero.
+    Such rows used to show as `ok`.
+  - A row every source attributes as zero is now `unavailable`
+    (`no_attribution_signal`, warning `explain.no_signal`). It used to list its
+    first fields as reasons, all with zero weight.
+  - A group whose explanation stage fails no longer keeps an earlier attempt's
+    explanation files.
 - **Real-data policy evidence**: the pre-registered backtest protocol applied to
   KDD Cup 1999 (SA), Covertype (2 vs 4) and a time-ordered credit-card fraud
   dataset, with disjoint development and confirmation slices; results in

@@ -49,6 +49,22 @@ def tree_shap_attributions(
 ) -> tuple[np.ndarray, str]:
     """Compute per-row TreeSHAP attributions for an IsolationForest.
 
+    See ``tree_shap_attributions_detailed``; this returns only
+    ``(attributions, tag)``.
+    """
+    attributions, tag, _, _ = tree_shap_attributions_detailed(detector, X, group_name, reference=reference)
+    return attributions, tag
+
+
+def tree_shap_attributions_detailed(
+    detector: IsolationForestDetector,
+    X: np.ndarray,
+    group_name: str = "",
+    *,
+    reference: np.ndarray,
+) -> tuple[np.ndarray, str, str, np.ndarray]:
+    """Per-row TreeSHAP attributions, with the method actually used and any marginal-fallback rows.
+
     Parameters
     ----------
     detector:
@@ -73,6 +89,10 @@ def tree_shap_attributions(
     tag:
         "model_specific" on success (TreeSHAP over the fitted trees, additivity
         unverified — not "exact"), "heuristic" after fallback.
+    method:
+        ``"tree_shap"`` on success, ``"finite_difference_gradient"`` after fallback.
+    marginal_rows:
+        Rows the fallback attributed by marginal deviation (all-False on success).
 
     """
     try:
@@ -84,7 +104,7 @@ def tree_shap_attributions(
         # shap_values: (n_rows, n_features) — SHAP convention: positive = pushes score higher = more normal
         # Negate so positive attribution means more anomalous (consistent with calibrated score direction)
         attributions = -np.asarray(shap_values, dtype=np.float64)
-        return attributions, "model_specific"
+        return attributions, "model_specific", "tree_shap", np.zeros(len(attributions), dtype=bool)
 
     except ImportError as exc:
         warnings.warn(
@@ -112,9 +132,9 @@ def tree_shap_attributions(
         logger.warning("TreeSHAP fallback triggered for group %r: %s", group_name, exc)
 
     # Fallback: import here to avoid circular dependency at module load time
-    from sorethumb_ml.explain.gradient import gradient_attributions  # noqa: PLC0415
+    from sorethumb_ml.explain.gradient import gradient_attributions_detailed  # noqa: PLC0415
 
     # saturating=True: IsolationForest's score is piecewise constant, so far-out
     # rows get a zero gradient in exactly the dimension that isolated them.
-    attrs, _ = gradient_attributions(detector, X, reference=reference, saturating=True)
-    return attrs, "heuristic"
+    attrs, marginal_rows = gradient_attributions_detailed(detector, X, reference=reference, saturating=True)
+    return attrs, "heuristic", "finite_difference_gradient", marginal_rows

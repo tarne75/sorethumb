@@ -27,12 +27,17 @@ Explanation never changes detection. Each group runs in two stages:
    | column | meaning |
    | --- | --- |
    | `row_id` | the flagged row |
-   | `explain_status` | `ok`; `partial` (some detector's share of the score is unexplained); or `unavailable` (no explanation for this row) |
-   | `explain_issue` | null when `ok`; otherwise `detectors_unexplained:<names>`, `beyond_max_rows` or `pca_backprojection_failed` |
+   | `explain_status` | `ok`; `partial` (some detector's share of the score is unexplained for this row: no method, its explainer failed, the row is beyond its `explain.max_rows`, or its attribution for the row was zero); or `unavailable` (no explanation for this row) |
+   | `explain_issue` | null when `ok`; otherwise `detectors_unexplained:<names>`, `beyond_max_rows`, `no_attribution_signal` or `pca_backprojection_failed` |
    | `attribution_kind` | `exact`, `model_specific`, `heuristic`, or `unavailable` |
+   | `explainer_version` | the explanation logic that produced the row (`explain@1`); see "The explanation record" |
    | `reason_<k>` | `field=value`, most important first. Null for an unavailable row: these columns hold reasons only |
 
-Readers (`sorethumb anomalies`, the report) join the two files by `row_id`.
+   Alongside it, `attributions.parquet` holds the record behind each reason;
+   see "The explanation record" below.
+
+Readers (`sorethumb anomalies`, the report) join `anomalies.parquet` and
+`explanations.parquet` by `row_id`.
 
 **Status.** Each group records an `explain_status`:
 
@@ -61,6 +66,7 @@ the run summary, `sorethumb show` and the report. The explanation codes:
 | `explain.detector_unsupported` | a detector has no vetted attribution method; its share is unexplained (rows `partial`) |
 | `explain.fallback_used` | TreeSHAP or KernelSHAP was unavailable or failed; a heuristic method was used instead |
 | `explain.rows_beyond_max_rows` | some flagged rows are beyond `explain.max_rows` for every source that covers them (rows `unavailable`) |
+| `explain.no_signal` | every source's attribution for some flagged rows was zero, so nothing distinguishes their fields (rows `unavailable`, issue `no_attribution_signal`) |
 | `explain.pca_backprojection_failed` | PCA-space attributions could not be mapped to original columns (all rows `unavailable`) |
 | `explain.reference_fallback` | fewer than 10 unflagged rows, so the reference for perturbation scales and SHAP backgrounds is the whole group, flagged rows included |
 
@@ -71,6 +77,57 @@ the run summary, `sorethumb show` and the report. The explanation codes:
 - A `failed` explanation stage makes the run exit `partial` (code 4).
 - Under `run.strict`, any explanation warning makes the run exit `partial`; it no
   longer fails the group, which would have discarded its detection output.
+
+---
+
+## The explanation record
+
+`reason_<k>` is a label. `attributions.parquet` (one row per explained flagged row
+and reason; read it with `store.results.read_attributions`, or
+`sorethumb anomalies --detail`) records how each one was produced:
+
+| column | meaning |
+| --- | --- |
+| `row_id`, `reason_rank` | the flagged row and the reason's position (`reason_rank = k` is `reason_<k>`) |
+| `original_field` | the input column |
+| `raw_value` | the row's value, as text (null when missing) |
+| `reference_value` | the reference population's typical value: median for numbers and dates, most common value otherwise (null when there is none) |
+| `direction` | where the row sits against it: `above`, `below`, `same`, `different` (categorical) or `missing` |
+| `signed_contribution` | the blended attribution summed over the field's transformed features. Positive pushes the row toward anomaly, negative toward normal |
+| `contribution_magnitude` | the sum of absolute values over those features. Reasons are ranked by this, so a field whose features pull both ways still ranks by how much it moved the score |
+| `attribution_kind` | the blended kind, as in `explanations.parquet` |
+| `methods` | per detector that informs the row: `detector`, `method`, `attribution_kind`, `weight` (its weight in this row's blend), `signed_contribution` (in the units it enters the blend). `signed_contribution` above is the weight-sum of these |
+| `transformed_features` | up to five derived features behind the field (scaled numerics, one-hot dummies, date parts), largest absolute contribution first, each with its signed contribution |
+| `approximation_flags` | every caveat that applies to this row (table below) |
+| `explainer_version` | `explain@1`. It changes whenever a change alters what an explanation means, so explanations from different logic are never compared as if alike |
+| `reference_id` | the reference population: `unflagged_rows`, or `all_rows` when fewer than 10 rows were unflagged |
+
+Method names: `tree_shap`, `ecod_decomposition`, `hbos_decomposition`,
+`centroid_distance`, `finite_difference_gradient`, `kernel_shap`.
+
+Approximation flags (`<det>` is a detector name):
+
+| flag | meaning |
+| --- | --- |
+| `treeshap_additivity_unchecked` | TreeSHAP ran with additivity checking off and decomposes path length, not the score (see TreeSHAP below) |
+| `treeshap_path_dependent` | TreeSHAP used the trees' own training paths as its background, not the reference population |
+| `kernel_shap_sampled` | KernelSHAP estimated the values from sampled coalitions against a k-means background |
+| `unsigned_method:<det>` | the method (centroid distance) reports how far each dimension is from the centroid, not which way it pushes the score; its share is never negative |
+| `marginal_deviation_fallback` | the score was flat around the row, so it was attributed by its reference-scaled distance from the median per dimension: unsigned, and blind to the detector |
+| `fallback_used:<det>` | the detector's preferred method (TreeSHAP, KernelSHAP) was unavailable or failed; a heuristic ran instead |
+| `not_covered_by:<det>` | the row is beyond the detector's `explain.max_rows`; it contributes nothing to this row |
+| `no_signal_from:<det>` | the detector's attribution for the row was zero; it contributes nothing to it |
+| `not_explained:<det>` | the detector has no method or its explainer failed; its share of the score is unexplained |
+| `pca_back_projected` | attributions were mapped back from PCA components through absolute loadings, which do not carry a loading's sign |
+| `reference_includes_flagged_rows` | fewer than 10 rows were unflagged, so the reference includes the flagged rows |
+
+`not_covered_by`, `no_signal_from` and `not_explained` are the per-row form of
+`explain_status = partial`: a row carrying any of them is `partial`, and
+`explain_issue` names those detectors.
+
+`raw_value` and `reference_value` are on the original column's scale. The
+signed contributions are attribution units, which differ by method; compare
+them within a row, not across runs with different detectors.
 
 ---
 
@@ -248,9 +305,11 @@ back to their source column. A row that triggers `cat__A = 1, cat__B = 0` does
 not produce two separate explanation entries for `cat__A` and `cat__B`; it
 produces one entry for `cat` with the combined attribution weight.
 
-`top_n_reasons` then returns the `explain.top_n` features with the highest
-absolute attribution weights. These are the features that most distinguish the
-anomalous row from the rest of the population.
+Two sums are kept per original field. The *magnitude* adds absolute values, so
+dummies cannot cancel; reasons are ranked by it, and the `explain.top_n` largest
+become `reason_<k>`. The *signed* sum keeps direction (positive toward anomaly),
+so `cat__A = +0.4` and `cat__B = -0.4` give magnitude 0.8 and signed 0. Both are
+in the explanation record, with the transformed features behind them.
 
 ---
 

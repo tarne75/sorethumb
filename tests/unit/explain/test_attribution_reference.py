@@ -178,13 +178,13 @@ def test_tree_shap_gradient_fallback_scales_from_the_reference(monkeypatch):
     det.fit(population, seed=0)
     monkeypatch.setitem(sys.modules, "shap", None)  # shap "not installed" -> gradient fallback
     seen: dict[str, np.ndarray] = {}
-    real = gradient_mod.gradient_attributions
+    real = gradient_mod.gradient_attributions_detailed
 
     def _spy(detector, X, *, reference, **kw):
         seen["reference"] = reference
         return real(detector, X, reference=reference, **kw)
 
-    monkeypatch.setattr(gradient_mod, "gradient_attributions", _spy)
+    monkeypatch.setattr(gradient_mod, "gradient_attributions_detailed", _spy)
 
     with pytest.warns(UserWarning, match="shap is not installed"):
         _, tag = tree_shap_attributions(det, anomaly, reference=normal)

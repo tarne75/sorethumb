@@ -133,6 +133,26 @@ def gradient_attributions(
 ) -> tuple[np.ndarray, str]:
     """Compute central finite-difference attributions for each target row in X.
 
+    See ``gradient_attributions_detailed`` for the parameters; this returns
+    only ``(attributions, "heuristic")``.
+    """
+    attributions, _ = gradient_attributions_detailed(
+        detector, X, reference=reference, max_rows=max_rows, step_factor=step_factor, saturating=saturating
+    )
+    return attributions, "heuristic"
+
+
+def gradient_attributions_detailed(
+    detector: Any,
+    X: np.ndarray,
+    *,
+    reference: np.ndarray,
+    max_rows: int = 5000,
+    step_factor: float = _DEFAULT_STEP_FACTOR,
+    saturating: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Finite-difference attributions, plus which rows used the marginal-deviation fallback.
+
     Parameters
     ----------
     detector:
@@ -162,8 +182,11 @@ def gradient_attributions(
     -------
     attributions:
         Shape (n_rows, n_features). Positive = pushes toward anomaly.
-    tag:
-        Always "heuristic".
+    marginal_rows:
+        Boolean mask, shape (n_rows,): rows attributed with
+        ``marginal_deviation_attributions`` instead of a gradient (always
+        all-False unless *saturating*). The explanation record reports it per
+        row, because a marginal deviation is unsigned and ignores the detector.
 
     """
     _check_reference(X, reference, "gradient_attributions")
@@ -223,7 +246,7 @@ def gradient_attributions(
                 n_rows,
             )
 
-    return attributions, "heuristic"
+    return attributions, use_marginal
 
 
 def kernel_shap_attributions(
@@ -235,6 +258,22 @@ def kernel_shap_attributions(
     max_rows: int = 5000,
     saturating: bool = False,
 ) -> tuple[np.ndarray, str]:
+    """KernelSHAP attributions; see ``kernel_shap_attributions_detailed``. Returns ``(attributions, "heuristic")``."""
+    attributions, _, _ = kernel_shap_attributions_detailed(
+        detector, X, reference=reference, background_k=background_k, max_rows=max_rows, saturating=saturating
+    )
+    return attributions, "heuristic"
+
+
+def kernel_shap_attributions_detailed(
+    detector: Any,
+    X: np.ndarray,
+    *,
+    reference: np.ndarray,
+    background_k: int = 50,
+    max_rows: int = 5000,
+    saturating: bool = False,
+) -> tuple[np.ndarray, str, np.ndarray]:
     """KernelSHAP attributions for the target rows *X*, against a k-means summary of *reference*.
 
     Much slower than gradient or TreeSHAP; the tag stays "heuristic".
@@ -266,6 +305,17 @@ def kernel_shap_attributions(
         Passed to the gradient fallback used when shap is not installed (see
         ``gradient_attributions``); KernelSHAP itself does not use it.
 
+    Returns
+    -------
+    attributions:
+        Shape (n_rows, n_features). Positive = pushes toward anomaly.
+    method:
+        ``"kernel_shap"``, or ``"finite_difference_gradient"`` after the
+        shap-not-installed fallback.
+    marginal_rows:
+        Rows the gradient fallback attributed by marginal deviation (all-False
+        for KernelSHAP itself).
+
     """
     try:
         import shap  # noqa: PLC0415
@@ -279,9 +329,10 @@ def kernel_shap_attributions(
             stacklevel=2,
         )
         logger.warning("KernelSHAP unavailable (shap not installed): %s", exc)
-        return gradient_attributions(
+        attributions, marginal_rows = gradient_attributions_detailed(
             detector, X, reference=reference, max_rows=max_rows, saturating=saturating
         )
+        return attributions, "finite_difference_gradient", marginal_rows
 
     _check_reference(X, reference, "kernel_shap_attributions")
     if X.shape[0] > max_rows:
@@ -299,4 +350,4 @@ def kernel_shap_attributions(
     shap_values = explainer.shap_values(X, nsamples="auto")
     # Negate: SHAP positive = more normal → negate for more anomalous
     attributions = -np.asarray(shap_values, dtype=np.float64)
-    return attributions, "heuristic"
+    return attributions, "kernel_shap", np.zeros(len(attributions), dtype=bool)

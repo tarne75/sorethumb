@@ -223,13 +223,13 @@ def test_explain_enabled_false_skips_attribution(tmp_path: Path, monkeypatch: py
     calls: list[str] = []
     import sorethumb_ml.explain.shap_tree as shap_tree
 
-    real = shap_tree.tree_shap_attributions
+    real = shap_tree.tree_shap_attributions_detailed
 
     def _spy(*a, **k):
         calls.append("shap")
         return real(*a, **k)
 
-    monkeypatch.setattr(shap_tree, "tree_shap_attributions", _spy)
+    monkeypatch.setattr(shap_tree, "tree_shap_attributions_detailed", _spy)
     csv = _write_csv(tmp_path / "d.csv")
 
     run_detection(_cfg(csv, tmp_path / "ws_on", explain_kwargs={"enabled": True}), no_report=True)
@@ -252,15 +252,16 @@ def test_explain_kernel_shap_routes_non_tree_detectors(
 
     seen: list[str] = []
 
-    def _stub(name: str):
-        def _f(_det, x, **_k):
-            seen.append(name)
-            return np.zeros((x.shape[0], x.shape[1]), dtype=np.float64), "heuristic"
+    def _kernel(_det, x, **_k):
+        seen.append("kernel")
+        return np.ones(x.shape, dtype=np.float64), "kernel_shap", np.zeros(x.shape[0], dtype=bool)
 
-        return _f
+    def _gradient(_det, x, **_k):
+        seen.append("gradient")
+        return np.ones(x.shape, dtype=np.float64), np.zeros(x.shape[0], dtype=bool)
 
-    monkeypatch.setattr(gradient, "kernel_shap_attributions", _stub("kernel"))
-    monkeypatch.setattr(gradient, "gradient_attributions", _stub("gradient"))
+    monkeypatch.setattr(gradient, "kernel_shap_attributions_detailed", _kernel)
+    monkeypatch.setattr(gradient, "gradient_attributions_detailed", _gradient)
 
     csv = _write_csv(tmp_path / "d.csv")
     dets = [DetectorConfig(name="one_class_svm")]
@@ -289,9 +290,9 @@ def test_explain_passes_flagged_targets_and_a_disjoint_normal_reference(
 
     def _spy(_det, x, *, reference, **_k):
         calls.append((np.asarray(x), np.asarray(reference)))
-        return np.zeros((x.shape[0], x.shape[1]), dtype=np.float64), "heuristic"
+        return np.ones(x.shape, dtype=np.float64), np.zeros(x.shape[0], dtype=bool)
 
-    monkeypatch.setattr(gradient, "gradient_attributions", _spy)
+    monkeypatch.setattr(gradient, "gradient_attributions_detailed", _spy)
     csv = _write_csv(tmp_path / "d.csv")
     run_detection(
         _cfg(csv, tmp_path / "ws", detectors=[DetectorConfig(name="one_class_svm")]),

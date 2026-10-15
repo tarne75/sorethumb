@@ -51,7 +51,7 @@ def _break_gradient(monkeypatch: pytest.MonkeyPatch) -> list[int]:
         calls.append(1)
         raise RuntimeError(_BOOM)
 
-    monkeypatch.setattr(gradient_mod, "gradient_attributions", _boom)
+    monkeypatch.setattr(gradient_mod, "gradient_attributions_detailed", _boom)
     return calls
 
 

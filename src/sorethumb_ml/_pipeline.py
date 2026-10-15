@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from functools import partial
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 import polars as pl
@@ -50,8 +50,10 @@ from sorethumb_ml.errors import (
     warning_record,
     warning_records_from_json,
 )
+from sorethumb_ml.explain import record as explain_record
 from sorethumb_ml.explain.blend import blend
-from sorethumb_ml.explain.project import aggregate_to_original, top_n_reasons
+from sorethumb_ml.explain.record import GroupAttribution, SourceAttribution
+from sorethumb_ml.explain.record import decompose as decompose_blend
 from sorethumb_ml.features.build import apply_feature_plan, fit_features
 from sorethumb_ml.features.space import FeatureSpace
 from sorethumb_ml.io.fingerprint import (
@@ -91,7 +93,9 @@ from sorethumb_ml.store.models import (
 from sorethumb_ml.store.results import (
     file_digest,
     read_results,
+    remove_explanation_outputs,
     results_path,
+    write_attributions,
     write_explanations,
     write_results,
 )
@@ -2093,6 +2097,7 @@ def _explain_group(
         return _ExplainOutcome("no_flagged_rows", 0, 0, [])
 
     frame: pl.DataFrame | None = None
+    remove_explanation_outputs(ws, run_id, group_key)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", SorethumbWarning)
         try:
@@ -2100,7 +2105,7 @@ def _explain_group(
             # gradients need float64; this copy is the explanation stage's own
             # (copy=False: no copy when features.dtype is already float64).
             X = X.astype(np.float64, copy=False)
-            frame = _explanation_frame(
+            frames = _explanation_frame(
                 config=config,
                 plan=plan,
                 df_group=df_group,
@@ -2112,7 +2117,7 @@ def _explain_group(
                 weights_used=weights_used,
                 group_label=group_label,
             )
-            if frame is None:
+            if frames is None:
                 warnings.warn(
                     ExplanationFailedWarning(
                         f"No attribution source explained any of the {n_flagged} flagged row(s) in group "
@@ -2123,7 +2128,9 @@ def _explain_group(
                     stacklevel=2,
                 )
             else:
+                frame, attributions = frames
                 write_explanations(ws, run_id, group_key, frame)
+                write_attributions(ws, run_id, group_key, attributions)
         except Exception as exc:
             cause = f"{type(exc).__name__}: {exc}"
             logger.warning("Explanation stage failed for group %r: %s", group_label, cause, exc_info=True)
@@ -2136,6 +2143,7 @@ def _explain_group(
                 stacklevel=2,
             )
             frame = None
+            remove_explanation_outputs(ws, run_id, group_key)
     explain_warnings: list[dict[str, Any]] = []
     for w in caught:
         if issubclass(w.category, SorethumbWarning):
@@ -2168,16 +2176,19 @@ def _explanation_frame(
     det_instances: dict[str, Any],
     weights_used: dict[str, float],
     group_label: str,
-) -> pl.DataFrame | None:
-    """Return one row per flagged row; None if nothing explained.
+) -> tuple[pl.DataFrame, pl.DataFrame] | None:
+    """Return ``(explanations, attributions)`` for the flagged rows; None if nothing explained.
 
-    Columns: ``row_id``; ``explain_status`` (``ok``, ``partial`` -- some
-    detector's share of the score is unexplained -- or ``unavailable``);
-    ``explain_issue`` (null, ``detectors_unexplained:<names>``,
-    ``beyond_max_rows`` or ``pca_backprojection_failed``); ``attribution_kind``;
-    ``reason_<k>`` (null for an unavailable row).
+    ``explanations`` has one row per flagged row: ``row_id``;
+    ``explain_status`` (``ok``, ``partial`` -- some detector's share of the
+    score is unexplained for that row -- or ``unavailable``); ``explain_issue``
+    (null, ``detectors_unexplained:<names>``, ``beyond_max_rows``,
+    ``no_attribution_signal`` or ``pca_backprojection_failed``);
+    ``attribution_kind``; ``explainer_version``; ``reason_<k>`` (null for an
+    unavailable row). ``attributions`` is the long-format record behind each
+    reason (see ``explain/record.py``); an unavailable row has none.
     """
-    attribution_cols = _compute_attributions(
+    computed = _compute_attributions(
         config=config,
         det_instances=det_instances,
         weights_used=weights_used,
@@ -2187,64 +2198,93 @@ def _explanation_frame(
         group_space=group_space,
         group_label=group_label,
     )
-    if attribution_cols is None:
+    if computed is None:
         return None
-    orig_attributions, attr_kind, unavailable_reasons, unexplained_detectors = attribution_cols
+    group_attr, attr_kind, unavailable_reasons, _ = computed
     top_n = config.explain.top_n
-    orig_df_rows = df_group.to_dicts()  # pre-encoding values
-    partial_issue = (
-        "detectors_unexplained:" + ",".join(sorted(unexplained_detectors)) if unexplained_detectors else None
-    )
+    n_flagged = len(flagged_idx)
+    flagged_ids = [r.item() if hasattr(r, "item") else r for r in row_ids[flagged_idx]]
+
+    if group_attr is not None:
+        silent = [
+            r
+            for r in range(n_flagged)
+            if r not in unavailable_reasons and not explain_record.has_signal(group_attr, r)
+        ]
+        for r in silent:
+            unavailable_reasons[r] = "no_attribution_signal"
+        if silent:
+            warnings.warn(
+                ExplanationCoverageWarning(
+                    f"{len(silent)} of {n_flagged} flagged row(s) in group {group_label!r} got an all-zero "
+                    "attribution from every source (the score is flat around them); they have no explanation.",
+                    code="explain.no_signal",
+                    rows_affected=len(silent),
+                ),
+                stacklevel=2,
+            )
+
+    raw_rows = df_group[flagged_idx.tolist()].to_dicts() if n_flagged else []  # pre-encoding values
+    explained = [r for r in range(n_flagged) if r not in unavailable_reasons]
+    reasons: dict[int, list[tuple[str, Any]]] = {}
+    records: list[dict[str, Any]] = []
+    if group_attr is not None and explained:
+        reference_rows = np.ones(len(X), dtype=bool)
+        if group_attr.reference_id == "unflagged_rows":
+            reference_rows[flagged_idx] = False
+        fields = list(dict.fromkeys(plan.derived_to_original.get(f, f) for f in group_attr.feature_names))
+        reference = explain_record.reference_values(df_group.filter(pl.Series(reference_rows)), fields)
+        reasons, records = explain_record.build(
+            group_attr,
+            rows=explained,
+            derived_to_original=plan.derived_to_original,
+            raw_rows=raw_rows,
+            row_ids=flagged_ids,
+            reference=reference,
+            top_n=top_n,
+        )
+
     out: dict[str, list[Any]] = {
-        "row_id": [],
+        "row_id": flagged_ids,
         "explain_status": [],
         "explain_issue": [],
         "attribution_kind": [],
+        "explainer_version": [explain_record.EXPLAINER_VERSION] * n_flagged,
     }
     for i in range(top_n):
         out[f"reason_{i + 1}"] = []
-    for row_pos in flagged_idx:
-        row_pos_i = int(row_pos)
-        out["row_id"].append(
-            row_ids[row_pos_i].item() if hasattr(row_ids[row_pos_i], "item") else row_ids[row_pos_i]
-        )
+    for r in range(n_flagged):
         labels: list[str | None] = [None] * top_n
-        unavailable_reason = unavailable_reasons.get(row_pos_i)
-        if unavailable_reason is not None:
-            # No source covered this row (beyond explain.max_rows), or PCA
-            # back-projection failed for the whole group. Either way, say
-            # so explicitly in the status columns; an all-zero vector here
-            # would otherwise read as "no feature stood out" instead of "never
-            # computed". The reason columns stay empty: they hold reasons only.
+        unavailable_reason = unavailable_reasons.get(r)
+        if unavailable_reason is not None or group_attr is None:
+            # No source covered this row (beyond explain.max_rows), every source
+            # was flat around it, or PCA back-projection failed for the whole
+            # group. Say so explicitly in the status columns; an all-zero vector
+            # here would otherwise read as "no feature stood out" instead of
+            # "never computed". The reason columns stay empty: they hold reasons only.
             out["explain_status"].append("unavailable")
             out["explain_issue"].append(unavailable_reason)
             out["attribution_kind"].append("unavailable")
         else:
-            out["explain_status"].append("partial" if partial_issue else "ok")
-            out["explain_issue"].append(partial_issue)
-            raw_row_data = orig_df_rows[row_pos_i] if row_pos_i < len(orig_df_rows) else {}
-            reasons = top_n_reasons(
-                row_idx=row_pos_i,
-                original_attributions=orig_attributions,
-                raw_row=raw_row_data,
-                top_n=top_n,
-            )
+            gaps = sorted({g.split(":", 1)[1] for g in explain_record.row_gaps(group_attr, r)})
+            out["explain_status"].append("partial" if gaps else "ok")
+            out["explain_issue"].append("detectors_unexplained:" + ",".join(gaps) if gaps else None)
             out["attribution_kind"].append(attr_kind)
-            for r_i, reason in enumerate(reasons):
-                reason_col = cast("str | None", reason.get("column"))
-                raw_val = reason.get("raw_value")
-                labels[r_i] = f"{reason_col}={raw_val}" if reason_col else None
+            for r_i, (col, raw_val) in enumerate(reasons[r]):
+                labels[r_i] = f"{col}={raw_val}"
         for i in range(top_n):
             out[f"reason_{i + 1}"].append(labels[i])
     schema: dict[str, Any] = {
-        "row_id": None,
         "explain_status": pl.String,
         "explain_issue": pl.String,
         "attribution_kind": pl.String,
+        "explainer_version": pl.String,
     }
     for i in range(top_n):
         schema[f"reason_{i + 1}"] = pl.String
-    return pl.DataFrame(out, schema_overrides={k: v for k, v in schema.items() if v is not None})
+    explanations = pl.DataFrame(out, schema_overrides=schema)
+    attributions = explain_record.records_frame(records, row_id_dtype=explanations["row_id"].dtype)
+    return explanations, attributions
 
 
 # Fewer unflagged rows than this and the "normal population" is too small to give
@@ -2280,7 +2320,7 @@ def _compute_attributions(
     plan: FeaturePlan,
     group_space: FeatureSpace,
     group_label: str,
-) -> tuple[dict[str, np.ndarray], str, dict[int, str], list[str]] | None:
+) -> tuple[GroupAttribution | None, str, dict[int, str], list[str]] | None:
     """Compute blended attributions for flagged rows. Returns None if no source explained anything.
 
     ``explain.enabled=False`` skips the stage entirely. A detector the
@@ -2322,16 +2362,18 @@ def _compute_attributions(
     most-anomalous-first (the caller's job), so "beyond the cap" always means
     "least anomalous of the flagged set", not an arbitrary cut.
 
-    Returns ``(original_attributions, blend_tag, unavailable_reasons,
-    unexplained_detectors)``. ``unavailable_reasons`` maps original-frame row
-    indices among ``flagged_idx`` to an issue code (``beyond_max_rows``,
-    ``pca_backprojection_failed``) for rows with no original-column
-    attribution (rows absent from the mapping have one).
+    Returns ``(group_attribution, blend_tag, unavailable_reasons,
+    unexplained_detectors)``. ``group_attribution`` keeps every source
+    separately (method, kind, per-row weight and coverage, marginal-fallback
+    rows) for the explanation record; it is None when PCA back-projection
+    failed. ``unavailable_reasons`` maps positions within ``flagged_idx`` to an
+    issue code (``beyond_max_rows``, ``pca_backprojection_failed``) for rows
+    with no original-column attribution (rows absent from the mapping have one).
     ``unexplained_detectors`` names detectors whose share of the score could not
-    be explained (backend failed, or no vetted method). Callers must not run ``top_n_reasons``
-    on a row present in this mapping and must mark it unavailable with the
-    given reason instead, or an all-zero vector reads as "no feature stood
-    out" when the truth is "never computed". Rows can land here for two
+    be explained (backend failed, or no vetted method). Callers must not rank
+    reasons for a row present in this mapping and must mark it unavailable
+    with the given reason instead, or an all-zero vector reads as "no feature
+    stood out" when the truth is "never computed". Rows can land here for two
     distinct reasons: no attribution source covered them (beyond
     ``explain.max_rows``), or — when PCA is active — the PCA-space result
     could not be back-projected to original columns, which fails for every
@@ -2344,9 +2386,12 @@ def _compute_attributions(
     from sorethumb_ml.detectors.lof import LOFDetector  # noqa: PLC0415
     from sorethumb_ml.detectors.one_class_svm import OneClassSVMDetector  # noqa: PLC0415
     from sorethumb_ml.explain.centroid import centroid_attributions  # noqa: PLC0415
-    from sorethumb_ml.explain.gradient import gradient_attributions, kernel_shap_attributions  # noqa: PLC0415
+    from sorethumb_ml.explain.gradient import (  # noqa: PLC0415
+        gradient_attributions_detailed,
+        kernel_shap_attributions_detailed,
+    )
     from sorethumb_ml.explain.native import ecod_attributions, hbos_attributions  # noqa: PLC0415
-    from sorethumb_ml.explain.shap_tree import tree_shap_attributions  # noqa: PLC0415
+    from sorethumb_ml.explain.shap_tree import tree_shap_attributions_detailed  # noqa: PLC0415
 
     if not config.explain.enabled:
         return None
@@ -2362,7 +2407,9 @@ def _compute_attributions(
     X_flagged = X[flagged_idx]
     reference = _attribution_reference(X, flagged_idx)
     n_unflagged = n_rows - n_flagged
+    reference_id = "unflagged_rows"
     if n_unflagged < _MIN_NORMAL_REFERENCE_ROWS:
+        reference_id = "all_rows"
         warnings.warn(
             ExplanationCoverageWarning(
                 f"Group {group_label!r} has only {n_unflagged} unflagged row(s) (fewer than "
@@ -2374,8 +2421,7 @@ def _compute_attributions(
             stacklevel=2,
         )
 
-    sources: list[tuple[np.ndarray, str]] = []
-    source_weights: list[float] = []
+    sources: list[SourceAttribution] = []
     covered = np.zeros(n_flagged, dtype=bool)  # True where >=1 source has a real value
     # Detectors that contribute to the score but whose share of it could not be
     # explained (backend failed, or no vetted method): every covered row is then
@@ -2407,17 +2453,28 @@ def _compute_attributions(
                 det_name,
             )
             continue
+        flags: list[str] = []
+        marginal = np.zeros(n_flagged, dtype=bool)
         try:
             if isinstance(det, IsolationForestDetector):
                 # Flagged rows only (each row's SHAP values are independent of
                 # the others); never capped.
-                attr, tag = tree_shap_attributions(det, X_flagged, group_name=det_name, reference=reference)
+                attr, tag, method, marginal = tree_shap_attributions_detailed(
+                    det, X_flagged, group_name=det_name, reference=reference
+                )
+                preferred = "tree_shap"
+                # Path-dependent: shap.TreeExplainer(model) with no background.
+                flags = ["treeshap_additivity_unchecked", "treeshap_path_dependent"]
             elif isinstance(det, KMeansDetector):
                 attr, tag = centroid_attributions(det, X_flagged)  # also uncapped
+                method = preferred = "centroid_distance"
+                flags = [f"unsigned_method:{det_name}"]
             elif isinstance(det, ECODDetector):
                 attr, tag = ecod_attributions(det, X_flagged)  # exact, uncapped
+                method = preferred = "ecod_decomposition"
             elif isinstance(det, HBOSDetector):
                 attr, tag = hbos_attributions(det, X_flagged)  # exact, uncapped
+                method = preferred = "hbos_decomposition"
             elif isinstance(det, (OneClassSVMDetector, LOFDetector)):
                 # Finite-difference gradients, restricted to detectors whose
                 # score responds continuously to a small perturbation (see the
@@ -2429,12 +2486,17 @@ def _compute_attributions(
                 # (see explain/gradient.py); LOF's distances keep growing there.
                 max_rows = config.explain.max_rows
                 saturating = isinstance(det, OneClassSVMDetector) and det.score_saturates_outside_data
+                tag = "heuristic"
                 if config.explain.kernel_shap:
-                    attr, tag = kernel_shap_attributions(
+                    preferred = "kernel_shap"
+                    attr, method, marginal = kernel_shap_attributions_detailed(
                         det, X_flagged, reference=reference, max_rows=max_rows, saturating=saturating
                     )
+                    if method == "kernel_shap":
+                        flags = ["kernel_shap_sampled"]
                 else:
-                    attr, tag = gradient_attributions(
+                    method = preferred = "finite_difference_gradient"
+                    attr, marginal = gradient_attributions_detailed(
                         det, X_flagged, reference=reference, max_rows=max_rows, saturating=saturating
                     )
             else:
@@ -2489,13 +2551,29 @@ def _compute_attributions(
         # a placeholder only `covered` (tracked above) can distinguish from that.
         full = np.zeros((n_flagged, n_features), dtype=np.float64)
         full[: len(attr)] = attr
-        sources.append((full, tag))
-        source_weights.append(weights_used.get(det_name, 1.0))
+        source_covered = np.zeros(n_flagged, dtype=bool)
+        source_covered[: len(attr)] = True
+        marginal_full = np.zeros(n_flagged, dtype=bool)
+        marginal_full[: len(marginal)] = marginal[: len(attr)]
+        if method != preferred:
+            flags = [f"fallback_used:{det_name}"]
+        sources.append(
+            SourceAttribution(
+                detector=det_name,
+                method=method,
+                kind=tag,
+                weight=weights_used.get(det_name, 1.0),
+                values=full,
+                covered=source_covered,
+                marginal_rows=marginal_full,
+                flags=tuple(flags),
+            )
+        )
 
     if not sources:
         return None
 
-    unavailable_reasons: dict[int, str] = {int(i): "beyond_max_rows" for i in flagged_idx[~covered]}
+    unavailable_reasons: dict[int, str] = {int(i): "beyond_max_rows" for i in np.flatnonzero(~covered)}
     if unavailable_reasons:
         warnings.warn(
             ExplanationCoverageWarning(
@@ -2511,7 +2589,8 @@ def _compute_attributions(
     if config.explain.permutation_importance:
         _run_permutation_importance_crosscheck(config, det_instances, X, plan, group_space)
 
-    blended, blend_tag = blend(sources, source_weights)
+    blended, blend_tag = blend([(src.values, src.kind) for src in sources], [src.weight for src in sources])
+    scaled, row_weights = decompose_blend(sources)
 
     # PCA back-projection if applicable. plan.pre_pca_feature_names is the
     # exact column order/width of the matrix PCA was actually fit on — set by
@@ -2522,6 +2601,7 @@ def _compute_attributions(
     # every feature after a demotion changed which columns survived.
     feature_attributions = blended
     feature_names = group_space.feature_names
+    group_flags = ["reference_includes_flagged_rows"] if reference_id == "all_rows" else []
     if plan.pca_components is not None:
         from sorethumb_ml.explain.project import back_project_pca  # noqa: PLC0415
 
@@ -2534,12 +2614,12 @@ def _compute_attributions(
             )
         else:
             try:
-                feature_attributions = back_project_pca(
-                    blended,
-                    np.array(plan.pca_components),
-                    n_features=len(plan.pre_pca_feature_names),
-                )
+                loadings = np.array(plan.pca_components)
+                n_pre = len(plan.pre_pca_feature_names)
+                feature_attributions = back_project_pca(blended, loadings, n_features=n_pre)
+                scaled = [back_project_pca(m, loadings, n_features=n_pre) for m in scaled]
                 feature_names = plan.pre_pca_feature_names
+                group_flags.append("pca_back_projected")
             except Exception:
                 pca_failed = True
                 logger.warning(
@@ -2563,22 +2643,24 @@ def _compute_attributions(
                 stacklevel=2,
             )
             return (
-                {},
+                None,
                 blend_tag,
-                dict.fromkeys((int(i) for i in flagged_idx), "pca_backprojection_failed"),
+                dict.fromkeys(range(n_flagged), "pca_backprojection_failed"),
                 unexplained_detectors,
             )
 
-    orig_attributions = aggregate_to_original(feature_attributions, feature_names, plan.derived_to_original)
-
-    # Expand to full-frame indexing so top_n_reasons can look up row_pos directly
-    expanded: dict[str, np.ndarray] = {}
-    for orig_col, arr in orig_attributions.items():
-        full_arr = np.zeros(n_rows, dtype=np.float64)
-        full_arr[flagged_idx] = arr
-        expanded[orig_col] = full_arr
-
-    return expanded, blend_tag, unavailable_reasons, unexplained_detectors
+    group_attr = GroupAttribution(
+        kind=blend_tag,
+        sources=sources,
+        feature_names=list(feature_names),
+        blended=np.asarray(feature_attributions, dtype=np.float64),
+        scaled=scaled,
+        row_weights=row_weights,
+        unexplained_detectors=unexplained_detectors,
+        reference_id=reference_id,
+        group_flags=group_flags,
+    )
+    return group_attr, blend_tag, unavailable_reasons, unexplained_detectors
 
 
 def _run_permutation_importance_crosscheck(

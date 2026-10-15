@@ -154,7 +154,8 @@ sorethumb.db            SQLite ledger: runs, groups, history, artefact index
 models/<run>/…          fitted feature plan, and per group and detector the
                         estimator and calibrator as joblib/pickle files, plus a manifest
 results/<run>/<group>/  per-group results (Parquet): anomalies.parquet (detection: scores,
-                        flags, ranks; written and digested first) and explanations.parquet
+                        flags, ranks; written and digested first), explanations.parquet
+                        and attributions.parquet (the record behind each reason)
 reports/<run>/          rendered HTML / CSV / JSON reports
 cache/  tmp/  logs/     downloaded-dataset and feature caches, scratch, rotating logs
 ```
@@ -448,13 +449,15 @@ Plus `--config`, `--workdir`, `--log-level`.
 ## `sorethumb anomalies [run_id]`
 
 Print the flagged rows from a completed run, ordered by rank (1 = most
-anomalous), with SHAP-derived reason columns.
+anomalous), with their attribution-derived reason columns. `--detail` adds the
+record behind each reason (see [the explanation record](explanations.md#the-explanation-record)).
 
 ```bash
 sorethumb anomalies                      # latest run, top 3 reasons, all rows
 sorethumb anomalies abc12345             # specific run
 sorethumb anomalies --top 20            # limit to 20 rows
 sorethumb anomalies --reasons 5 --top 50
+sorethumb anomalies --detail --top 5     # method, signed contribution, reference value, flags
 sorethumb anomalies --json | jq '.[] | {rank, score: .composite_score}'
 ```
 
@@ -471,6 +474,7 @@ sorethumb anomalies --json | jq '.[] | {rank, score: .composite_score}'
 | `--config`, `--workdir`, `--log-level` | — | See [Common options](#common-options). |
 | `--top INT` | 0 (all) | Show only the top-N anomalies. |
 | `--reasons INT` | 3 | Number of reason columns to display. |
+| `--detail` | off | Also show the record behind each displayed reason: method per detector, signed contribution, reference value and direction, approximation flags. With `--json`, each row gains `row_id` and `reason_detail` (a list of records, one per displayed reason; empty for an unexplained row). |
 | `--json` | off | Machine-readable JSON on stdout. |
 
 ---
