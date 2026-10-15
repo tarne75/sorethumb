@@ -28,6 +28,7 @@ from sorethumb_ml.config import (
     SourceConfig,
 )
 from sorethumb_ml.scoring.combine import ScoreEnsemble
+from tests.factories.results import joined_results
 
 pytestmark = pytest.mark.integration
 
@@ -73,7 +74,7 @@ def _results(cfg: Config) -> pl.DataFrame:
     assert result.n_failed == 0
     path = result.groups[0].results_path
     assert path is not None
-    return pl.read_parquet(path)
+    return joined_results(path)
 
 
 def _capture_combine(monkeypatch: pytest.MonkeyPatch) -> dict[str, np.ndarray]:

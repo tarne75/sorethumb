@@ -165,6 +165,25 @@ First public release.
   within `--ranking-tolerance`, 10%): decision rule 2, which `run` requires of the
   evidence it relies on. With `scoring.contamination = "auto"`, `--review-budget`
   states the budget flags are judged against.
+- **Detection and explanation separated**: each group's detection output
+  (`anomalies.parquet`: scores, flags, ranks) is written, and its SHA-256
+  recorded as `detection_digest`, before any explanation is computed.
+  Explanations go to `explanations.parquet`, joined back by `row_id` for
+  `sorethumb anomalies` and the report, and each group records an
+  `explain_status` (`ok`, `partial`, `failed`, `not_requested`,
+  `no_flagged_rows`), `n_explained` and `n_explain_unavailable` (migration 012;
+  `run --json`, `show`).
+  - An explanation failure is a warning (`ExplanationFailedWarning`,
+    `AttributionBackendWarning`) and never fails the group or changes its
+    detection output.
+  - A failed explanation stage makes the run exit `partial`. Under `run.strict`,
+    any explanation warning does too, where it used to fail the group and lose
+    its detection results.
+  - Flagged rows that nothing explained used to show `attribution_kind = "none"`.
+    They are now reported as a failed explanation.
+  - Detection no longer depends on the explain settings. Turning explanations on
+    used to upcast the detectors' input to float64, which shifted their scores
+    slightly. Detection now always uses `features.dtype`.
 - **Real-data policy evidence**: the pre-registered backtest protocol applied to
   KDD Cup 1999 (SA), Covertype (2 vs 4) and a time-ordered credit-card fraud
   dataset, with disjoint development and confirmation slices; results in

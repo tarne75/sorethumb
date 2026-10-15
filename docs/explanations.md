@@ -10,6 +10,45 @@ keeps only the *weakest* of the contributing tags (`exact` > `model_specific`
 
 ---
 
+## Detection first, explanation second
+
+Explanation never changes detection. Each group runs in two stages:
+
+1. **Detection** combines the detectors' scores, flags rows and ranks them, then
+   writes `results/<run>/<group>/anomalies.parquet` (scores, `flagged`, `rank`,
+   per-detector scores) and records its SHA-256 as the group's
+   `detection_digest`. The flagged rows and their count are final at this point.
+   Detection always runs on the feature matrix at `features.dtype`, whatever the
+   explain settings.
+2. **Explanation** then explains those flagged rows and writes
+   `explanations.parquet` (`row_id`, `attribution_kind`, `reason_<k>`). It works
+   on a read-only view of the flagged set, in its own error boundary.
+
+Readers (`sorethumb anomalies`, the report) join the two files by `row_id`.
+
+**Status.** Each group records an `explain_status`:
+
+| status | meaning |
+| --- | --- |
+| `ok` | every flagged row explained, no explainer warned |
+| `partial` | some flagged rows unexplained (e.g. beyond `explain.max_rows`), or an explainer warned |
+| `failed` | no flagged row has an explanation: the stage raised, or no attribution source explained anything |
+| `not_requested` | `explain.enabled = false` |
+| `no_flagged_rows` | nothing to explain |
+
+It also records `n_explained` and `n_explain_unavailable`. All of these appear in
+`run --json` (per group), on the group row in the workspace and in `sorethumb show`.
+
+**Failures are reported, never hidden.**
+- An explanation-stage failure raises `ExplanationFailedWarning`.
+- A single detector's explainer failing raises `AttributionBackendWarning`.
+- Neither ever fails the group or alters its detection output.
+- A `failed` explanation stage makes the run exit `partial` (code 4).
+- Under `run.strict`, any explanation warning makes the run exit `partial`; it no
+  longer fails the group, which would have discarded its detection output.
+
+---
+
 ## Exact attributions
 
 ### ECOD and HBOS
@@ -169,8 +208,10 @@ consensus, or independently zeroed by `weighting="agreement"` — is excluded
 before attribution even runs, not merely weighted to 0 in the blend: it never
 supplies a source, is never counted as covering a row, and can never set the
 blended tag or appear in `reason_1`/`reason_2`/etc, even when it is the only
-detector whose attribution method would otherwise have succeeded (the row
-comes back `attribution_kind="none"` instead). A detector's per-row score
+detector whose attribution method would otherwise have succeeded. If that leaves
+no source at all, the group's `explain_status` is `failed` with an
+`ExplanationFailedWarning`; the rows are never shown as explained with
+nothing. A detector's per-row score
 columns (`score_raw_<name>`, `score_cal_<name>`) are unaffected and always
 recorded for inspection regardless of its weight — only the *blended,
 causal* explanation excludes a zero-weight member. `combination="intersection"`/

@@ -159,8 +159,19 @@ class AttributionBackendWarning(SorethumbWarning):
     """A detector's attribution backend raised; that detector contributes no explanation.
 
     Emitted once per detector and group. Other detectors' explanations for the
-    group are unaffected. Under ``run.strict`` it fails the group like any other
-    project warning.
+    group are unaffected. Like every explanation warning it never changes the
+    group's detection output; under ``run.strict`` it makes the run exit
+    ``partial`` instead of failing the group.
+    """
+
+
+class ExplanationFailedWarning(SorethumbWarning):
+    """No explanation could be produced for a group's flagged rows.
+
+    The explanation stage raised, or no attribution source explained any row.
+    The group's detection output (scores, flags, ranks, count) was already
+    written and is unaffected; the group's ``explain_status`` is ``failed``
+    and the run exits ``partial``.
     """
 
 

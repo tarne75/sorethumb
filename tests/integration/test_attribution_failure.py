@@ -79,8 +79,8 @@ def test_failing_backend_emits_one_warning_with_cause_and_keeps_other_explanatio
     assert _BOOM in records[0].getMessage()
 
     # The surviving detector (kmeans centroid) still explains every flagged row.
-    assert group.results_path is not None
-    flagged = pl.read_parquet(group.results_path).filter(pl.col("flagged"))
+    assert group.explain_status == "partial"  # one explainer failed
+    flagged = _results(tmp_path, result)
     assert flagged.height > 0
     assert (flagged["attribution_kind"] != "unavailable").all()
     assert flagged["reason_1"].is_not_null().all()
@@ -100,26 +100,53 @@ def test_each_failing_detector_gets_its_own_warning(tmp_path: Path, monkeypatch:
     hits = [w for w in result.groups[0].warnings_issued if "Attribution backend failed" in w]
     assert len(hits) == 2
     assert {("one_class_svm" in h, "kmeans_distance" in h) for h in hits} == {(True, False), (False, True)}
-    # Nothing explains the flagged rows now: the group says so ("none") instead of inventing a source.
-    assert result.groups[0].results_path is not None
-    flagged = pl.read_parquet(result.groups[0].results_path).filter(pl.col("flagged"))
-    assert (flagged["attribution_kind"] == "none").all()
+    # Nothing explains the flagged rows now. The group says so -- explain_status
+    # "failed" and a warning -- and its detection output stands untouched.
+    group = result.groups[0]
+    assert group.status == "success"
+    assert group.n_anomalies > 0
+    assert group.explain_status == "failed"
+    assert group.n_explained == 0
+    assert any("No attribution source explained" in w for w in group.warnings_issued)
+    flagged = _results(tmp_path, result)
+    assert flagged.height == group.n_anomalies
+    assert "attribution_kind" not in flagged.columns  # no explanation file was written
 
 
-def test_strict_mode_promotes_the_warning_to_a_group_failure(
+def test_strict_mode_keeps_detection_output_and_exits_partial(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """An explanation warning never fails a group, strict or not: the detection
+    output is final before explanation starts. Under run.strict the run exits
+    partial instead."""
+    from sorethumb_ml.cli import ExitCode, _exit_code_for
+
     _break_gradient(monkeypatch)
     lenient = run_detection(_cfg(tmp_path / "a"), no_report=True)
     assert lenient.n_failed == 0
+    assert _exit_code_for(lenient) is ExitCode.OK
 
     strict_cfg = _cfg(tmp_path / "b", strict=True)
     record_evidence(strict_cfg)  # run.strict otherwise refuses the composite policy before any group runs
     strict = run_detection(strict_cfg, no_report=True)
-    assert strict.n_failed == 1
-    assert strict.n_succeeded == 0
-    assert "AttributionBackendWarning" in (strict.groups[0].error or "")
-    assert _BOOM in (strict.groups[0].error or "")
+    assert strict.n_failed == 0
+    assert strict.n_succeeded == 1
+    group = strict.groups[0]
+    assert group.n_anomalies == lenient.groups[0].n_anomalies
+    assert any(_BOOM in w for w in group.explain_warnings)
+    assert _exit_code_for(strict) is ExitCode.PARTIAL
+
+
+def _results(tmp_path: Path, result: object) -> pl.DataFrame:
+    """The group's flagged rows with explanations joined on (store.results.read_results)."""
+    from sorethumb_ml.store.results import read_results
+    from sorethumb_ml.store.workspace import Workspace
+
+    group = result.groups[0]  # type: ignore[attr-defined]
+    with Workspace.open(tmp_path / "ws") as ws:
+        df = read_results(ws, result.run_id, group.group_key)  # type: ignore[attr-defined]
+    assert df is not None
+    return df.filter(pl.col("flagged"))
 
 
 def test_healthy_backends_emit_no_attribution_warning(tmp_path: Path) -> None:

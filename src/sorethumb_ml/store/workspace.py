@@ -57,7 +57,7 @@ def deepest_path_suffix_length(detector_names: Iterable[str]) -> int:
 
     Includes the leading separator, and the temp file an atomic write creates
     beside each target. Derived from the layout itself: models/<run>/<group>/
-    <detector>.calibrator.json, results/<run>/<group>/, reports/<run>/,
+    <detector>.calibrator.json, results/<run>/<group>/ (anomalies.parquet, explanations.parquet), reports/<run>/,
     cache/datasets/<sha256>/data<ext> and cache/datasets/.http_meta/<sha256>.json.
     """
     longest_detector = max((len(n) for n in detector_names), default=0)
@@ -71,7 +71,7 @@ def deepest_path_suffix_length(detector_names: Iterable[str]) -> int:
         + 1
         + _GROUP_KEY_LEN
         + leaf(longest_detector + _LONGEST_MODEL_FILE_SUFFIX),
-        len("/results/") + _RUN_ID_LEN + 1 + _GROUP_KEY_LEN + leaf(len("anomalies.parquet")),
+        len("/results/") + _RUN_ID_LEN + 1 + _GROUP_KEY_LEN + leaf(len("explanations.parquet")),
         len("/reports/") + _RUN_ID_LEN + leaf(_GROUP_KEY_LEN + len(".csv")),
         len("/cache/datasets/") + _HASH_HEX_LEN + leaf(len("data") + _LONGEST_SOURCE_SUFFIX),
         len("/cache/datasets/.http_meta") + leaf(_HASH_HEX_LEN + len(".json")),

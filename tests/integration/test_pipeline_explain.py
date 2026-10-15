@@ -26,6 +26,7 @@ from sorethumb_ml.config import (
 )
 from sorethumb_ml.detectors.one_class_svm import OneClassSVMDetector
 from tests.factories.frames import write_planted_csv, write_time_sorted_parquet
+from tests.factories.results import joined_results
 
 pytestmark = pytest.mark.integration
 
@@ -73,7 +74,7 @@ def test_explanation_references_perturbed_column(tmp_path: Path) -> None:
 
     parquet_path = result.groups[0].results_path
     assert parquet_path is not None
-    df_anomalies = pl.read_parquet(parquet_path)
+    df_anomalies = joined_results(parquet_path)
 
     # explain is enabled by default, so reason columns must be present -- a
     # missing reason_1 here is itself a bug, not a reason to skip the test.
@@ -121,7 +122,7 @@ def test_rows_beyond_max_rows_cap_are_marked_unavailable_not_fabricated(tmp_path
 
     parquet_path = result.groups[0].results_path
     assert parquet_path is not None
-    df = pl.read_parquet(parquet_path).sort("composite_score", descending=True)
+    df = joined_results(parquet_path).sort("composite_score", descending=True)
 
     kinds = df["attribution_kind"].to_list()
     assert all(k != "unavailable" for k in kinds[:3]), (
@@ -164,7 +165,7 @@ def test_pca_back_projection_uses_pre_pca_feature_names(tmp_path: Path) -> None:
 
     parquet_path = result.groups[0].results_path
     assert parquet_path is not None
-    df_anomalies = pl.read_parquet(parquet_path)
+    df_anomalies = joined_results(parquet_path)
 
     reasons = df_anomalies["reason_1"].drop_nulls().to_list()
     assert reasons, "expected at least one non-null reason"
@@ -206,7 +207,7 @@ def test_pca_back_projection_failure_marks_all_flagged_rows_unavailable(
 
     parquet_path = result.groups[0].results_path
     assert parquet_path is not None
-    df_anomalies = pl.read_parquet(parquet_path)
+    df_anomalies = joined_results(parquet_path)
 
     kinds = df_anomalies["attribution_kind"].to_list()
     reasons = df_anomalies["reason_1"].to_list()
@@ -238,7 +239,7 @@ def test_ecod_hbos_get_exact_native_attributions(tmp_path: Path) -> None:
 
     parquet_path = result.groups[0].results_path
     assert parquet_path is not None
-    df_anomalies = pl.read_parquet(parquet_path)
+    df_anomalies = joined_results(parquet_path)
 
     kinds = df_anomalies["attribution_kind"].to_list()
     reasons = df_anomalies["reason_1"].to_list()
@@ -299,14 +300,16 @@ def test_dropped_detector_as_sole_would_be_producer_yields_no_attribution(
 
     parquet_path = result.groups[0].results_path
     assert parquet_path is not None
-    df_anomalies = pl.read_parquet(parquet_path)
+    df_anomalies = joined_results(parquet_path)
 
-    kinds = df_anomalies["attribution_kind"].to_list()
-    reasons = df_anomalies["reason_1"].to_list()
-    assert all(k == "none" for k in kinds), (
-        f"expected no attribution at all (the only would-be producer was dropped); got {kinds}"
-    )
-    assert all(r is None for r in reasons), reasons
+    # No attribution at all (the only would-be producer was dropped, the others
+    # failed): stated as a failed explanation stage, never shown as a valid
+    # "none". The detection output is untouched.
+    group = result.groups[0]
+    assert group.explain_status == "failed"
+    assert any("No attribution source explained" in w for w in group.warnings_issued)
+    assert "attribution_kind" not in df_anomalies.columns
+    assert df_anomalies.filter(pl.col("flagged")).height == group.n_anomalies
 
 
 def test_mixed_source_attribution_kind_and_reasons_ignore_the_dropped_detector(
@@ -345,7 +348,7 @@ def test_mixed_source_attribution_kind_and_reasons_ignore_the_dropped_detector(
 
     parquet_path = result.groups[0].results_path
     assert parquet_path is not None
-    df_anomalies = pl.read_parquet(parquet_path)
+    df_anomalies = joined_results(parquet_path)
 
     kinds = df_anomalies["attribution_kind"].to_list()
     reasons = df_anomalies["reason_1"].to_list()

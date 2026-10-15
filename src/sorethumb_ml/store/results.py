@@ -8,12 +8,20 @@ The Parquet file is the authoritative record of which rows were flagged. The
 database row_group table only stores aggregate counts; the per-row detail lives
 in Parquet.
 
+Detection and explanation are separate files. ``anomalies.parquet`` holds the
+detection output only (scores, flags, ranks) and is written -- and its sha256
+digest recorded -- before any explanation is computed, so nothing the
+explanation stage does, or fails to do, can change which rows were flagged or
+how many. ``explanations.parquet`` holds the explanation for those rows.
+:func:`read_results` joins the two for readers.
+
 Written atomically (sibling temp file + rename, see ``sorethumb_ml._atomic``): a
 crash mid-write, or a reader racing the writer, never sees a truncated file.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 
@@ -26,6 +34,7 @@ from sorethumb_ml.store.workspace import Workspace
 logger = logging.getLogger(__name__)
 
 _RESULT_FILENAME = "anomalies.parquet"
+_EXPLANATION_FILENAME = "explanations.parquet"
 
 
 def write_results(
@@ -107,13 +116,78 @@ def results_path(workspace: Workspace, run_id: str, group_key: str) -> Path:
     return workspace.results_dir(run_id, group_key) / _RESULT_FILENAME
 
 
+def file_digest(path: Path) -> str:
+    """Return the sha256 hex digest of the file at *path*."""
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def explanations_path(workspace: Workspace, run_id: str, group_key: str) -> Path:
+    """Return the explanation Parquet path for a (run_id, group_key), existing or not."""
+    return workspace.results_dir(run_id, group_key) / _EXPLANATION_FILENAME
+
+
+def write_explanations(workspace: Workspace, run_id: str, group_key: str, df: pl.DataFrame) -> Path:
+    """Write a group's explanation frame (one row per explained flagged row) and register it.
+
+    Never touches ``anomalies.parquet``: the detection output is final before
+    this is called.
+
+    Raises
+    ------
+    StoreError
+        If ``row_id`` is missing, null or duplicated.
+
+    """
+    _validate_results_frame(df)
+    out_path = explanations_path(workspace, run_id, group_key)
+    with atomic_write(out_path) as tmp:
+        df.write_parquet(str(tmp))
+    workspace.store.register_artifact(
+        artifact_id=f"{run_id}_{group_key}_explanations",
+        path=str(out_path),
+        kind="explanations",
+        byte_size=out_path.stat().st_size,
+        regenerable=False,
+        run_id=run_id,
+    )
+    return out_path
+
+
+def read_explanations(workspace: Workspace, run_id: str, group_key: str) -> pl.DataFrame | None:
+    """Load a group's explanation Parquet, or None if absent."""
+    path = explanations_path(workspace, run_id, group_key)
+    if not path.exists():
+        return None
+    return pl.read_parquet(str(path))
+
+
 def read_results(
     workspace: Workspace,
     run_id: str,
     group_key: str,
+    *,
+    with_explanations: bool = True,
 ) -> pl.DataFrame | None:
-    """Load the result Parquet for a (run_id, group_key), or None if absent."""
+    """Load a group's results, or None if absent.
+
+    With *with_explanations* (the default), the explanation columns
+    (``attribution_kind``, ``reason_<k>``, ...) are left-joined onto the
+    detection rows by ``row_id``. A flagged row with no explanation keeps
+    nulls there. Results written before detection and explanation were
+    separated already carry those columns and are returned as stored.
+    """
     path = results_path(workspace, run_id, group_key)
     if not path.exists():
         return None
-    return pl.read_parquet(str(path))
+    detection = pl.read_parquet(str(path))
+    if not with_explanations:
+        return detection
+    explanation = read_explanations(workspace, run_id, group_key)
+    if explanation is None:
+        return detection
+    extra = [c for c in explanation.columns if c == "row_id" or c not in detection.columns]
+    return detection.join(explanation.select(extra), on="row_id", how="left")

@@ -21,6 +21,7 @@ import pytest
 from sorethumb_ml import Config
 from sorethumb_ml._pipeline import run_detection
 from sorethumb_ml.config import ColumnsConfig, RunConfig, SourceConfig
+from tests.factories.results import joined_results
 
 pytestmark = pytest.mark.integration
 
@@ -59,7 +60,7 @@ def _reason_1_by_row(tmp_path: Path, planted: dict[str, tuple[range, float]]) ->
     result = run_detection(config, no_report=True)
     results_path = result.groups[0].results_path
     assert results_path is not None
-    frame = pl.read_parquet(results_path).filter(pl.col("flagged"))
+    frame = joined_results(results_path).filter(pl.col("flagged"))
     # Without shap no source is better than a heuristic, and the label must say so.
     assert set(frame["attribution_kind"].unique()) == {"heuristic"}
     return {

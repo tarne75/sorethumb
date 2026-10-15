@@ -153,7 +153,8 @@ Your *data* can live anywhere: only the workspace needs local storage.
 sorethumb.db            SQLite ledger: runs, groups, history, artefact index
 models/<run>/…          fitted feature plan, and per group and detector the
                         estimator and calibrator as joblib/pickle files, plus a manifest
-results/<run>/<group>/  per-group results (Parquet)
+results/<run>/<group>/  per-group results (Parquet): anomalies.parquet (detection: scores,
+                        flags, ranks; written and digested first) and explanations.parquet
 reports/<run>/          rendered HTML / CSV / JSON reports
 cache/  tmp/  logs/     downloaded-dataset and feature caches, scratch, rotating logs
 ```
@@ -179,7 +180,7 @@ CHANGELOG).
 | `1` | `runtime` | Work was attempted and failed: a store or database error, a detector failure, every group failing, an error while rendering a requested report on its own, or a declined/aborted destructive command. |
 | `2` | `preflight` | Rejected before any work: bad arguments, a missing or invalid config file, a source or schema that cannot be read (including a source file that does not exist), a plan that cannot be built, or a group selector (`--only-group`/`--group-filter`) that matches no group. |
 | `3` | `not_found` | A run, workspace or persisted file that the command was asked to use does not exist (unknown run ID, no workspace at the configured path, a run with no persisted plan, `score --from-run` against a missing run). |
-| `4` | `partial` | Results were produced but something is missing: some groups failed while at least one succeeded, `backfill` periods failed while others completed, or every group succeeded but the requested report could not be rendered. The completed work is valid and kept. |
+| `4` | `partial` | Results were produced but something is missing: some groups failed while at least one succeeded, `backfill` periods failed while others completed, every group succeeded but the requested report could not be rendered, a group's explanation stage failed (its flagged rows have no explanation), or, under `--strict`, the explanation stage raised any warning. The completed work is valid and kept; detection results are never discarded because of an explanation problem. |
 
 Classification is by the type of the raised project error (each
 `SorethumbError` subclass carries a `failure_kind`; a third-party subclass that
