@@ -21,8 +21,16 @@ Explanation never changes detection. Each group runs in two stages:
    Detection always runs on the feature matrix at `features.dtype`, whatever the
    explain settings.
 2. **Explanation** then explains those flagged rows and writes
-   `explanations.parquet` (`row_id`, `attribution_kind`, `reason_<k>`). It works
-   on a read-only view of the flagged set, in its own error boundary.
+   `explanations.parquet`, one row per flagged row. It works on a read-only view
+   of the flagged set, in its own error boundary. The file's columns:
+
+   | column | meaning |
+   | --- | --- |
+   | `row_id` | the flagged row |
+   | `explain_status` | `ok`; `partial` (some detector's share of the score is unexplained); or `unavailable` (no explanation for this row) |
+   | `explain_issue` | null when `ok`; otherwise `detectors_unexplained:<names>`, `beyond_max_rows` or `pca_backprojection_failed` |
+   | `attribution_kind` | `exact`, `model_specific`, `heuristic`, or `unavailable` |
+   | `reason_<k>` | `field=value`, most important first. Null for an unavailable row: these columns hold reasons only |
 
 Readers (`sorethumb anomalies`, the report) join the two files by `row_id`.
 
@@ -38,6 +46,23 @@ Readers (`sorethumb anomalies`, the report) join the two files by `row_id`.
 
 It also records `n_explained` and `n_explain_unavailable`. All of these appear in
 `run --json` (per group), on the group row in the workspace and in `sorethumb show`.
+
+**Every warning is a structured record.** Each one carries a stable `code`, its
+`stage` (the part before the dot), the `message`, the `group`, and, where they
+apply, the `detector` and `rows_affected`. Records are stored on the group row
+(`warnings_json`) and appear in `run --json` (`warnings`, top level and per group),
+the run summary, `sorethumb show` and the report. The explanation codes:
+
+| code | when |
+| --- | --- |
+| `explain.stage_failed` | the explanation stage raised; no flagged row in the group is explained |
+| `explain.no_source` | no attribution source explained any flagged row |
+| `explain.backend_failed` | one detector's explainer raised; its share of the score is unexplained (rows `partial`) |
+| `explain.detector_unsupported` | a detector has no vetted attribution method; its share is unexplained (rows `partial`) |
+| `explain.fallback_used` | TreeSHAP or KernelSHAP was unavailable or failed; a heuristic method was used instead |
+| `explain.rows_beyond_max_rows` | some flagged rows are beyond `explain.max_rows` for every source that covers them (rows `unavailable`) |
+| `explain.pca_backprojection_failed` | PCA-space attributions could not be mapped to original columns (all rows `unavailable`) |
+| `explain.reference_fallback` | fewer than 10 unflagged rows, so the reference for perturbation scales and SHAP backgrounds is the whole group, flagged rows included |
 
 **Failures are reported, never hidden.**
 - An explanation-stage failure raises `ExplanationFailedWarning`.

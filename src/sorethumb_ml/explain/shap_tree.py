@@ -88,19 +88,25 @@ def tree_shap_attributions(
 
     except ImportError as exc:
         warnings.warn(
-            f"shap is not installed; TreeSHAP attributions for group {group_name!r} are "
-            "unavailable. Falling back to gradient/marginal-deviation attributions (heuristic). "
-            'Install with: pip install "sorethumb-ml[explain]".',
-            FallbackAttributionWarning,
+            FallbackAttributionWarning(
+                f"shap is not installed; TreeSHAP attributions for {group_name!r} are "
+                "unavailable. Falling back to gradient/marginal-deviation attributions (heuristic). "
+                'Install with: pip install "sorethumb-ml[explain]".',
+                detector=group_name,
+                rows_affected=len(X),
+            ),
             stacklevel=2,
         )
         logger.warning("TreeSHAP unavailable for group %r (shap not installed): %s", group_name, exc)
 
     except (IndexError, ValueError, RuntimeError) as exc:
         warnings.warn(
-            f"TreeSHAP failed for group {group_name!r} ({type(exc).__name__}: {exc}); "
-            "falling back to gradient/marginal-deviation attributions (heuristic).",
-            FallbackAttributionWarning,
+            FallbackAttributionWarning(
+                f"TreeSHAP failed for {group_name!r} ({type(exc).__name__}: {exc}); "
+                "falling back to gradient/marginal-deviation attributions (heuristic).",
+                detector=group_name,
+                rows_affected=len(X),
+            ),
             stacklevel=2,
         )
         logger.warning("TreeSHAP fallback triggered for group %r: %s", group_name, exc)

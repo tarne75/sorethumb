@@ -184,6 +184,19 @@ First public release.
   - Detection no longer depends on the explain settings. Turning explanations on
     used to upcast the detectors' input to float64, which shifted their scores
     slightly. Detection now always uses `features.dtype`.
+- **Structured warnings**: every project warning carries a stable `code` (e.g.
+  `explain.backend_failed`, `explain.rows_beyond_max_rows`), its stage and,
+  where they apply, the detector and rows affected. Warnings are persisted as
+  records in `run_group.warnings_json`, shown with their codes in the run
+  summary, `show` and the report, and listed in `run --json` (`warnings`).
+  Older plain-string warnings read back as `legacy`.
+  - Explanation problems that used to be silent are now warnings: a detector
+    with no attribution method, a failed PCA back-projection (previously only
+    logged), rows beyond `explain.max_rows`, and a reference that includes
+    flagged rows.
+  - Each explained row records `explain_status` (`ok`, `partial`,
+    `unavailable`) and `explain_issue`. An unavailable row's `reason_1` is now
+    null; it used to hold the text "unavailable (...)".
 - **Real-data policy evidence**: the pre-registered backtest protocol applied to
   KDD Cup 1999 (SA), Covertype (2 vs 4) and a time-ordered credit-card fraud
   dataset, with disjoint development and confirmation slices; results in

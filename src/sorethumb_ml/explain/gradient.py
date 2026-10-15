@@ -271,9 +271,11 @@ def kernel_shap_attributions(
         import shap  # noqa: PLC0415
     except ImportError as exc:
         warnings.warn(
-            "shap is not installed; KernelSHAP attributions are unavailable. "
-            'Falling back to gradient attributions. Install with: pip install "sorethumb-ml[explain]".',
-            FallbackAttributionWarning,
+            FallbackAttributionWarning(
+                "shap is not installed; KernelSHAP attributions are unavailable. "
+                'Falling back to gradient attributions. Install with: pip install "sorethumb-ml[explain]".',
+                rows_affected=min(len(X), max_rows),
+            ),
             stacklevel=2,
         )
         logger.warning("KernelSHAP unavailable (shap not installed): %s", exc)

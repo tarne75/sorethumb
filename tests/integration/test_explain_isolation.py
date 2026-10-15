@@ -86,6 +86,8 @@ def test_an_explanation_stage_failure_is_a_warning_and_a_partial_exit_not_a_grou
     assert group.n_anomalies > 0
     assert group.explain_status == "failed"
     assert any("Explanation stage failed" in w and "synthetic" in w for w in group.warnings_issued)
+    (rec,) = [r for r in group.warning_records if r["code"] == "explain.stage_failed"]
+    assert rec["rows_affected"] == group.n_anomalies
     assert _exit_code_for(result) is ExitCode.PARTIAL
     with Workspace.open(tmp_path / "ws") as ws:
         row = ws.store.get_run_group(result.run_id, group.group_key)
@@ -152,3 +154,117 @@ def test_results_written_before_the_split_read_back_unchanged(tmp_path: Path) ->
         frame = read_results(ws, "run_x", "group_y")
     assert frame is not None
     assert frame.equals(legacy)
+
+
+# ---------------------------------------------------------------------------
+# Structured explanation warnings and per-row status (E2)
+# ---------------------------------------------------------------------------
+
+
+def test_a_failing_explainer_is_a_structured_warning_and_its_rows_are_partial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    import sorethumb_ml.explain.centroid as centroid_mod
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise ValueError("centroid failure")
+
+    monkeypatch.setattr(centroid_mod, "centroid_attributions", _boom)
+    result = run_detection(_cfg(tmp_path, "ws"), no_report=True)
+    (group,) = result.groups
+    (rec,) = [r for r in group.warning_records if r["code"] == "explain.backend_failed"]
+    assert rec["detector"] == "kmeans_distance"
+    assert rec["stage"] == "explain"
+    assert rec["rows_affected"] == group.n_anomalies
+    assert rec in result.warning_records
+    assert group.explain_status == "partial"
+    with Workspace.open(tmp_path / "ws") as ws:
+        frame = read_results(ws, result.run_id, group.group_key)
+        stored = json.loads(str(ws.store.get_run_group(result.run_id, group.group_key)["warnings_json"]))
+    assert frame is not None
+    assert (frame["explain_status"] == "partial").all()
+    assert (frame["explain_issue"] == "detectors_unexplained:kmeans_distance").all()
+    assert frame["reason_1"].is_not_null().all()  # isolation_forest still explains every row
+    assert any(r["code"] == "explain.backend_failed" for r in stored)  # persisted as records
+
+
+def test_a_detector_with_no_vetted_explainer_is_reported_not_silently_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sorethumb_ml.detectors import registry
+    from tests.factories.detectors import UnexplainablePluginDetector
+
+    monkeypatch.setitem(registry, "plugin_detector", UnexplainablePluginDetector)
+    cfg = _cfg(tmp_path, "ws").model_copy(
+        update={"detectors": [DetectorConfig(name="kmeans_distance"), DetectorConfig(name="plugin_detector")]}
+    )
+    result = run_detection(cfg, no_report=True)
+    (group,) = result.groups
+    (rec,) = [r for r in group.warning_records if r["code"] == "explain.detector_unsupported"]
+    assert rec["detector"] == "plugin_detector"
+    assert group.explain_status == "partial"
+
+
+def test_a_group_with_too_few_normal_rows_says_its_reference_includes_flagged_rows(tmp_path: Path) -> None:
+    csv = tmp_path / "small.csv"
+    write_planted_csv(csv, n_normal=10, n_anomaly=4, seed=3)
+    cfg = Config(
+        source=SourceConfig(uri=str(csv), format="csv"),
+        run=RunConfig(workdir=str(tmp_path / "ws"), seed=42),
+        columns=ColumnsConfig(id_column="id"),
+        detectors=[DetectorConfig(name="isolation_forest"), DetectorConfig(name="kmeans_distance")],
+        scoring=ScoringConfig(combination="composite", contamination=0.4, min_records=5),
+        explain=ExplainConfig(top_n=2),
+    )
+    result = run_detection(cfg, no_report=True)
+    codes = [r["code"] for r in result.groups[0].warning_records]
+    assert "explain.reference_fallback" in codes
+
+
+def test_the_run_summary_and_json_show_warning_codes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    from typer.testing import CliRunner
+
+    import sorethumb_ml.explain.centroid as centroid_mod
+    from sorethumb_ml.cli import app
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise ValueError("centroid failure")
+
+    monkeypatch.setattr(centroid_mod, "centroid_attributions", _boom)
+    cfg = _cfg(tmp_path, "ws")
+    toml = tmp_path / "sorethumb.toml"
+    toml.write_text(
+        f"""[source]
+uri = {json.dumps(cfg.source.uri)}
+format = "csv"
+[run]
+workdir = {json.dumps(cfg.run.workdir)}
+seed = 42
+[columns]
+id_column = "id"
+[scoring]
+contamination = 0.05
+min_records = 5
+[explain]
+top_n = 2
+[[detectors]]
+name = "isolation_forest"
+[[detectors]]
+name = "kmeans_distance"
+""",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    human = runner.invoke(app, ["run", "--config", str(toml), "--no-report"])
+    assert "[explain.backend_failed]" in " ".join(human.stdout.split())
+    doc = json.loads(
+        runner.invoke(app, ["run", "--config", str(toml), "--no-report", "--json", "--force"]).stdout
+    )
+    assert any(w["code"] == "explain.backend_failed" for w in doc["warnings"])
+    assert any(w["code"] == "explain.backend_failed" for w in doc["groups"][0]["warnings"])
+    shown = runner.invoke(app, ["show", doc["run_id"], "--config", str(toml)])
+    assert "explain.backend_failed" in " ".join(shown.stdout.split())

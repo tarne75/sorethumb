@@ -1238,6 +1238,19 @@ def score(
 # ---------------------------------------------------------------------------
 
 
+def _explain_kind_cell(row: dict[str, Any]) -> str:
+    """Return the `anomalies` table's "kind" cell: the attribution kind, or why a row has none."""
+    status = row.get("explain_status")
+    if status == "unavailable":
+        return f"unavailable: {row.get('explain_issue')}"
+    if status == "partial":
+        return f"{row.get('attribution_kind')} (partial)"
+    kind = row.get("attribution_kind")
+    if kind is None and "attribution_kind" not in row:
+        return "—"  # explanations disabled, or the explanation stage failed: see `sorethumb show`
+    return str(kind or "unexplained")
+
+
 def _explain_cell(group_row: dict[str, Any]) -> str:
     """Summarise a run_group row's explanation outcome for the `show` table."""
     status = group_row.get("explain_status")
@@ -1967,6 +1980,20 @@ def show(
         )
     console.print(table)
 
+    from sorethumb_ml.errors import warning_records_from_json  # noqa: PLC0415
+
+    group_warnings = [
+        (str(g.get("group_label", "")), rec)
+        for g in groups
+        for rec in warning_records_from_json(g.get("warnings_json"))
+    ]
+    if group_warnings:
+        console.print("[yellow bold]Warnings:[/yellow bold]")
+        for label, rec in group_warnings:
+            console.print(
+                f"  [yellow]{_e(label)}  \\[{_e(rec.get('code'))}] {_e(rec.get('message'))}[/yellow]"
+            )
+
 
 # ---------------------------------------------------------------------------
 # sorethumb anomalies
@@ -2034,7 +2061,15 @@ def anomalies(
     multi_group = all_rows["_group"].n_unique() > 1
 
     if json_output:
-        display = ["_group", "rank", "composite_score", "attribution_kind", *reason_cols]
+        display = [
+            "_group",
+            "rank",
+            "composite_score",
+            "explain_status",
+            "explain_issue",
+            "attribution_kind",
+            *reason_cols,
+        ]
         present = [c for c in display if c in all_rows.columns]
         # Re-encoded through json.dumps (ensure_ascii) like every other --json
         # output: polars writes non-ASCII as raw characters, which a narrow
@@ -2061,7 +2096,7 @@ def anomalies(
         cells: list[str] = [
             str(row.get("rank", "")),
             f"{score_val:.4f}",
-            str(row.get("attribution_kind", "") or ""),
+            _explain_kind_cell(row),
         ]
         if multi_group:
             cells.append(str(row.get("_group", "")))
@@ -2768,7 +2803,11 @@ def _print_run_summary(result: RunResult) -> None:
                 f"    {_e(g.group_label):30s}  {g.elapsed_seconds:6.1f}s  anomalies={_e(g.n_anomalies)}{flag}"
             )
 
-    if result.warnings_issued:
+    if result.warning_records:
+        console.print("\n  [yellow bold]Warnings:[/yellow bold]")
+        for rec in result.warning_records:
+            console.print(f"    [yellow]\\[{_e(rec['code'])}] {_e(rec['message'])}[/yellow]")
+    elif result.warnings_issued:
         console.print("\n  [yellow bold]Warnings:[/yellow bold]")
         for msg in result.warnings_issued:
             console.print(f"    [yellow]{_e(msg)}[/yellow]")
@@ -2813,6 +2852,7 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
         "started_at": result.started_at,
         "finished_at": result.finished_at,
         "warnings_issued": result.warnings_issued,
+        "warnings": result.warning_records,
         "groups": [
             {
                 "group_key": g.group_key,
@@ -2825,6 +2865,7 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
                 "error": g.error,
                 "elapsed_seconds": g.elapsed_seconds,
                 "warnings_issued": g.warnings_issued,
+                "warnings": g.warning_records,
                 "explain_status": g.explain_status,
                 "n_explained": g.n_explained,
                 "n_explain_unavailable": g.n_explain_unavailable,

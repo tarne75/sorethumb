@@ -8,7 +8,7 @@ once so callers never have to remember it.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 import numpy as np
 from sklearn.metrics import roc_auc_score
@@ -69,3 +69,38 @@ def ban_all_fitting(monkeypatch: pytest.MonkeyPatch) -> None:
 
     for cls in (IsolationForest, KMeans, OneClassSVM):
         monkeypatch.setattr(cls, "fit", _boom)
+
+
+class UnexplainablePluginDetector:
+    """A third-party-style detector sorethumb has no vetted attribution method for.
+
+    Scores with an Isolation Forest it wraps (so detection works normally) but is
+    not an ``IsolationForestDetector``, so the explanation stage cannot explain
+    its share of the score. Module-level so persisted models can be pickled.
+    """
+
+    name: ClassVar[str] = "plugin_detector"
+    supports_tree_shap: ClassVar[bool] = False
+    default_train_row_cap: ClassVar[int] = 0
+
+    def __init__(self) -> None:
+        """Wrap a default Isolation Forest."""
+        from sorethumb_ml.detectors.isolation_forest import IsolationForestDetector
+
+        self._inner = IsolationForestDetector()
+
+    def fit(self, X: np.ndarray, *, seed: int) -> None:
+        """Fit the wrapped detector."""
+        self._inner.fit(X, seed=seed)
+
+    def score_samples(self, X: np.ndarray) -> np.ndarray:
+        """Score with the wrapped detector (higher = more normal)."""
+        return self._inner.score_samples(X)
+
+    def natural_flag(self, scores: np.ndarray) -> np.ndarray:
+        """Flag by the wrapped detector's own boundary."""
+        return self._inner.natural_flag(scores)
+
+    def get_params(self) -> dict[str, object]:
+        """Return no tunable parameters."""
+        return {}

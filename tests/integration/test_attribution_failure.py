@@ -108,6 +108,7 @@ def test_each_failing_detector_gets_its_own_warning(tmp_path: Path, monkeypatch:
     assert group.explain_status == "failed"
     assert group.n_explained == 0
     assert any("No attribution source explained" in w for w in group.warnings_issued)
+    assert any(r["code"] == "explain.no_source" for r in group.warning_records)
     flagged = _results(tmp_path, result)
     assert flagged.height == group.n_anomalies
     assert "attribution_kind" not in flagged.columns  # no explanation file was written

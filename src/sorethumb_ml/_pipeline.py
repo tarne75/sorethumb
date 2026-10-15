@@ -35,6 +35,7 @@ from sorethumb_ml.detectors._protocol import score_and_flag
 from sorethumb_ml.errors import (
     AttributionBackendWarning,
     ConfigError,
+    ExplanationCoverageWarning,
     ExplanationFailedWarning,
     FileInUseError,
     NotFoundError,
@@ -46,6 +47,8 @@ from sorethumb_ml.errors import (
     StoreError,
     UnevidencedPolicyError,
     UnevidencedPolicyWarning,
+    warning_record,
+    warning_records_from_json,
 )
 from sorethumb_ml.explain.blend import blend
 from sorethumb_ml.explain.project import aggregate_to_original, top_n_reasons
@@ -323,7 +326,7 @@ def _render_report_and_get_status(
     ws: Workspace,
     run_id: str,
     config: Config,
-    issued_warnings: list[str],
+    issued_warnings: list[dict[str, Any]],
 ) -> tuple[Path | None, str]:
     """Render the report for *run_id*; return ``(report_path, status)``.
 
@@ -353,10 +356,11 @@ def _render_report_and_get_status(
         "successfully -- only the report artefact is missing. "
         f"Cause: {reason}. See the log for the full traceback."
     )
+    warning = ReportGenerationWarning(msg)
     with warnings.catch_warnings():
         warnings.simplefilter("always", ReportGenerationWarning)
-        warnings.warn(msg, ReportGenerationWarning, stacklevel=2)
-    issued_warnings.append(msg)
+        warnings.warn(warning, stacklevel=2)
+    issued_warnings.append(warning_record(warning))
     return None, "failed"
 
 
@@ -395,6 +399,9 @@ class GroupSummary:
     n_explain_unavailable: int = 0
     explain_warnings: list[str] = field(default_factory=list)
     detection_digest: str | None = None
+    # Structured form of warnings_issued (errors.warning_record): code, stage,
+    # message, group, detector, rows_affected. warnings_issued keeps the messages.
+    warning_records: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -432,6 +439,8 @@ class RunResult:
     # The backtest evidence record (policy_evidence) a non-default policy relied
     # on; None for the default policy, or when the run warned that there was none.
     policy_evidence_id: str | None = None
+    # Structured form of warnings_issued: every run-level and group warning.
+    warning_records: list[dict[str, Any]] = field(default_factory=list)
     # run.strict for this run: explanation warnings then make the run exit
     # "partial" (they never fail a group -- see _explain_group).
     strict: bool = False
@@ -563,7 +572,7 @@ def _evidence_decision_rule(record: dict[str, Any] | None) -> int:
 
 
 def _policy_evidence_gate(
-    ws: Workspace, config: Config, dataset_fp: str, issued_warnings: list[str]
+    ws: Workspace, config: Config, dataset_fp: str, issued_warnings: list[dict[str, Any]]
 ) -> str | None:
     """Check a non-default ensemble policy against this workspace's backtest evidence.
 
@@ -605,8 +614,9 @@ def _policy_evidence_gate(
     )
     if config.run.strict:
         raise UnevidencedPolicyError(msg + " run.strict refuses a policy without evidence.")
-    warnings.warn(msg, UnevidencedPolicyWarning, stacklevel=3)
-    issued_warnings.append(msg)
+    warning = UnevidencedPolicyWarning(msg)
+    warnings.warn(warning, stacklevel=3)
+    issued_warnings.append(warning_record(warning))
     return None
 
 
@@ -797,7 +807,7 @@ def run_detection(
     else:
         ws = Workspace.init(ws_path)
 
-    issued_warnings: list[str] = []
+    issued_warnings: list[dict[str, Any]] = []
 
     slow_after = config.run.slow_stage_seconds
 
@@ -903,7 +913,8 @@ def run_detection(
                 finished_at=datetime.now(UTC).isoformat(),
                 id_identity_scope=id_identity_scope,
                 strict=config.run.strict,
-                warnings_issued=issued_warnings,
+                warnings_issued=[str(r["message"]) for r in issued_warnings],
+                warning_records=issued_warnings,
             )
 
         # ── 4. Build feature plan on full dataset ────────────────────────
@@ -1005,7 +1016,7 @@ def run_detection(
                     dataset_fp=dataset_fp,
                 ),
             )
-            issued_warnings.extend(gsummary.warnings_issued)
+            issued_warnings.extend(gsummary.warning_records)
             group_results.append(gsummary)
 
         # ── 7. Mark run complete / failed ────────────────────────────────
@@ -1057,7 +1068,8 @@ def run_detection(
             report_path=report_path,
             started_at=started_at,
             finished_at=finished_at,
-            warnings_issued=issued_warnings,
+            warnings_issued=[str(r["message"]) for r in issued_warnings],
+            warning_records=issued_warnings,
             report_status=report_status,
             id_identity_scope=id_identity_scope,
             strict=config.run.strict,
@@ -1200,7 +1212,7 @@ def score_forward(
         msg = f"No workspace at {ws_path}; cannot score against run {source_run_id!r}."
         raise NotFoundError(msg)
 
-    issued_warnings: list[str] = []
+    issued_warnings: list[dict[str, Any]] = []
 
     slow_after = config.run.slow_stage_seconds
 
@@ -1345,7 +1357,7 @@ def score_forward(
                     strict=strict or config.run.strict,
                 ),
             )
-            issued_warnings.extend(gsummary.warnings_issued)
+            issued_warnings.extend(gsummary.warning_records)
             group_results.append(gsummary)
 
         if any(g.status == "failed" for g in group_results):
@@ -1375,7 +1387,8 @@ def score_forward(
             report_path=report_path,
             started_at=started_at,
             finished_at=datetime.now(UTC).isoformat(),
-            warnings_issued=issued_warnings,
+            warnings_issued=[str(r["message"]) for r in issued_warnings],
+            warning_records=issued_warnings,
             report_status=report_status,
             source_run_id=source_run_id,
             id_identity_scope=id_identity_scope,
@@ -1462,6 +1475,7 @@ def _group_summary(
     n_explain_unavailable: int = 0,
     explain_warnings: list[str] | None = None,
     detection_digest: str | None = None,
+    warning_records: list[dict[str, Any]] | None = None,
 ) -> GroupSummary:
     return GroupSummary(
         group_key=group_key,
@@ -1483,6 +1497,7 @@ def _group_summary(
         n_explain_unavailable=n_explain_unavailable,
         explain_warnings=explain_warnings or [],
         detection_digest=detection_digest,
+        warning_records=warning_records or [],
     )
 
 
@@ -1500,7 +1515,8 @@ def _completed_group_summary(
     n_anom = int(row["anomaly_count"]) if row and row["anomaly_count"] is not None else 0
     rate = row["rate"] if row and row["rate"] is not None else None
     rec = int(row["record_count"]) if row and row["record_count"] is not None else n_records
-    warns = json.loads(row["warnings_json"]) if row and row.get("warnings_json") else []
+    records = warning_records_from_json(row.get("warnings_json") if row else None)
+    warns = [str(r["message"]) for r in records]
     rpath = results_path(ws, run_id, group_key)
     return _group_summary(
         group_key,
@@ -1511,6 +1527,7 @@ def _completed_group_summary(
         anomaly_rate=rate,
         results_path=rpath if rpath.exists() else None,
         warnings_issued=warns,
+        warning_records=records,
         explain_status=str(row.get("explain_status") or "not_requested") if row else "not_requested",
         n_explained=int(row.get("n_explained") or 0) if row else 0,
         n_explain_unavailable=int(row.get("n_explain_unavailable") or 0) if row else 0,
@@ -1558,7 +1575,7 @@ def _execute_group(
     )
 
     t0 = _clock()
-    warns: list[str] = []
+    records: list[dict[str, Any]] = []
     try:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("error" if strict else "always", SorethumbWarning)
@@ -1571,13 +1588,15 @@ def _execute_group(
                     SlowStageWarning,
                     stacklevel=2,
                 )
-            warns = [str(w.message) for w in caught]
+            records = [warning_record(w.message, group=group_label) for w in caught]
         # Explanation warnings were captured inside the explanation stage (so
         # run.strict cannot turn them into a group failure that would discard
         # the detection output); they are reported alongside the rest.
-        warns = [*warns, *gsummary.explain_warnings]
+        records = [*records, *gsummary.warning_records]
+        warns = [str(r["message"]) for r in records]
         gsummary.elapsed_seconds = elapsed
         gsummary.warnings_issued = warns
+        gsummary.warning_records = records
         # ``body`` can report failure by returning a GroupSummary(status="failed")
         # instead of raising (e.g. "no detector produced scores") -- that must
         # land in the ledger as "failed", not "complete", or a retry sees the
@@ -1596,7 +1615,7 @@ def _execute_group(
                 record_count=n_records,
                 error=gsummary.error,
                 timing_seconds=gsummary.elapsed_seconds,
-                warnings_json=json.dumps(warns),
+                warnings_json=json.dumps(records),
             )
         else:
             ws.store.upsert_run_group(
@@ -1609,7 +1628,7 @@ def _execute_group(
                 anomaly_count=gsummary.n_anomalies,
                 rate=gsummary.anomaly_rate,
                 timing_seconds=gsummary.elapsed_seconds,
-                warnings_json=json.dumps(warns),
+                warnings_json=json.dumps(records),
                 explain_status=gsummary.explain_status,
                 n_explained=gsummary.n_explained,
                 n_explain_unavailable=gsummary.n_explain_unavailable,
@@ -1620,6 +1639,8 @@ def _execute_group(
         elapsed = _clock() - t0
         err_msg = f"{type(exc).__name__}: {exc!s}"
         logger.exception("Group %s failed: %s", group_key, err_msg)
+        if isinstance(exc, SorethumbWarning):  # a warning run.strict promoted to an error
+            records = [*records, warning_record(exc, group=group_label)]
         ws.store.upsert_run_group(
             run_id=run_id,
             group_key=group_key,
@@ -1628,11 +1649,12 @@ def _execute_group(
             status="failed",
             error=err_msg[:500],
             timing_seconds=elapsed,
-            warnings_json=json.dumps(warns),
+            warnings_json=json.dumps(records),
         )
         summary = _group_summary(group_key, group_label, n_records, status="failed", error=err_msg[:500])
         summary.elapsed_seconds = elapsed
-        summary.warnings_issued = warns
+        summary.warnings_issued = [str(r["message"]) for r in records]
+        summary.warning_records = records
         return summary
 
 
@@ -2023,7 +2045,8 @@ def _finalize_group(
         explain_status=outcome.status,
         n_explained=outcome.n_explained,
         n_explain_unavailable=outcome.n_unavailable,
-        explain_warnings=outcome.warnings,
+        explain_warnings=[str(r["message"]) for r in outcome.warnings],
+        warning_records=outcome.warnings,
         detection_digest=detection_digest,
     )
 
@@ -2035,7 +2058,7 @@ class _ExplainOutcome:
     status: str  # "ok" | "partial" | "failed" | "not_requested" | "no_flagged_rows"
     n_explained: int
     n_unavailable: int
-    warnings: list[str]
+    warnings: list[dict[str, Any]]  # errors.warning_record
 
 
 def _explain_group(
@@ -2091,9 +2114,12 @@ def _explain_group(
             )
             if frame is None:
                 warnings.warn(
-                    f"No attribution source explained any of the {n_flagged} flagged row(s) in group "
-                    f"{group_label!r}; they keep their detection results without an explanation.",
-                    ExplanationFailedWarning,
+                    ExplanationFailedWarning(
+                        f"No attribution source explained any of the {n_flagged} flagged row(s) in group "
+                        f"{group_label!r}; they keep their detection results without an explanation.",
+                        code="explain.no_source",
+                        rows_affected=n_flagged,
+                    ),
                     stacklevel=2,
                 )
             else:
@@ -2102,26 +2128,28 @@ def _explain_group(
             cause = f"{type(exc).__name__}: {exc}"
             logger.warning("Explanation stage failed for group %r: %s", group_label, cause, exc_info=True)
             warnings.warn(
-                f"Explanation stage failed for group {group_label!r} ({cause}); its {n_flagged} flagged "
-                "row(s) keep their detection results without an explanation.",
-                ExplanationFailedWarning,
+                ExplanationFailedWarning(
+                    f"Explanation stage failed for group {group_label!r} ({cause}); its {n_flagged} flagged "
+                    "row(s) keep their detection results without an explanation.",
+                    rows_affected=n_flagged,
+                ),
                 stacklevel=2,
             )
             frame = None
-    explain_warnings: list[str] = []
+    explain_warnings: list[dict[str, Any]] = []
     for w in caught:
         if issubclass(w.category, SorethumbWarning):
-            explain_warnings.append(str(w.message))
+            explain_warnings.append(warning_record(w.message, group=group_label))
         else:  # not ours to capture: pass it on as it was raised
             warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
 
     if frame is None:
         return _ExplainOutcome("failed", 0, 0, explain_warnings)
-    n_unavailable = int((frame["attribution_kind"] == "unavailable").sum())
+    n_unavailable = int((frame["explain_status"] == "unavailable").sum())
     n_explained = n_flagged - n_unavailable
     if n_explained == 0:
         status = "failed"
-    elif n_unavailable or explain_warnings:
+    elif n_unavailable or explain_warnings or bool((frame["explain_status"] == "partial").any()):
         status = "partial"
     else:
         status = "ok"
@@ -2141,7 +2169,14 @@ def _explanation_frame(
     weights_used: dict[str, float],
     group_label: str,
 ) -> pl.DataFrame | None:
-    """Return one row per flagged row: ``row_id``, ``attribution_kind``, ``reason_<k>``; None if nothing explained."""
+    """Return one row per flagged row; None if nothing explained.
+
+    Columns: ``row_id``; ``explain_status`` (``ok``, ``partial`` -- some
+    detector's share of the score is unexplained -- or ``unavailable``);
+    ``explain_issue`` (null, ``detectors_unexplained:<names>``,
+    ``beyond_max_rows`` or ``pca_backprojection_failed``); ``attribution_kind``;
+    ``reason_<k>`` (null for an unavailable row).
+    """
     attribution_cols = _compute_attributions(
         config=config,
         det_instances=det_instances,
@@ -2154,10 +2189,18 @@ def _explanation_frame(
     )
     if attribution_cols is None:
         return None
-    orig_attributions, attr_kind, unavailable_reasons = attribution_cols
+    orig_attributions, attr_kind, unavailable_reasons, unexplained_detectors = attribution_cols
     top_n = config.explain.top_n
     orig_df_rows = df_group.to_dicts()  # pre-encoding values
-    out: dict[str, list[Any]] = {"row_id": [], "attribution_kind": []}
+    partial_issue = (
+        "detectors_unexplained:" + ",".join(sorted(unexplained_detectors)) if unexplained_detectors else None
+    )
+    out: dict[str, list[Any]] = {
+        "row_id": [],
+        "explain_status": [],
+        "explain_issue": [],
+        "attribution_kind": [],
+    }
     for i in range(top_n):
         out[f"reason_{i + 1}"] = []
     for row_pos in flagged_idx:
@@ -2170,11 +2213,15 @@ def _explanation_frame(
         if unavailable_reason is not None:
             # No source covered this row (beyond explain.max_rows), or PCA
             # back-projection failed for the whole group. Either way, say
-            # so explicitly; an all-zero vector here would otherwise read
-            # as "no feature stood out" instead of "never computed".
+            # so explicitly in the status columns; an all-zero vector here
+            # would otherwise read as "no feature stood out" instead of "never
+            # computed". The reason columns stay empty: they hold reasons only.
+            out["explain_status"].append("unavailable")
+            out["explain_issue"].append(unavailable_reason)
             out["attribution_kind"].append("unavailable")
-            labels[0] = unavailable_reason
         else:
+            out["explain_status"].append("partial" if partial_issue else "ok")
+            out["explain_issue"].append(partial_issue)
             raw_row_data = orig_df_rows[row_pos_i] if row_pos_i < len(orig_df_rows) else {}
             reasons = top_n_reasons(
                 row_idx=row_pos_i,
@@ -2189,7 +2236,12 @@ def _explanation_frame(
                 labels[r_i] = f"{reason_col}={raw_val}" if reason_col else None
         for i in range(top_n):
             out[f"reason_{i + 1}"].append(labels[i])
-    schema: dict[str, Any] = {"row_id": None, "attribution_kind": pl.String}
+    schema: dict[str, Any] = {
+        "row_id": None,
+        "explain_status": pl.String,
+        "explain_issue": pl.String,
+        "attribution_kind": pl.String,
+    }
     for i in range(top_n):
         schema[f"reason_{i + 1}"] = pl.String
     return pl.DataFrame(out, schema_overrides={k: v for k, v in schema.items() if v is not None})
@@ -2228,8 +2280,8 @@ def _compute_attributions(
     plan: FeaturePlan,
     group_space: FeatureSpace,
     group_label: str,
-) -> tuple[dict[str, np.ndarray], str, dict[int, str]] | None:
-    """Compute blended attributions for flagged rows. Returns None on failure.
+) -> tuple[dict[str, np.ndarray], str, dict[int, str], list[str]] | None:
+    """Compute blended attributions for flagged rows. Returns None if no source explained anything.
 
     ``explain.enabled=False`` skips the stage entirely. A detector the
     ensemble gave zero weight to (composite mode only -- see the skip at the
@@ -2270,10 +2322,13 @@ def _compute_attributions(
     most-anomalous-first (the caller's job), so "beyond the cap" always means
     "least anomalous of the flagged set", not an arbitrary cut.
 
-    Returns ``(original_attributions, blend_tag, unavailable_reasons)`` — the
-    last maps original-frame row indices among ``flagged_idx`` to a human
-    -readable reason no original-column attribution exists for that row (rows
-    absent from the mapping have one). Callers must not run ``top_n_reasons``
+    Returns ``(original_attributions, blend_tag, unavailable_reasons,
+    unexplained_detectors)``. ``unavailable_reasons`` maps original-frame row
+    indices among ``flagged_idx`` to an issue code (``beyond_max_rows``,
+    ``pca_backprojection_failed``) for rows with no original-column
+    attribution (rows absent from the mapping have one).
+    ``unexplained_detectors`` names detectors whose share of the score could not
+    be explained (backend failed, or no vetted method). Callers must not run ``top_n_reasons``
     on a row present in this mapping and must mark it unavailable with the
     given reason instead, or an all-zero vector reads as "no feature stood
     out" when the truth is "never computed". Rows can land here for two
@@ -2306,10 +2361,26 @@ def _compute_attributions(
     # explain, and, separately, the normal population to scale/background against.
     X_flagged = X[flagged_idx]
     reference = _attribution_reference(X, flagged_idx)
+    n_unflagged = n_rows - n_flagged
+    if n_unflagged < _MIN_NORMAL_REFERENCE_ROWS:
+        warnings.warn(
+            ExplanationCoverageWarning(
+                f"Group {group_label!r} has only {n_unflagged} unflagged row(s) (fewer than "
+                f"{_MIN_NORMAL_REFERENCE_ROWS}): the reference for perturbation scales and SHAP "
+                "backgrounds is the whole group, flagged rows included.",
+                code="explain.reference_fallback",
+                rows_affected=n_flagged,
+            ),
+            stacklevel=2,
+        )
 
     sources: list[tuple[np.ndarray, str]] = []
     source_weights: list[float] = []
     covered = np.zeros(n_flagged, dtype=bool)  # True where >=1 source has a real value
+    # Detectors that contribute to the score but whose share of it could not be
+    # explained (backend failed, or no vetted method): every covered row is then
+    # only partially explained.
+    unexplained_detectors: list[str] = []
 
     for det_name, det in det_instances.items():
         # A detector the ensemble gave zero weight to (dropped by the
@@ -2373,11 +2444,17 @@ def _compute_attributions(
                 # above) silently produces all-zero or noisy attributions for
                 # exactly the far-tail rows we're trying to explain — skip
                 # rather than guess.
-                logger.debug(
-                    "No vetted attribution method for detector %r (%s); skipping.",
-                    det_name,
-                    type(det).__name__,
+                warnings.warn(
+                    ExplanationCoverageWarning(
+                        f"Detector {det_name!r} ({type(det).__name__}) has no vetted attribution "
+                        f"method; its part of the score in group {group_label!r} is not explained.",
+                        code="explain.detector_unsupported",
+                        detector=det_name,
+                        rows_affected=n_flagged,
+                    ),
+                    stacklevel=2,
                 )
+                unexplained_detectors.append(det_name)
                 continue
         except Exception as exc:
             # One warning per detector and group (this loop visits each once), with
@@ -2394,11 +2471,15 @@ def _compute_attributions(
                 exc_info=True,
             )
             warnings.warn(
-                f"Attribution backend failed for detector {det_name!r} in group {group_label!r} "
-                f"({cause}); it contributes no explanation.",
-                AttributionBackendWarning,
+                AttributionBackendWarning(
+                    f"Attribution backend failed for detector {det_name!r} in group {group_label!r} "
+                    f"({cause}); it contributes no explanation.",
+                    detector=det_name,
+                    rows_affected=n_flagged,
+                ),
                 stacklevel=2,
             )
+            unexplained_detectors.append(det_name)
             continue
 
         covered[: len(attr)] = True
@@ -2414,9 +2495,18 @@ def _compute_attributions(
     if not sources:
         return None
 
-    unavailable_reasons: dict[int, str] = {
-        int(i): "unavailable (beyond explain.max_rows)" for i in flagged_idx[~covered]
-    }
+    unavailable_reasons: dict[int, str] = {int(i): "beyond_max_rows" for i in flagged_idx[~covered]}
+    if unavailable_reasons:
+        warnings.warn(
+            ExplanationCoverageWarning(
+                f"{len(unavailable_reasons)} of {n_flagged} flagged row(s) in group {group_label!r} are "
+                f"beyond explain.max_rows ({config.explain.max_rows}) for every attribution source that "
+                "covers them and have no explanation (the least anomalous of the flagged set).",
+                code="explain.rows_beyond_max_rows",
+                rows_affected=len(unavailable_reasons),
+            ),
+            stacklevel=2,
+        )
 
     if config.explain.permutation_importance:
         _run_permutation_importance_crosscheck(config, det_instances, X, plan, group_space)
@@ -2463,8 +2553,21 @@ def _compute_attributions(
             # A back-projection failure is not per-row -- if the loadings can't
             # be applied to this blend, no flagged row in this group has a
             # trustworthy original-column attribution.
-            reason = "unavailable (PCA back-projection failed)"
-            return {}, blend_tag, dict.fromkeys((int(i) for i in flagged_idx), reason)
+            warnings.warn(
+                ExplanationCoverageWarning(
+                    f"PCA back-projection failed in group {group_label!r}: none of its {n_flagged} "
+                    "flagged row(s) has an original-column explanation.",
+                    code="explain.pca_backprojection_failed",
+                    rows_affected=n_flagged,
+                ),
+                stacklevel=2,
+            )
+            return (
+                {},
+                blend_tag,
+                dict.fromkeys((int(i) for i in flagged_idx), "pca_backprojection_failed"),
+                unexplained_detectors,
+            )
 
     orig_attributions = aggregate_to_original(feature_attributions, feature_names, plan.derived_to_original)
 
@@ -2475,7 +2578,7 @@ def _compute_attributions(
         full_arr[flagged_idx] = arr
         expanded[orig_col] = full_arr
 
-    return expanded, blend_tag, unavailable_reasons
+    return expanded, blend_tag, unavailable_reasons, unexplained_detectors
 
 
 def _run_permutation_importance_crosscheck(
@@ -2584,7 +2687,12 @@ def _render_report_or_reason(
         for grow in sorted(ws.store.all_run_groups(run_id), key=lambda r: str(r["group_label"])):
             gk = str(grow["group_key"])
             rdf = read_results(ws, run_id, gk)
-            warns = json.loads(grow["warnings_json"]) if grow.get("warnings_json") else []
+            warns = [
+                f"[{r['code']}] {r['message']}"
+                if r.get("code") not in (None, "legacy")
+                else str(r["message"])
+                for r in warning_records_from_json(grow.get("warnings_json"))
+            ]
             group_sections.append(
                 GroupSection(
                     group_key=gk,
