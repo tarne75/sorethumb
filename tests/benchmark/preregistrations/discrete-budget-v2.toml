@@ -1,0 +1,30 @@
+# Pre-registered 2026-10-15, after the round-3 development run and before any round-3
+# confirmation run.
+candidate = "rule:discrete-budget@2"
+baseline = "intersection@1"
+confirmation_round = 3
+hypothesis = """
+discrete-budget-v1 improved flag F1 on all-categorical data but failed on stability (round 2:
+flag Jaccard 0.70 vs the default's 0.76): its ranking shifts between fits, so rows near the
+budget cut change. Bagging the ranking -- averaging the default's combined score over 5 fits
+on 80% subsamples before flagging the review budget's top rows -- steadies it. Hypothesis:
+on all_categorical, flag F1 improves over the default with no false-positive-budget,
+ranking or stability regression; every other scenario runs the default unchanged.
+(A tie-consistent cut was considered first and rejected on the development seeds: tied
+groups never straddled the cut, and it changed nothing.)
+"""
+primary_metric = "flag_f1"
+scenarios = ["all_categorical"]
+require = "all"
+alpha = 0.05
+stability_metric = "flag_jaccard_stability"
+stability_tolerance = 0.05
+n_resamples = 10000
+expected_outcome = """
+Outperforms, with stability the remaining risk. On the development seeds flag F1 on
+all_categorical improved by +0.17 (95% CI +0.13 to +0.21, Holm p 0.0002) with no budget or
+stability regression; in a development comparison bagging raised flag stability from 0.73
+(v1) to 0.76 against the default's 0.74. Round 2 showed the stability gap varies by seed
+(v1 was 0.70 vs 0.76 there), so a confirmation-seed stability shortfall beyond 0.05 would
+make it fail.
+"""
