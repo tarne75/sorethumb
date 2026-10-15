@@ -419,9 +419,16 @@ train_row_cap = 20_000
 
 ### Fixed review budget
 
-Flag a fixed fraction of the ranking for review — e.g. the top 2 % — instead of
-letting each detector fall back to its own heuristic boundary (`"auto"`).
-`contamination` sizes the shortlist; it is not a prevalence estimate.
+Flag exactly a fixed fraction of the ranking for review, e.g. the top 2 %, instead
+of letting each detector fall back to its own heuristic boundary (`"auto"`).
+`contamination` sizes the shortlist; it is not a prevalence estimate. A number gives
+you *exactly* that share only with a composite policy. With the default
+`intersection`, each detector flags its own top 2 % and only rows all of them flag are
+kept, usually far fewer. The policy with published evidence at a fixed budget is
+`composite-agreement@1`
+([ensemble-policy.md](ensemble-policy.md#recommended-setup-if-you-have-a-review-budget)).
+A run with a non-default policy warns until `sorethumb backtest` has produced evidence
+for it on your data.
 
 ```toml
 [source]
@@ -432,15 +439,17 @@ workdir = "./workspace"
 
 [scoring]
 contamination = 0.02
+combination   = "composite"
+weighting     = "agreement"   # composite-agreement@1
 ```
 
-### Conservative flagging with intersection
+### Conservative flagging with intersection (the default)
 
-`intersection` is the default combiner. Each detector independently flags its
-top `contamination` fraction of rows, and a row is only marked anomalous if
-**all three detectors** agree — not just the combined score. This maximises
-precision at the cost of recall and also sets the OneClassSVM `nu` training
-parameter to match the contamination rate.
+`intersection` is the default combiner: a row is marked anomalous only if **all
+three detectors** flag it, not just the combined score. At the default
+`contamination = "auto"`, each detector flags by its own boundary. On the real
+datasets tested this was precise relative to the base rate, but you do not control
+how many rows it flags (0.18x to 8.4x a review budget).
 
 ```toml
 [source]
@@ -451,15 +460,25 @@ workdir = "./workspace"
 
 [scoring]
 combination   = "intersection"
-contamination = 0.05
+contamination = "auto"
 ```
 
+With a number instead (`contamination = 0.05`), each detector flags its own top 5 %
+(and the OneClassSVM `nu` is set to match), and only rows all three flag are kept. That
+is typically a small fraction of the 5 %. In the real-data backtests, intersection at
+a fixed budget lost to `composite-agreement@1` at the same budget, and was not
+precise either: 1.4 % precision on network-intrusion data with a 3.1 % attack rate.
+See [ensemble-policy.md](ensemble-policy.md#where-things-stand-2026-10-15).
+
 Use `combination = "union"` for the opposite: flag a row if *any* detector
-considers it anomalous (maximises recall).
+considers it anomalous. It favours recall, and flagged 1.7-2.2x the review budget on
+the benchmarks.
 
 Use `combination = "composite"` to blend scores into a single ranked list and
-apply one global threshold — better when detectors disagree often and you want
-a smooth ranking rather than a hard vote.
+apply one global threshold. Pair it with a numeric `contamination`: at `"auto"` it
+cuts at the median of the detectors' own flag rates and has flagged several times a
+review budget. `weighting = "agreement"` (`composite-agreement@1`) is the variant with
+published evidence.
 
 ### Manual detector weighting
 

@@ -576,9 +576,10 @@ def test_run_summary_frames_flagged_count_as_a_review_shortlist(workspace):
     _, toml_path, _ = workspace
     result = runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
     assert result.exit_code == 0
-    out = result.stdout
+    out = " ".join(result.stdout.split())  # the console wraps long lines
     assert "Flagged for review" in out
-    assert "not an estimate of true prevalence" in out
+    assert "a review shortlist, not an estimate of true prevalence" in out
+    assert "chosen budget" not in out  # under the default "auto" no budget is chosen
     assert "Realised detector flag rates" in out
     assert "Total anomalies" not in out
 

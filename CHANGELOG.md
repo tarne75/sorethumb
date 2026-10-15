@@ -22,7 +22,10 @@ First public release.
   a ranking and a flag decision, and explain each flagged row in terms of the
   original columns. It ranks a review shortlist: `scoring.contamination` is a
   review budget, not an estimate of how many anomalies the data contains, and
-  each run shows the per-detector flag rates alongside the flagged count.
+  each run shows the per-detector flag rates alongside the flagged count. How many
+  rows are flagged depends on the ensemble policy as well as on `contamination`.
+  By default (`intersection` at `"auto"`) it is whatever every detector's own
+  boundary agrees on, not a number you choose.
 - **Input data**: a file with a single column, or with every column as text
   (all-categorical data), is valid input. A CSV/TSV is refused as
   mis-delimited only when another delimiter character appears in the header
@@ -77,8 +80,9 @@ First public release.
   optional agreement-based weighting). Each is a versioned *policy*
   (`intersection@1`, `union@1`, `composite-equal@1`, `composite-agreement@1`,
   `composite-manual@1`) recorded on every run (`run --json`, `show`); a change
-  to what a policy flags is a new version. The default is a deliberate
-  precision-first design decision; see `docs/ensemble-policy.md`.
+  to what a policy flags is a new version. The default is a deliberate design
+  decision and is not changing for now; see "Where things stand" in
+  `docs/ensemble-policy.md` for the evidence and its limits.
 - **Explanations**: up to `explain.top_n` reasons per flagged row
   (`reason_1`, `reason_2`, ...), labelled per row by `attribution_kind`:
   `exact` for ECOD and HBOS, `model_specific` (TreeSHAP) for Isolation Forest
@@ -226,7 +230,15 @@ First public release.
 - **The default `combination="intersection"`** flags a row only when every
   configured detector flags it independently. That is deliberately
   conservative and, on some data shapes, can flag very few true anomalies or
-  none. See `docs/approximations.md`.
+  none. At the default `scoring.contamination = "auto"` you do not control how
+  many rows it flags: 0.18x to 8.4x a review budget on the real datasets tested.
+  With a fixed review budget, `composite-agreement@1` at that budget is the
+  evidenced choice. See `docs/ensemble-policy.md` and `docs/approximations.md`.
+- **Policy evidence has limits.** It covers a maintainer-written synthetic suite
+  and three real datasets (one confirmation slice each), with the default three
+  detectors at stated review budgets. `rule:discrete-budget@2` won on synthetic
+  data only and is not a selectable setting. No policy recovers contextual
+  anomalies. Full list: "Where things stand" in `docs/ensemble-policy.md`.
 - **Without the `explain` extra**, Isolation Forest explanations are
   `heuristic` rather than `model_specific`.
 - Every detector fits on the same unlabelled data it scores; there is no

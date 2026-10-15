@@ -22,9 +22,13 @@ combined into a single `composite_score`, where **1 = extremely unusual** and
 the HTML report and `--json` output; rows are listed from the highest score
 (most anomalous) down.
 
-A record is flagged as anomalous when its score crosses a threshold learned
-from your data — the top `contamination` fraction of rows, or each detector's
-own natural boundary when `contamination = "auto"`. Nothing is hard-coded.
+Whether a record is *flagged* is decided by the ensemble policy. By default
+(`intersection`, `contamination = "auto"`) it is flagged when every detector's own
+learned boundary flags it. With a numeric `contamination`, each detector flags its
+top fraction instead, and a composite policy flags exactly that fraction by the
+combined score. Nothing is hard-coded; see
+[ensemble-policy.md](ensemble-policy.md#where-things-stand-2026-10-15) for every
+combination.
 
 ---
 

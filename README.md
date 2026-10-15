@@ -18,13 +18,19 @@ column, fits an ensemble of detectors, ranks the records that stand out, and
 explains *why* each one stands out in terms of the original columns — so the
 result is actionable without a background in machine learning.
 
-**What it is:** a *ranker* — an ordering of records by statistical oddity — and,
-if you set a review budget, a *selector* that hands back the top slice of that
-ranking. **What it is not:** a prevalence estimator. The flagged count is the
-size of the shortlist you asked for, not a measurement of how many anomalies
-your data contains. `contamination = "auto"` is the median of three heuristic
-per-detector cut-offs; the run output reports each detector's realised rate so
-the number is never mistaken for ground truth.
+**What it is:** a *ranker*, an ordering of records by statistical oddity, plus a
+*flag decision* on top of it. **What it is not:** a prevalence estimator. The
+flagged count is never a measurement of how many anomalies your data contains.
+What decides the count depends on two settings:
+- **By default** (`scoring.contamination = "auto"`, `combination = "intersection"`),
+  each detector flags by its own heuristic boundary, and a row is flagged only if all
+  of them flag it. The count is whatever they agree on, and you don't choose it. The
+  run output reports each detector's realised rate.
+- **To get exactly the top N%** (a fixed review budget), set `contamination` to N/100
+  *and* use a composite policy; the recommended one is `composite-agreement@1`.
+
+See [docs/ensemble-policy.md](https://github.com/tarne75/sorethumb/blob/main/docs/ensemble-policy.md#where-things-stand-2026-10-15)
+for what each combination does and the evidence behind it.
 
 It is built to run on a single machine — a laptop, a CI runner, one VM — for
 datasets from roughly ten thousand to a few million rows. At that size a
@@ -113,8 +119,9 @@ print(f"Flagged {result.n_anomalies} rows for review across {result.n_succeeded}
 
 The short version; every point is expanded under [Honest limitations](#honest-limitations).
 
-- **It ranks; it does not count.** The flagged number is the size of the review
-  shortlist you asked for, not an estimate of how many anomalies your data holds.
+- **It ranks; it does not count.** The flagged number is a review shortlist, not an
+  estimate of how many anomalies your data holds. By default its size is set by the
+  detectors' own boundaries, not by you.
 - **It is unsupervised.** Detectors fit on the same data they score, with no
   held-out normal reference, and the slower ones fit on a row sample.
 - **Scores are rankings, not probabilities,** and two independently fitted runs
@@ -345,8 +352,8 @@ INFO  [group=ALL] SHAP explanations (TreeSHAP) for 421 flagged rows …
 INFO  Results written: results/<run_id>/ALL/anomalies.parquet
 
 Run abc12345  succeeded=1  skipped=0  failed=0
-  Flagged for review: 421 (0.50% of 84 231 rows) — the review shortlist at the
-  chosen budget, not an estimate of true prevalence
+  Flagged for review: 421 (0.50% of 84 231 rows) — a review shortlist, not an
+  estimate of true prevalence
 
   Realised detector flag rates (own natural boundary):
     isolation_forest=1.83%, kmeans_distance=0.74%, one_class_svm=2.10%
@@ -355,9 +362,10 @@ Run abc12345  succeeded=1  skipped=0  failed=0
 ```
 
 The three per-detector rates are heuristic boundaries, not measurements, and
-they disagree; `contamination = "auto"` is just their median. Treat the flagged
-count as *"records worth a look given this budget"*, never *"this is how many
-anomalies the data has"*.
+they disagree. Under the default (`"auto"`, `intersection`), a row is flagged only
+when all three boundaries flag it, so the flagged count is what they agree on. It is
+not a budget you set. Treat the count as *"records worth a look"*, never *"this is
+how many anomalies the data has"*.
 
 **4. Print the top anomalies with their SHAP reasons**
 
@@ -421,13 +429,17 @@ mean ± spread across seeds):
 
 Read the weak rows as seriously as the strong ones: the default ensemble is close to
 chance on contextual and rare-categorical anomalies and weak on local and varying-density ones, and average
-precision is the more telling column when anomalies are rare. The page above also
-shows the bare-detector baselines and the flag-level precision and recall.
+precision is the more telling column when anomalies are rare. These two columns
+measure the ranking, which is the same whatever `scoring.contamination` is. The page
+above also shows the bare-detector baselines and the flag-level precision and recall.
+Those were measured with each detector at the scenario's review budget, not at the
+shipped `"auto"`.
 
 The same page has the ensemble-policy matrix: every scenario under every built-in
 policy over 10 seeds, with flag precision/recall, false-positive rate, over-flag
-ratio and refit stability checked against versioned budgets. The default
-(`intersection@1`) misses some of those budgets by design; each accepted miss is
+ratio and refit stability checked against versioned budgets. Every policy there runs
+at the scenario's review budget. The default policy (`intersection@1`) misses some of
+those budgets by design; each accepted miss is
 listed with its reason in [`tests/benchmark/budgets.toml`](https://github.com/tarne75/sorethumb/blob/main/tests/benchmark/budgets.toml)
 (rationale: [`docs/ensemble-policy.md`](https://github.com/tarne75/sorethumb/blob/main/docs/ensemble-policy.md)).
 
@@ -524,11 +536,14 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
   `MemoryBudgetError` before any model is fitted. It is not a live RSS ceiling —
   Python cannot impose one — so actual peak memory can still exceed the budget.
 - The composite score is an interpretable ranking score, not a calibrated probability.
-- `contamination` is a review budget, not a prevalence estimate. The flagged
-  count is *"the top N% of the ranking"*, chosen by you (or, for `"auto"`, the
-  median of three heuristic per-detector cut-offs that themselves disagree —
-  see the realised rates in the run output). It says nothing about how many
-  genuine anomalies the data holds; only labelled data can tell you that.
+- `contamination` is a review budget, not a prevalence estimate. What it does depends
+  on the policy. Under a composite policy a number N means *exactly* the top N% of the
+  ranking. Under the default `intersection` it means each detector's top N%, and only
+  rows all of them flag are kept, typically far fewer than N%. At `"auto"` (the
+  default), each detector uses its own heuristic boundary (see the realised rates in
+  the run output); a composite then cuts at the median of those rates, which flagged
+  several times a review budget in the backtests. None of this says how many genuine
+  anomalies the data holds; only labelled data can tell you that.
 - Detectors fit on the same (unlabelled) data they then score — there is no
   held-out "known normal" reference set, since that is what makes this
   unsupervised in the first place. A detector whose row cap is smaller than
@@ -571,13 +586,15 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
 - The default ensemble policy (`intersection@1`: every detector must flag a row, each at
   its own boundary under the default `scoring.contamination = "auto"`) is a deliberate
   design decision. It can be precise, but how many rows it flags is unpredictable: on the
-  real datasets tested it ranged from a fraction of a 5% shortlist to several times one.
+  real datasets tested it ranged from 0.18x to 8.4x a review budget.
   Some anomaly types (local, varying-density, contextual) can go unflagged. If you have a
   review budget, the evidence favours `composite-agreement@1` with `scoring.contamination`
   set to that budget; never pair a composite with `"auto"`. Choose on measured evidence,
   not intuition: `sorethumb backtest` measures every policy against the default on your own
   labelled data, and a run with a non-default policy that lacks that evidence warns
-  (`run.strict` refuses it). See [docs/ensemble-policy.md](https://github.com/tarne75/sorethumb/blob/main/docs/ensemble-policy.md).
+  (`run.strict` refuses it). The default is not changing for now, by decision; the
+  evidence, what it does and does not cover, and the reasons are in
+  [docs/ensemble-policy.md](https://github.com/tarne75/sorethumb/blob/main/docs/ensemble-policy.md#where-things-stand-2026-10-15).
 - Unsupervised anomaly ≠ the thing you care about. The library ranks statistical oddity;
   whether an odd record is *interesting* is a domain judgement it cannot make.
 - **A workspace is executable, not just data.** Persisted runs store fitted

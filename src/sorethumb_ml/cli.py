@@ -2699,11 +2699,11 @@ def _print_run_summary(result: RunResult) -> None:
         )
         console.print(
             f"  Flagged for review: {result.n_anomalies:,}{_e(pct)} — "
-            "the review shortlist at the chosen budget, [dim]not an estimate of true prevalence[/dim]"
+            "a review shortlist, [dim]not an estimate of true prevalence[/dim]"
         )
 
     # Realised per-detector rates: what each detector's own heuristic boundary
-    # flagged. contamination='auto' is the median of these — surfaced so it is
+    # flagged (a composite at contamination='auto' cuts at their median) — surfaced so it is
     # not read as "how many anomalies you have".
     rate_groups = [g for g in result.groups if g.detector_flag_rates]
     if rate_groups:

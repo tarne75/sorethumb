@@ -365,7 +365,7 @@ class GroupSummary:
     group_key: str
     group_label: str
     n_records: int
-    n_anomalies: int  # rows flagged for review at the chosen budget — not a prevalence estimate
+    n_anomalies: int  # rows the ensemble policy flagged for review — not a prevalence estimate
     anomaly_rate: float | None
     results_path: Path | None
     status: str  # "success" | "skipped" | "failed" | "too_few_records"

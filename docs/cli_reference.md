@@ -204,9 +204,12 @@ fields, so a caller can branch on one field whether the run finished cleanly or
 not.
 
 The run document counts rows **flagged for review** as `n_flagged`, both at the top
-level (all groups) and per group. It is the size of the review shortlist at the
-chosen budget, not an estimate of how many records are truly anomalous, which is
-why the field is not called `n_anomalies`. There is no alias under the old name.
+level (all groups) and per group. It is the number of rows the ensemble policy flagged
+(exactly the budget only for a composite policy with a numeric
+`scoring.contamination`; see
+[ensemble-policy.md](ensemble-policy.md#where-things-stand-2026-10-15)), not an
+estimate of how many records are truly anomalous, which is why the field is not called
+`n_anomalies`. There is no alias under the old name.
 
 ---
 

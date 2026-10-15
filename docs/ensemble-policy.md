@@ -4,6 +4,74 @@ sorethumb combines several detectors into one flag decision. The rule it uses is
 *ensemble policy*, identified as `name@version` (for example `intersection@1`) and
 recorded on every run.
 
+## Where things stand (2026-10-15)
+
+This section is the summary; everything in it is backed by a section below or by a
+published result file.
+
+**The default is `intersection@1` at `scoring.contamination = "auto"`, and it is not
+changing for now.** That is a maintainer decision taken on 2026-10-15, with the
+evidence below in hand. An alternative won a pre-registered comparison, but only with
+both policies at a fixed review budget, and the default does not ship at one. At the
+shipped `"auto"` the alternative loses, and it flags several times too many rows.
+Changing the default would also mean changing the default review budget. That needs
+its own pre-registered comparison of the two full configurations, which has not been
+run.
+
+**What decides how many rows a run flags.** This depends on both settings, and it is
+the most common source of surprise:
+
+| `scoring.combination` | `contamination = "auto"` (default) | `contamination = 0.05` (a number) |
+| --- | --- | --- |
+| `intersection` (default) | each detector flags by its own boundary; rows **all** of them flag are kept. The count is not chosen by you: on the real datasets tested it ranged from 0.18x to 8.4x a review budget | each detector flags its own top 5%; rows all of them flag are kept, typically **far fewer than 5%** (5-46% of the budget across the synthetic benchmark and the real-data backtests) |
+| `union` | rows **any** detector flags by its own boundary | rows in **any** detector's top 5%, typically more than 5% |
+| `composite` (any weighting) | the combined score cut at the median of the detectors' own flag rates. Flagged 2-17x a review budget in the backtests. **Not recommended** | **exactly** the top 5% by combined score |
+
+**What the evidence says.** All verdicts come from pre-registered comparisons
+([protocol](#backtests-when-a-candidate-may-be-said-to-outperform)):
+
+| comparison | data | contamination | verdict |
+| --- | --- | --- | --- |
+| `composite-agreement@1` vs `intersection@1` | synthetic suite (round 2) | the review budget | **outperforms** |
+| `composite-agreement@1` vs `intersection@1` | 3 real datasets | the review budget | **outperforms** |
+| `composite-agreement@1` vs `intersection@1` | synthetic suite (round 4) | `"auto"` | does not outperform |
+| `composite-agreement@1` vs `intersection@1` | 3 real datasets | `"auto"` | does not outperform |
+| `rule:discrete-budget@2` vs `intersection@1` | synthetic all-categorical scenario (round 3) | the review budget | **outperforms** (synthetic only) |
+| earlier candidates (rounds 1-2) | synthetic suite | the review budget | do not outperform |
+
+**What we recommend:**
+
+- **No fixed review budget, and you want what every detector agrees on:** keep the
+  default. Its flags were precise relative to the base rate on the real datasets
+  tested, but you do not control how many there are.
+- **You have a review budget** (a number of rows someone can look at): set
+  `scoring.contamination` to it and use `composite-agreement@1`. See
+  [Recommended setup](#recommended-setup-if-you-have-a-review-budget).
+- **Either way, if you have labels,** run `sorethumb backtest` on your own data. The
+  published evidence is about other data.
+
+**Not available, by decision:** `rule:discrete-budget@2` won on synthetic data only
+and is not a selectable setting. No real all-categorical dataset has been tested.
+Candidate rules remain an evaluation-only mechanism.
+
+**What the evidence does not cover.** Read every number on this page with these limits:
+
+- The synthetic scenarios were written by the maintainers. They test named anomaly
+  types, not the anomalies in your data.
+- The real-data evidence is three datasets with one confirmation slice each: 10,000
+  random rows of KDD Cup 1999 (SA) and of Covertype (2 vs 4), and one day (23 hourly
+  periods) of card transactions. The review budgets were set per dataset (5%, 1%,
+  0.5%) before any result was seen. Other budgets were not tested.
+- Everything ran the default three detectors (`isolation_forest`, `kmeans_distance`,
+  `one_class_svm`) with default settings. Other detector sets are untested.
+- The decision thresholds are choices, stated in each pre-registration: significance
+  0.05 with Holm correction; stability tolerance 0.05; the per-anomaly-type budgets in
+  [`tests/benchmark/budgets.toml`](../tests/benchmark/budgets.toml); and, for
+  `sorethumb backtest`, a 10% ranking tolerance.
+- No policy recovers `contextual` anomalies (a value normal in another context); all
+  sit near chance.
+- Results are for the library version and dependencies recorded in each result file.
+
 ## The default: `intersection@1`, by design
 
 A row is flagged only when every configured detector flags it on its own boundary.
@@ -29,15 +97,19 @@ Unanimity is conservative. On some anomaly types it flags few or none of the tru
 anomalies even when the combined ranking is reasonable. The full-pipeline benchmark
 ([benchmarks.md](benchmarks.md)) shows flag recall of 0.0 on `local` and
 `varying_density` and about 0.02 on `contextual`; see
-[approximations.md](approximations.md). These shortfalls are accepted in exchange for
-the precision above. They are not hidden, and they are not a reason to change the
-default silently.
+[approximations.md](approximations.md). Those figures were measured with each detector
+at the scenario's review budget, not at the shipped `"auto"`. The ranking metrics
+there (ROC-AUC, average precision) do not depend on that setting; the flag metrics do.
+These shortfalls are accepted as the cost of the design. They are not hidden, and they
+are not a reason to change the default silently.
 
 ## The evidence
 
 The [ensemble policy matrix](benchmarks.md#ensemble-policy-matrix) measures every
 registered policy on every benchmark scenario: precision and recall of the actual
-flags, ranking, stability under refits, and the false-positive budget. Each cell
+flags, ranking, stability under refits, and the false-positive budget. Every policy
+there, the default included, runs at the scenario's review budget (a number), not at
+`"auto"`. Each cell
 is checked against versioned per-anomaly-type budgets
 ([`tests/benchmark/budgets.toml`](../tests/benchmark/budgets.toml)). Every budget
 the default misses is listed there under `accepted_limitations` with its reason,
@@ -48,18 +120,22 @@ meets one that still is.
 
 `scoring.combination` (and `scoring.weighting` for `composite`) selects another
 registered policy: `union@1`, `composite-equal@1`, `composite-agreement@1` or
-`composite-manual@1`. Choose one on evidence, not intuition (`composite-agreement@1`
-has published backtest evidence on the synthetic suite; see
-[Round 2](#round-2-2026-10-14-budgets-v3)). That evidence is about known anomaly
-types, though. Whether a policy is better on *your* data is measured by
+`composite-manual@1`. Choose one on evidence, not intuition. `composite-agreement@1`
+has published evidence at a fixed review budget, on the synthetic suite
+([Round 2](#round-2-2026-10-14-budgets-v3)) and three real datasets
+([Real data](#real-data)). At `"auto"` it does not outperform
+([Round 4](#round-4-2026-10-15-budgets-v3-composite-at-auto)). That evidence is about
+other data, though. Whether a policy is better on *your* data is measured by
 `sorethumb backtest` ([CLI reference](cli_reference.md#sorethumb-backtest)):
 
 1. Set `columns.reference_column` to a 0/1 label column (used only for evaluation,
    never for fitting). Set `scoring.contamination` to the fraction of rows you can
    review, or keep `"auto"` and pass that fraction as `--review-budget`.
 2. Run `sorethumb backtest`. It fits your configured pipeline on random subsamples
-   of your rows, applies the default and every candidate to the same fits, and
-   decides each candidate with the same rule as the synthetic backtests:
+   of your rows (or, with `--forward`, fits each period and scores the next), applies
+   the default and every candidate to the same fits, and decides each candidate by a
+   rule modelled on the synthetic one. Instead of fixed per-anomaly-type budgets, it
+   compares each candidate with the default on your data. It requires
    significantly higher flag F1 (paired bootstrap, Holm-corrected across all the
    candidates tested at once, so trying several and keeping the best is accounted
    for), no more wrong flags than the review budget where the default stays within
@@ -68,8 +144,10 @@ types, though. Whether a policy is better on *your* data is measured by
    rule 2. Rule 1, before 2026-10-15, had no ranking check, and a run no longer
    relies on evidence decided under it: re-run `sorethumb backtest`.
 3. Each verdict is recorded in the workspace for this dataset and this
-   configuration (everything but the policy itself and settings that cannot change
-   a flag).
+   configuration. The scope covers every setting except the policy itself, the
+   explain settings, `run.seed` and `run.strict`. The seed is excluded because a
+   backtest already varies the fit across subsamples. A run with a different seed
+   relies on the same evidence.
 
 A `run` or `score` with a non-default policy then looks for an `outperforms` record
 in that scope and records its id on the run (`policy_evidence_id`, also shown by
@@ -98,6 +176,12 @@ weighting = "agreement"     # composite-agreement@1
   It outperformed the default *at the same budget* on the synthetic suite (round 2) and
   on all three real datasets (`composite-agreement-real-v1`), within the false-positive
   budget and with no loss of stability.
+- **What you give up.** It flags that many rows *every* run, even when the data holds
+  no anomalies at all: then every flag is a normal row (the swamping scenarios show
+  exactly this). The default can flag nothing. The composite also drops a detector
+  whose ranking runs against the others (the bad-member guard), and a numeric
+  `contamination` sets the OneClassSVM `nu` to match. The evidence covers budgets of
+  0.5%-15%.
 - **Never pair a composite with `contamination = "auto"`.** It then flags several times
   the budget (Round 4; `composite-agreement-real-auto-v1`).
 - **Check it on your own data** with `sorethumb backtest` (labels in
@@ -122,9 +206,12 @@ scores), is judged by a fixed protocol (`sorethumb_ml.evaluate.backtest`):
 2. **Seed split.** Candidates are developed on the development seeds (the policy
    matrix's, 0-9) and judged once on 20 disjoint confirmation seeds. Confirmations run in
    rounds: once a round's results are published its seeds have been seen, so the next
-   round uses fresh ones (round 1: 10000-10019, closed; round 2: 20000-20019, open). A
-   confirmation run is refused for an uncommitted pre-registration, for a closed round,
-   and again once a result exists: a revised hypothesis is a new pre-registration.
+   round uses fresh ones. Rounds 1-4 (seeds 10000-10019, 20000-20019, 30000-30019,
+   40000-40019) all have published results, so their seeds have been seen. The next
+   candidate must use a new round 5, opened in `evaluate/backtest.py` when it is
+   registered. A confirmation run is refused for an uncommitted pre-registration, for
+   a closed round, and again once a result exists: a revised hypothesis is a new
+   pre-registration.
 3. **Paired statistics.** Candidate and baseline run on the same seeds, so on the same
    data and split. Each hypothesis scenario's per-seed differences in the primary metric
    get a paired bootstrap estimate (10,000 resamples), and the p-values are
@@ -134,9 +221,15 @@ scores), is judged by a fixed protocol (`sorethumb_ml.evaluate.backtest`):
    every scenario each budget the baseline meets, and its stability is nowhere more than
    the tolerance below the baseline's.
 
-A candidate that outperforms is eligible to ship as a supported, versioned option with
-its evidence attached. It does not become the default by this process alone (see
-below). Candidate rules stay out of the configuration until they win.
+A candidate that outperforms becomes *eligible* to ship as a supported, versioned option
+with its evidence attached. Whether it ships, and whether it becomes the default, are
+separate decisions; see [Changing the default](#changing-the-default). Candidate rules
+are evaluation-only: none is a configuration setting.
+`rule:discrete-budget@2` has won (round 3, synthetic only) and has deliberately not
+been promoted.
+
+The pre-registrations in the table below run both policies at each scenario's review
+budget, except `composite-agreement-auto-v1`, which runs both at `"auto"`.
 
 ### Results
 
@@ -415,7 +508,8 @@ confirmation slices (from `composite-agreement-real-auto-v1`'s baseline):
 | Covertype (0.95%) | 39% precision, 7% recall, 0.18x | 25% precision, 26% recall, 1.0x |
 | card fraud (0.15%) | 5% precision, 74% recall, **8.4x** | 8% precision, 8% recall, 1.0x |
 
-The shipped default is precise. What it does not control is volume: a few rows on
+The shipped default is precise relative to the base rate (5x-41x). What it does not
+control is volume: a few rows on
 Covertype, and over eight times a 0.5% shortlist of mostly normal rows on card fraud.
 With a fixed review budget, `composite-agreement@1` at that budget flags exactly that
 many rows at comparable or better precision. These cross-configuration figures are
@@ -435,6 +529,14 @@ results stay attributable after the code moves on.
 
 ## Changing the default
 
-The default changes only when a candidate policy wins under a pre-registered,
-backtested comparison, in a minor version, with a CHANGELOG entry. Never as a side
-effect of a benchmark run.
+The default changes only when a candidate wins under a pre-registered, backtested
+comparison, and the maintainers then decide to change it, in a minor version, with a
+CHANGELOG entry. Never as a side effect of a benchmark run. Winning is necessary, not
+sufficient.
+
+**Current decision (2026-10-15): no change.** `composite-agreement@1` won only at a
+fixed review budget, and the default ships at `"auto"`, where it loses (Round 4 and
+`composite-agreement-real-auto-v1`). Switching would therefore also mean switching the
+default `scoring.contamination` to a number. That would change every run from
+"flag what the detectors agree on" to "flag exactly N%", and choose N for everyone.
+Neither has been tested as a full configuration against the current default.

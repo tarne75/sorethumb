@@ -34,6 +34,16 @@ are the same scenario fit with bare sklearn detectors and no sorethumb
 pipeline at all, for comparison (PyOD is deliberately not used here — see
 [`approximations.md`](approximations.md)).
 
+**Which contamination.** Every ablation here, `default` included, runs the ensemble
+with `scoring.contamination` set to the scenario's review budget (5%, or 15% for
+`masking`), not the shipped `"auto"`. So the `default` rows are the default *policy*
+(`intersection@1`) at a fixed budget, not the default *configuration*. The ranking
+columns (`roc_auc`, `average_precision`, `precision_at_k`, `recall_at_k`) do not depend
+on contamination, so they hold for the shipped default too. The `flag_*` columns,
+`over_flag_ratio` and `false_positive_budget_ratio` do depend on it. How the
+default behaves at `"auto"` is reported in
+[ensemble-policy.md](ensemble-policy.md#where-things-stand-2026-10-15).
+
 **Matrix shape**: `scripts/run_benchmark.py` runs every scenario under the shipped
 *default* ablation only (plus its `sklearn:*` baselines) — 12 pipeline
 ablations exist in total (`AblationSpec`s: PCA on, standard scaler, each
@@ -232,11 +242,11 @@ Suite version `8068b9d70a987a63`, budgets v3, 10 seeds, 3 stability refits per s
 
 ### What the matrix shows (2026-10-14, 10 seeds)
 
-- **`intersection@1` (the default)** is the most conservative policy. Its
-  false-positive rate stays at or below 2%, and it flags 11-46% of the review
-  budget. Even where its ranking is excellent (`point` and `clustered`, AP 1.00),
-  its flags catch only 13-16% of the anomalies. Recall is what the
-  precision-first default gives up.
+- **`intersection@1` (the default policy, here at the review budget)** is the most
+  conservative policy. Its false-positive rate stays at or below 2%, and it flags
+  11-46% of the review budget. Even where its ranking is excellent (`point` and
+  `clustered`, AP 1.00), its flags catch only 13-16% of the anomalies. At a fixed
+  budget, unanimity gives up most of the recall.
 - **`composite-equal@1` / `composite-agreement@1`** flag about the full review
   budget (`over_flag_ratio` ≈ 1.0), with recall of 0.6-0.8 on point,
   clustered, text-timestamp and irrelevant-column anomalies. Neither reaches
@@ -253,6 +263,8 @@ Suite version `8068b9d70a987a63`, budgets v3, 10 seeds, 3 stability refits per s
 Whether any of these differences justifies a different policy is decided by a
 pre-registered backtest, not by this table: see
 [the backtest results](ensemble-policy.md#backtests-when-a-candidate-may-be-said-to-outperform).
+Those results, and the decision not to change the default for now, are summarised in
+[Where things stand](ensemble-policy.md#where-things-stand-2026-10-15).
 
 ### `profiling.near_constant_distinct`: why 3 stays the default
 
