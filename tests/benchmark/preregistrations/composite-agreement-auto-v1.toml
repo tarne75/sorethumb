@@ -1,0 +1,27 @@
+# Pre-registered 2026-10-15, after the round-4 development run and before any round-4
+# confirmation run.
+candidate = "composite-agreement@1"
+baseline = "intersection@1"
+confirmation_round = 4
+contamination = "auto"
+hypothesis = """
+composite-agreement@1's advantage (round 2) was measured with both policies at the review
+budget. This tests whether it holds at the shipped scoring.contamination = "auto", where
+each detector's own boundary sets the flags and the composite thresholds at the median
+of the detectors' natural flag rates: flag F1 on point, clustered, masking and
+irrelevant_columns, judged against the same budgets v3.
+"""
+primary_metric = "flag_f1"
+scenarios = ["point", "clustered", "masking", "irrelevant_columns"]
+require = "all"
+alpha = 0.05
+stability_metric = "flag_jaccard_stability"
+stability_tolerance = 0.05
+n_resamples = 10000
+expected_outcome = """
+Does not outperform. On the development seeds at "auto" the composite's flag F1 was lower
+on point (-0.20) and clustered (-0.16), higher on masking and irrelevant_columns, and it
+breached the false-positive budget on every scenario (wrong flags 1.5-2.8x the review
+budget; 2.1-3.1x the budget flagged in all). Its "auto" threshold sits far above the
+review budget, while intersection@1 at "auto" stays within it.
+"""

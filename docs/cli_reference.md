@@ -382,7 +382,10 @@ and every policy is applied to the same fits, so the comparison is paired.
 - **Without labels**: only flag volume and stability are reported, and the
   verdict is `not_assessable`.
 
-Needs a numeric `scoring.contamination` (the review budget); `"auto"` is refused.
+Flags are judged against a review budget: a numeric `scoring.contamination`, or,
+with `scoring.contamination = "auto"` (the default), the `--review-budget` you pass.
+In that case the policies still run at `"auto"`, and the evidence applies to runs at
+`"auto"`.
 Each candidate's verdict is recorded for the logical dataset and the configuration
 apart from the policy (and the explain settings, seed and strictness). A later
 `run` or `score` with a non-default policy looks for an `outperforms` record in
@@ -405,6 +408,7 @@ sorethumb backtest --forward                         # fit each period, score th
 | `--subsample FLOAT` | `0.8` | Fraction of rows in each subsample, in [0.2, 1). |
 | `--no-record` | off | Measure only; write no evidence. |
 | `--forward` | off | Out of time: fit each `history.period_granularity` period and score the next with those fits (as `score --from-run` does), instead of random subsamples. Needs `columns.time_column` and at least 5 period pairs. |
+| `--review-budget FLOAT` | — | Required when `scoring.contamination = "auto"`: the fraction of rows you can review, which flags are judged against. |
 | `--ranking-tolerance FLOAT` | `0.10` | Relative drop in mean average precision below the default's that counts as ranking the anomalies worse. |
 | `--folds INT` | all pairs | With `--forward`: use only the last N period pairs (at least 5). |
 | `--json` | off | The full result (per-policy means, verdicts, evidence ids) as JSON. |

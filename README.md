@@ -568,9 +568,13 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
   trend surfaces *relative* change (which groups/records move, period to period),
   not an absolute level of "how anomalous is this period". For a trend on one
   fixed scale, reuse a fitted run: `sorethumb score --from-run RUN_ID`.
-- The default ensemble policy (`intersection@1`: every detector must flag a row) is a
-  deliberate precision-first design decision. It accepts that some anomaly types (local,
-  varying-density, contextual) can go unflagged; choose another policy on measured evidence,
+- The default ensemble policy (`intersection@1`: every detector must flag a row, each at
+  its own boundary under the default `scoring.contamination = "auto"`) is a deliberate
+  design decision. It can be precise, but how many rows it flags is unpredictable: on the
+  real datasets tested it ranged from a fraction of a 5% shortlist to several times one.
+  Some anomaly types (local, varying-density, contextual) can go unflagged. If you have a
+  review budget, the evidence favours `composite-agreement@1` with `scoring.contamination`
+  set to that budget; never pair a composite with `"auto"`. Choose on measured evidence,
   not intuition: `sorethumb backtest` measures every policy against the default on your own
   labelled data, and a run with a non-default policy that lacks that evidence warns
   (`run.strict` refuses it). See [docs/ensemble-policy.md](https://github.com/tarne75/sorethumb/blob/main/docs/ensemble-policy.md).

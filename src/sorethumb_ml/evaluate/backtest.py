@@ -48,9 +48,10 @@ DEVELOPMENT_SEEDS: tuple[int, ...] = tuple(range(10))
 CONFIRMATION_ROUNDS: dict[int, tuple[int, ...]] = {
     1: tuple(range(10_000, 10_020)),  # closed 2026-10-14: composite-agreement-v1, discrete-composite-v1
     2: tuple(range(20_000, 20_020)),  # closed 2026-10-14: composite-agreement-v2, discrete-budget-v1
-    3: tuple(range(30_000, 30_020)),
+    3: tuple(range(30_000, 30_020)),  # closed 2026-10-15: discrete-budget-v2
+    4: tuple(range(40_000, 40_020)),
 }
-OPEN_ROUND = 3
+OPEN_ROUND = 4
 STABILITY_REFITS = 3
 
 # Primary metrics: per-seed values where higher is better.
@@ -88,6 +89,9 @@ class Preregistration:
     expected_outcome: str
     confirmation_round: int
     sha256: str
+    # "budget": policies run at each scenario's review budget (every round so far);
+    # "auto": at scoring.contamination="auto", judged against the same budgets.
+    contamination: str = "budget"
 
 
 def _known_policy(policy_id: str) -> bool:
@@ -121,6 +125,7 @@ def load_preregistration(path: Path) -> Preregistration:
         n_resamples=int(raw.get("n_resamples", 10_000)),
         expected_outcome=str(raw.get("expected_outcome", "")).strip(),
         confirmation_round=int(raw.get("confirmation_round", 1)),
+        contamination=str(raw.get("contamination", "budget")),
         sha256=hashlib.sha256(raw_bytes).hexdigest(),
     )
     problems: list[str] = []
@@ -145,6 +150,8 @@ def load_preregistration(path: Path) -> Preregistration:
         problems.append("stability_tolerance must be >= 0")
     if prereg.n_resamples < 1000:
         problems.append("n_resamples must be >= 1000")
+    if prereg.contamination not in {"budget", "auto"}:
+        problems.append("contamination must be 'budget' or 'auto'")
     if prereg.confirmation_round not in CONFIRMATION_ROUNDS:
         problems.append(f"confirmation_round must be one of {sorted(CONFIRMATION_ROUNDS)}")
     if not prereg.hypothesis:
@@ -357,8 +364,11 @@ def decision_as_dict(decision: BacktestDecision) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def ablation_for(policy_id: str) -> Any:
-    """Return the pipeline-benchmark ablation that runs *policy_id* with everything else at the default."""
+def ablation_for(policy_id: str, *, contamination_auto: bool = False) -> Any:
+    """Return the pipeline-benchmark ablation that runs *policy_id* with everything else at the default.
+
+    *contamination_auto* selects the variant run at ``scoring.contamination="auto"``.
+    """
     from sorethumb_ml.evaluate.pipeline_benchmark import ABLATIONS, AblationSpec  # noqa: PLC0415
 
     defaults = AblationSpec("_")
@@ -368,10 +378,12 @@ def ablation_for(policy_id: str) -> Any:
             and ablation.scaler == defaults.scaler
             and ablation.detector_names == defaults.detector_names
             and ablation.near_constant_distinct == defaults.near_constant_distinct
+            and ablation.contamination_auto == contamination_auto
         )
         if same_knobs and ablation.policy_id == policy_id:
             return ablation
-    msg = f"no benchmark ablation runs {policy_id!r} at the default settings"
+    at = ' at contamination="auto"' if contamination_auto else ""
+    msg = f"no benchmark ablation runs {policy_id!r} at the default settings{at}"
     raise ValueError(msg)
 
 
@@ -399,7 +411,9 @@ _PER_SEED_KEYS = (
 )
 
 
-def run_policy_seeds(policy_id: str, seeds: tuple[int, ...]) -> dict[str, list[dict[str, Any]]]:
+def run_policy_seeds(
+    policy_id: str, seeds: tuple[int, ...], *, contamination_auto: bool = False
+) -> dict[str, list[dict[str, Any]]]:
     """Run *policy_id* on every backtest scenario at *seeds*; per-seed metrics per scenario.
 
     Each (scenario, policy) cell runs in an isolated subprocess, exactly as the
@@ -414,7 +428,7 @@ def run_policy_seeds(policy_id: str, seeds: tuple[int, ...]) -> dict[str, list[d
         _run_isolated,
     )
 
-    ablation = ablation_for(policy_id)
+    ablation = ablation_for(policy_id, contamination_auto=contamination_auto)
     out: dict[str, list[dict[str, Any]]] = {}
     for scenario in backtest_scenarios():
         variant = SWAMPING_SCENARIOS.get(scenario)

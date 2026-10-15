@@ -159,11 +159,18 @@ First public release.
   and the next scored with those fits, as `score --from-run` does. A candidate
   must also rank the anomalies no worse than the default (mean average precision
   within `--ranking-tolerance`, 10%): decision rule 2, which `run` requires of the
-  evidence it relies on.
+  evidence it relies on. With `scoring.contamination = "auto"`, `--review-budget`
+  states the budget flags are judged against.
 - **Real-data policy evidence**: the pre-registered backtest protocol applied to
   KDD Cup 1999 (SA), Covertype (2 vs 4) and a time-ordered credit-card fraud
   dataset, with disjoint development and confirmation slices; results in
   `docs/ensemble-policy.md`.
+  Composite policies must be paired with a numeric `scoring.contamination`: at
+  `"auto"`, `composite-agreement@1` flags several times the review budget and
+  does not outperform the default (pre-registered, synthetic and real).
+  `docs/ensemble-policy.md` gives a recommended setup for users with a review
+  budget, and qualifies the default's precision-first rationale: it holds at the
+  shipped `"auto"`, and the default's real weakness is unpredictable volume.
 
 ### Security
 

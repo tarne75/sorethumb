@@ -10,12 +10,20 @@ A row is flagged only when every configured detector flags it on its own boundar
 This is the default deliberately, not by accident:
 
 - **Precision first.** A flagged row is one every detector independently found unusual,
-  so a short review list is mostly worth reviewing. This holds on the synthetic suite,
-  but not on the real datasets tested so far; see [Real data](#real-data).
+  so a short review list is mostly worth reviewing. At the shipped
+  `scoring.contamination = "auto"` this held on the real datasets tested: its flags were
+  15% precise on KDD, 39% on Covertype and 5% on card fraud, 5x to 41x the base rate. At
+  a fixed review budget it does not hold; see [Real data](#real-data).
 - **Bounded false positives.** No single detector's quirks can add rows on its own.
 - **Explainable.** "All three detectors agreed" is a reason a reviewer can act on.
 
 ## The limitations it accepts
+
+**How many rows it flags is not under your control.** At `"auto"` each detector flags by
+its own boundary, and only rows all of them flag are kept. On the real datasets tested
+that came to anywhere from 0.18x to 8.4x a review budget's worth of rows, with most of
+the excess on card fraud being normal rows. If you have a fixed number of rows you can
+review, see [Recommended setup if you have a review budget](#recommended-setup-if-you-have-a-review-budget).
 
 Unanimity is conservative. On some anomaly types it flags few or none of the true
 anomalies even when the combined ranking is reasonable. The full-pipeline benchmark
@@ -47,8 +55,8 @@ types, though. Whether a policy is better on *your* data is measured by
 `sorethumb backtest` ([CLI reference](cli_reference.md#sorethumb-backtest)):
 
 1. Set `columns.reference_column` to a 0/1 label column (used only for evaluation,
-   never for fitting) and `scoring.contamination` to the fraction of rows you can
-   review.
+   never for fitting). Set `scoring.contamination` to the fraction of rows you can
+   review, or keep `"auto"` and pass that fraction as `--review-budget`.
 2. Run `sorethumb backtest`. It fits your configured pipeline on random subsamples
    of your rows, applies the default and every candidate to the same fits, and
    decides each candidate with the same rule as the synthetic backtests:
@@ -72,6 +80,29 @@ The policy is never switched for you: the choice stays yours, made visible and
 checkable. Without labels, `sorethumb backtest` reports flag volume and stability
 only; its `not_assessable` verdict does not satisfy the check, because accuracy was
 not measured.
+
+## Recommended setup if you have a review budget
+
+The default suits data you want screened for what every detector agrees is unusual,
+when you do not have a fixed number of rows to review. If you do have one (say, the 50
+rows a day someone can look at), the evidence favours:
+
+```toml
+[scoring]
+contamination = 0.005        # the fraction of rows you can review: 50 of 10,000
+combination = "composite"
+weighting = "agreement"     # composite-agreement@1
+```
+
+- It flags exactly that many rows and ranks them by the agreement-weighted composite.
+  It outperformed the default *at the same budget* on the synthetic suite (round 2) and
+  on all three real datasets (`composite-agreement-real-v1`), within the false-positive
+  budget and with no loss of stability.
+- **Never pair a composite with `contamination = "auto"`.** It then flags several times
+  the budget (Round 4; `composite-agreement-real-auto-v1`).
+- **Check it on your own data** with `sorethumb backtest` (labels in
+  `columns.reference_column`). Without that evidence a run with it warns, and
+  `run.strict` refuses it. The published evidence is about other people's data.
 
 ## Backtests: when a candidate may be said to outperform
 
@@ -114,11 +145,48 @@ below). Candidate rules stay out of the configuration until they win.
 
 | pre-registration | candidate | baseline | primary metric | verdict | seeds |
 | --- | --- | --- | --- | --- | --- |
+| [`composite-agreement-auto-v1`](benchmark-results/backtests/composite-agreement-auto-v1.json) | `composite-agreement@1` | `intersection@1` | flag_f1 | **does not outperform** | 20 |
 | [`composite-agreement-v1`](benchmark-results/backtests/composite-agreement-v1.json) | `composite-agreement@1` | `intersection@1` | flag_f1 | **does not outperform** | 20 |
 | [`composite-agreement-v2`](benchmark-results/backtests/composite-agreement-v2.json) | `composite-agreement@1` | `intersection@1` | flag_f1 | **outperforms** | 20 |
 | [`discrete-budget-v1`](benchmark-results/backtests/discrete-budget-v1.json) | `rule:discrete-budget@1` | `intersection@1` | flag_f1 | **does not outperform** | 20 |
 | [`discrete-budget-v2`](benchmark-results/backtests/discrete-budget-v2.json) | `rule:discrete-budget@2` | `intersection@1` | flag_f1 | **outperforms** | 20 |
 | [`discrete-composite-v1`](benchmark-results/backtests/discrete-composite-v1.json) | `rule:discrete-composite@1` | `intersection@1` | flag_f1 | **does not outperform** | 20 |
+
+**`composite-agreement-auto-v1`** -- composite-agreement@1's advantage (round 2) was measured with both policies at the review
+budget. This tests whether it holds at the shipped scoring.contamination = "auto", where
+each detector's own boundary sets the flags and the composite thresholds at the median
+of the detectors' natural flag rates: flag F1 on point, clustered, masking and
+irrelevant_columns, judged against the same budgets v3.
+
+| hypothesis scenario | mean difference | 95% CI | p (Holm) | improved |
+| --- | --- | --- | --- | --- |
+| point | -0.1117 | [-0.1779, -0.0464] | 0.0012 | no |
+| clustered | -0.1525 | [-0.2186, -0.0868] | 0.0008 | no |
+| masking | +0.2537 | [+0.2229, +0.2851] | 0.0008 | yes |
+| irrelevant_columns | +0.2292 | [+0.1573, +0.3064] | 0.0008 | yes |
+
+Why it does not outperform:
+
+- flag_f1 improved significantly on 2 of 4 hypothesis scenario(s); required: all
+- budget regression on all_categorical: max_false_positive_budget_ratio 1 met by the baseline (0.0000) but not the candidate (2.5654)
+- budget regression on all_categorical: max_over_flag_ratio 1.5 met by the baseline (0.0000) but not the candidate (3.2778)
+- budget regression on categorical_rare: max_false_positive_budget_ratio 1 met by the baseline (0.4208) but not the candidate (2.7042)
+- budget regression on categorical_rare: max_over_flag_ratio 1.5 met by the baseline (0.4194) but not the candidate (2.7137)
+- budget regression on clustered: max_false_positive_budget_ratio 1 met by the baseline (0.1154) but not the candidate (1.2923)
+- budget regression on clustered: max_over_flag_ratio 1.5 met by the baseline (0.8849) but not the candidate (2.3849)
+- budget regression on contextual: max_false_positive_budget_ratio 1 met by the baseline (0.3778) but not the candidate (2.3556)
+- budget regression on contextual: max_over_flag_ratio 1.5 met by the baseline (0.4139) but not the candidate (2.4750)
+- budget regression on local: max_false_positive_budget_ratio 1 met by the baseline (0.2538) but not the candidate (2.1038)
+- budget regression on local: max_over_flag_ratio 1.5 met by the baseline (0.2619) but not the candidate (2.1905)
+- budget regression on point: max_false_positive_budget_ratio 1 met by the baseline (0.1269) but not the candidate (1.3308)
+- budget regression on point: max_over_flag_ratio 1.5 met by the baseline (0.8452) but not the candidate (2.4325)
+- budget regression on swamping_contaminated: max_false_positive_budget_ratio 1 met by the baseline (0.9688) but not the candidate (9.1625)
+- budget regression on text_timestamp: min_flag_precision 0.25 met by the baseline (0.5460) but not the candidate (0.2196)
+- budget regression on text_timestamp: max_false_positive_budget_ratio 1 met by the baseline (0.3458) but not the candidate (2.3958)
+- budget regression on text_timestamp: max_over_flag_ratio 1.5 met by the baseline (0.7470) but not the candidate (2.9438)
+- budget regression on varying_density: max_false_positive_budget_ratio 1 met by the baseline (0.3875) but not the candidate (2.3188)
+- budget regression on varying_density: max_over_flag_ratio 1.5 met by the baseline (0.3974) but not the candidate (2.4103)
+- stability regression on all_categorical: flag_jaccard_stability 0.8441 vs baseline 1.0000 (tolerance 0.05)
 
 **`composite-agreement-v1`** -- Thresholding the agreement-weighted composite score at the review budget improves
 flag F1 over unanimity on the anomaly types where the ensemble ranking is good but the
@@ -263,6 +331,15 @@ which is why confirmation is a separate step:
   As a candidate rule it stays out of the configuration until it is promoted to a
   supported option.
 
+### Round 4 (2026-10-15, budgets v3): composite at `"auto"`
+
+- **`composite-agreement@1` at `"auto"` does not outperform `intersection@1` at `"auto"`**
+  (`composite-agreement-auto-v1`), as pre-registered. The round-2 win was at the review
+  budget. At the shipped `"auto"`, flag F1 is *lower* on point (-0.11) and clustered
+  (-0.15), higher on masking and irrelevant columns. The composite flags several times
+  the review budget and breaches the false-positive budget across the suite, because its
+  `"auto"` threshold is the median of the detectors' own flag rates.
+
 ### Real data
 
 The rounds above are synthetic. The same protocol, run through the same code as
@@ -283,6 +360,23 @@ and per-dataset p-values are Holm-corrected across the datasets the hypothesis n
 
 <!-- real-backtest-results-start -->
 <!-- AUTO-GENERATED — do not edit manually; run `python scripts/run_real_backtest.py --phase confirmation` to add a result. -->
+
+**[`composite-agreement-real-auto-v1`](benchmark-results/real-backtests/composite-agreement-real-auto-v1.json)**: `composite-agreement@1` vs `intersection@1` -- **does not outperform**. composite-agreement-real-v1 was judged with both policies at each dataset's review budget.
+This tests the shipped scoring.contamination = "auto": does composite-agreement@1 still
+outperform intersection@1 on the same datasets when both run at "auto", judged against
+the same review budgets (decision rule 2, with ranking)?
+
+| dataset | slice | flag F1 difference | 95% CI | p (Holm) | improved | regressions |
+| --- | --- | --- | --- | --- | --- | --- |
+| kddcup99_sa | 10,000 random rows (rows 10,001-20,000 of a seed-2026 permutation) | +0.1149 | [+0.0261, +0.1990] | 0.0132 | yes | spends more than the review budget on wrong rows (false-positive budget ratio 1.94 > 1.0; intersection@1: 0.67) |
+| covtype_2v4 | 10,000 random rows (rows 10,001-20,000 of a seed-2026 permutation) | +0.1925 | [+0.1702, +0.2142] | 0.0006 | yes | spends more than the review budget on wrong rows (false-positive budget ratio 3.63 > 1.0; intersection@1: 0.11) |
+| creditcard | day 2, hourly periods | -0.0367 | [-0.0580, -0.0203] | 0.0006 | no | -- |
+
+Why it does not outperform:
+
+- flag F1 improved significantly on 2 of 3 dataset(s); required: all
+- kddcup99_sa: spends more than the review budget on wrong rows (false-positive budget ratio 1.94 > 1.0; intersection@1: 0.67)
+- covtype_2v4: spends more than the review budget on wrong rows (false-positive budget ratio 3.63 > 1.0; intersection@1: 0.11)
 
 **[`composite-agreement-real-v1`](benchmark-results/real-backtests/composite-agreement-real-v1.json)**: `composite-agreement@1` vs `intersection@1` -- **outperforms**. The round-2 synthetic result carries over to real labelled data: at each dataset's
 review budget, composite-agreement@1 flags anomalies with higher flag F1 than the
@@ -305,17 +399,32 @@ pre-registered, without spending more than the review budget on wrong rows and w
 loss of flag stability. The card-fraud gain is the smallest (+0.04 flag F1, against
 +0.18 on the development day): fraud is rare enough that a few hours decide it.
 
-The absolute numbers matter as much as the comparison. On real data the default's
-unanimous vote does **not** buy precision. Its flags were 1.4% precise on KDD (where
-3.1% of rows are attacks, so worse than flagging at random), 29% on Covertype and 2.2%
-on card fraud. It flagged only 5-14% of the review budget, so it also caught almost
-nothing (recall 0.3-4%). `composite-agreement@1` spends the whole budget at 8-25%
-precision. That is a lift of 4x (KDD), 27x (Covertype) and over 50x (card fraud) on the
-base rate, and it recalls 8-26% of the anomalies. The "precision first" rationale above
-holds on the synthetic suite. On these datasets the default bounds false positives but
-does not make the short list worth reviewing. The default is unchanged by this result:
-changing it follows the process below. It is the strongest evidence so far for running
-`sorethumb backtest` before relying on the default.
+That comparison ran both policies at each dataset's review budget. At a fixed budget
+unanimity is the wrong rule: `intersection@1`'s flags were then 1.4% precise on KDD
+(below the 3.1% attack rate), 29% on Covertype and 2.2% on card fraud, and it used only
+5-14% of the budget. `composite-agreement@1` spent the whole budget at 8-25% precision,
+recalling 8-26% of the anomalies.
+
+**This is not how the default ships.** The shipped default runs at
+`scoring.contamination = "auto"`, and there it behaves differently. On the same
+confirmation slices (from `composite-agreement-real-auto-v1`'s baseline):
+
+| dataset (base rate) | shipped default (`intersection@1`, `"auto"`) | `composite-agreement@1` at the review budget |
+| --- | --- | --- |
+| KDD (3.1%) | 15% precision, 26% recall, 0.82x the budget flagged | 14% precision, 22% recall, 1.0x |
+| Covertype (0.95%) | 39% precision, 7% recall, 0.18x | 25% precision, 26% recall, 1.0x |
+| card fraud (0.15%) | 5% precision, 74% recall, **8.4x** | 8% precision, 8% recall, 1.0x |
+
+The shipped default is precise. What it does not control is volume: a few rows on
+Covertype, and over eight times a 0.5% shortlist of mostly normal rows on card fraud.
+With a fixed review budget, `composite-agreement@1` at that budget flags exactly that
+many rows at comparable or better precision. These cross-configuration figures are
+descriptive. The pre-registered comparisons each hold the contamination fixed.
+
+And a composite must not run at `"auto"` (`composite-agreement-real-auto-v1`, above).
+There it thresholds at the median of the detectors' own flag rates, and flagged 2.4x
+(KDD), 4.5x (Covertype) and 17x (card fraud) the review budget, with worse flag F1 than
+the default on card fraud.
 
 ## Versioning
 

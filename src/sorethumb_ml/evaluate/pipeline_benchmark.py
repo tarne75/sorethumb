@@ -90,6 +90,10 @@ class AblationSpec:
     # A candidate rule id (evaluate.candidates): picks combination/weighting
     # per fitted plan, overriding the two fields above.
     rule: str | None = None
+    # True: the ensemble runs at scoring.contamination="auto" (each detector's own
+    # boundary; the shipped default) instead of the scenario's review budget. The
+    # metrics still measure against the review budget.
+    contamination_auto: bool = False
 
     @property
     def policy_id(self) -> str:
@@ -119,6 +123,14 @@ ABLATIONS: list[AblationSpec] = [
     AblationSpec("rule_discrete_composite", rule="rule:discrete-composite@1"),
     AblationSpec("rule_discrete_budget", rule="rule:discrete-budget@1"),
     AblationSpec("rule_discrete_budget_v2", rule="rule:discrete-budget@2"),
+    # The shipped default scoring.contamination ("auto") rather than a review budget.
+    AblationSpec("default_auto", contamination_auto=True),
+    AblationSpec(
+        "combination_composite_agreement_auto",
+        combination="composite",
+        weighting="agreement",
+        contamination_auto=True,
+    ),
 ]
 
 # One ablation per registered ensemble policy, everything else at the shipped
@@ -424,7 +436,11 @@ def _fit_and_score(
         calibrated_holdout[name] = calibrators[name].transform(raw)
     score_seconds = time.perf_counter() - t0
 
-    ensemble = ScoreEnsemble(combination=combination, weighting=weighting, contamination=review_budget)
+    ensemble = ScoreEnsemble(
+        combination=combination,
+        weighting=weighting,
+        contamination="auto" if ablation.contamination_auto else review_budget,
+    )
     combined = ensemble.combine(calibrated_holdout, natural_flags_holdout)
     if flag_rule == "top_budget":
         combined["anomaly_flag"] = _exact_k_flags(np.asarray(combined["combined_score"]), review_budget)

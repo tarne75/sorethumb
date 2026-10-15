@@ -195,10 +195,31 @@ def test_an_unlabelled_backtest_reports_volume_and_stability_only(tmp_path: Path
     assert np.isnan(union.flag_f1)
 
 
-def test_a_backtest_needs_a_numeric_review_budget(tmp_path: Path) -> None:
+def test_a_backtest_needs_a_review_budget_to_judge_flags_against(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path, scoring={"contamination": "auto"})
-    with pytest.raises(ConfigError, match="fixed review budget"):
+    with pytest.raises(ConfigError, match="--review-budget"):
         backtest_dataset(cfg, replicates=5)
+    with pytest.raises(ConfigError, match="review_budget must be"):
+        backtest_dataset(cfg, replicates=5, review_budget=0.9)
+    numeric = _cfg(tmp_path)
+    with pytest.raises(ConfigError, match=r"differs from scoring\.contamination"):
+        backtest_dataset(numeric, replicates=5, review_budget=0.1)
+
+
+def test_an_auto_contamination_backtest_records_evidence_an_auto_run_relies_on(tmp_path: Path) -> None:
+    cfg = _cfg(
+        tmp_path, scoring={"contamination": "auto", "combination": "composite", "weighting": "agreement"}
+    )
+    result = backtest_dataset(
+        cfg, policies=["composite-agreement@1"], replicates=5, review_budget=0.05, n_resamples=2000
+    )
+    assert result.review_budget == 0.05
+    (verdict,) = result.verdicts
+    if verdict.verdict == "outperforms":
+        assert run_detection(cfg, no_report=True).policy_evidence_id == verdict.evidence_id
+    else:
+        with pytest.warns(UnevidencedPolicyWarning, match="does not outperform"):
+            run_detection(cfg, no_report=True)
 
 
 def test_a_backtest_rejects_labels_that_are_not_binary(tmp_path: Path) -> None:
@@ -277,7 +298,25 @@ def test_backtest_cli_refuses_auto_contamination_as_preflight(tmp_path: Path) ->
     toml = _toml(tmp_path, contamination='"auto"')
     result = CliRunner().invoke(app, ["backtest", "--config", str(toml), "--json"])
     assert result.exit_code == 2
-    assert "fixed review budget" in json.loads(result.stdout)["error"]
+    assert "--review-budget" in json.loads(result.stdout)["error"]
+    judged = CliRunner().invoke(
+        app,
+        [
+            "backtest",
+            "--config",
+            str(toml),
+            "--review-budget",
+            "0.05",
+            "--policy",
+            "union@1",
+            "--replicates",
+            "5",
+            "--no-record",
+            "--json",
+        ],
+    )
+    assert judged.exit_code == 0, judged.stdout
+    assert json.loads(judged.stdout)["review_budget"] == 0.05
 
 
 @pytest.mark.parametrize(
