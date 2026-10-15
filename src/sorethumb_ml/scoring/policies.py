@@ -89,6 +89,11 @@ POLICIES: tuple[EnsemblePolicy, ...] = (
 
 DEFAULT_POLICY_ID = "intersection@1"
 
+# Version of the rule `sorethumb backtest` decides "outperforms" by. 1: flag F1,
+# false-positive budget, stability. 2 (2026-10-15): adds ranking quality (average
+# precision). A run only relies on evidence decided under the current rule.
+EVIDENCE_DECISION_RULE = 2
+
 
 def resolve_policy(combination: str, weighting: str) -> EnsemblePolicy:
     """Return the policy a ``scoring.combination`` / ``scoring.weighting`` pair selects.

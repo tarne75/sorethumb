@@ -70,7 +70,12 @@ from sorethumb_ml.profiling.temporal import (
 from sorethumb_ml.report.html import GroupSection, RunMeta, render_report
 from sorethumb_ml.scoring.calibrate import Calibrator
 from sorethumb_ml.scoring.combine import ScoreEnsemble, descending_order
-from sorethumb_ml.scoring.policies import DEFAULT_POLICY_ID, policy_scope_hash, resolve_policy
+from sorethumb_ml.scoring.policies import (
+    DEFAULT_POLICY_ID,
+    EVIDENCE_DECISION_RULE,
+    policy_scope_hash,
+    resolve_policy,
+)
 from sorethumb_ml.store.models import (
     load_model,
     load_plan,
@@ -528,6 +533,16 @@ def _ensemble_policy_id(config: Config) -> str:
     return resolve_policy(config.scoring.combination, config.scoring.weighting).id
 
 
+def _evidence_decision_rule(record: dict[str, Any] | None) -> int:
+    """Return the decision-rule version an evidence record was decided under (1 if unrecorded)."""
+    if record is None:
+        return 0
+    try:
+        return int(json.loads(str(record.get("details_json") or "{}")).get("decision_rule", 1))
+    except (ValueError, TypeError):
+        return 1
+
+
 def _policy_evidence_gate(
     ws: Workspace, config: Config, dataset_fp: str, issued_warnings: list[str]
 ) -> str | None:
@@ -546,9 +561,15 @@ def _policy_evidence_gate(
         return None
     scope = policy_scope_hash(config)
     in_scope = ws.store.latest_policy_evidence(dataset_fp, policy_id, scope)
-    if in_scope is not None and in_scope["verdict"] == "outperforms":
+    rule = _evidence_decision_rule(in_scope)
+    if in_scope is not None and in_scope["verdict"] == "outperforms" and rule >= EVIDENCE_DECISION_RULE:
         return str(in_scope["evidence_id"])
-    if in_scope is not None:
+    if in_scope is not None and in_scope["verdict"] == "outperforms":
+        found = (
+            f"its backtest evidence ({in_scope['evidence_id']}) was decided under an older rule "
+            f"(rule {rule}, before ranking quality was checked); re-run it"
+        )
+    elif in_scope is not None:
         found = {
             "does_not_outperform": "the latest backtest found it does not outperform the default",
             "not_assessable": "the latest backtest had no labels, so it could not assess accuracy",

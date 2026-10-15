@@ -217,6 +217,7 @@ def test_every_policy_a_backtest_names_has_a_default_settings_ablation() -> None
     assert ablation_for("composite-agreement@1").name == "combination_composite_agreement"
     assert ablation_for("rule:discrete-composite@1").name == "rule_discrete_composite"
     assert ablation_for("rule:discrete-budget@1").name == "rule_discrete_budget"
+    assert ablation_for("rule:discrete-budget@2").name == "rule_discrete_budget_v2"
     with pytest.raises(ValueError, match="no benchmark ablation"):
         ablation_for("composite-manual@1")
 

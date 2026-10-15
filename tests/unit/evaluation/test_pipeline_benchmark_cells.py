@@ -93,6 +93,16 @@ def test_discrete_budget_flags_exactly_the_review_budget_on_all_categorical_data
     assert out["average_precision"] == default["average_precision"]  # the default's ranking, unchanged
 
 
+def test_discrete_budget_v2_bags_the_ranking_and_flags_the_review_budget() -> None:
+    out = _fit_score_one_seed_pipeline("all_categorical", None, _ABLATION["rule_discrete_budget_v2"], seed=0)
+    assert out["policy_branch"] == "discrete"
+    assert out["flag_count"] == round(0.05 * out["n_holdout"])
+    mixed = _fit_score_one_seed_pipeline("point", None, _ABLATION["rule_discrete_budget_v2"], seed=0)
+    default = _fit_score_one_seed_pipeline("point", None, _ABLATION["default"], seed=0)
+    assert mixed["policy_branch"] == "mixed"
+    assert mixed["flag_count"] == default["flag_count"]  # the default, unchanged, off the discrete branch
+
+
 def test_false_positive_budget_ratio_counts_wrong_flags_against_the_whole_row_budget() -> None:
     out = _fit_score_one_seed_pipeline("point", None, _ABLATION["combination_composite"], seed=0)
     budget_rows = round(0.05 * out["n_holdout"])

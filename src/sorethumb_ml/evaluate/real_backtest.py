@@ -56,6 +56,8 @@ class RealPreregistration:
     n_resamples: int
     expected_outcome: str
     sha256: str
+    # None: decision rule 1, as pre-registrations made before rule 2 were judged.
+    ranking_tolerance: float | None = None
 
 
 def load_real_preregistration(path: Path) -> RealPreregistration:
@@ -79,6 +81,7 @@ def load_real_preregistration(path: Path) -> RealPreregistration:
         n_resamples=int(raw.get("n_resamples", 10_000)),
         expected_outcome=str(raw.get("expected_outcome", "")).strip(),
         sha256=hashlib.sha256(raw_bytes).hexdigest(),
+        ranking_tolerance=float(raw["ranking_tolerance"]) if "ranking_tolerance" in raw else None,
     )
     problems = []
     if policy_by_id(pre.candidate) is None:
@@ -177,6 +180,7 @@ def decide_real(
             alpha=pre.alpha,
             stability_tolerance=pre.stability_tolerance,
             n_resamples=pre.n_resamples,
+            ranking_tolerance=pre.ranking_tolerance,
         )
         regressions = tuple(r for r in single.reasons if not r.startswith("flag F1 not significantly"))
         improved = bool(est.mean > 0.0 and p_holm <= pre.alpha)

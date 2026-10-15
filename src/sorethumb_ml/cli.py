@@ -1312,6 +1312,16 @@ def backtest(
         int | None,
         typer.Option("--folds", help="With --forward: use only the last N period pairs (at least 5)."),
     ] = None,
+    ranking_tolerance: Annotated[
+        float,
+        typer.Option(
+            "--ranking-tolerance",
+            help=(
+                "A candidate whose mean average precision is more than this fraction below the "
+                "default's ranks the anomalies worse and does not outperform."
+            ),
+        ),
+    ] = 0.10,
     json_output: _JSON_OPT = False,
 ) -> None:
     """Compare ensemble policies with the default on your own data, and record the evidence.
@@ -1348,6 +1358,7 @@ def backtest(
             record=not no_record,
             mode="forward" if forward else "random",
             folds=folds,
+            ranking_tolerance=ranking_tolerance,
         )
     except SorethumbError as exc:
         _fail(json_output, f"backtest failed: {exc}", _classify_error(exc))
@@ -1456,6 +1467,12 @@ def evidence(
     for rec in records:
         row = {k: v for k, v in rec.items() if k != "details_json"}
         row["applies_to_current_config"] = None if scope is None else rec["scope_hash"] == scope
+        try:
+            row["decision_rule"] = int(
+                json.loads(str(rec.get("details_json") or "{}")).get("decision_rule", 1)
+            )
+        except (ValueError, TypeError):
+            row["decision_rule"] = 1
         rows.append(row)
     if json_output:
         typer.echo(json.dumps(rows, default=str))
@@ -1475,6 +1492,7 @@ def evidence(
         "Verdict",
         "F1 difference [95% CI]",
         "p (Holm)",
+        "Rule",
         "Recorded",
         "Current config",
     ):
@@ -1492,6 +1510,7 @@ def evidence(
             str(row["verdict"]).replace("_", " "),
             ci,
             f"{p_holm:.4f}" if isinstance(p_holm, float) else "—",
+            str(row["decision_rule"]),
             str(row["created_at"])[:10],
             "—" if applies is None else ("yes" if applies else "no"),
         )
