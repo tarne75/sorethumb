@@ -117,6 +117,7 @@ below). Candidate rules stay out of the configuration until they win.
 | [`composite-agreement-v1`](benchmark-results/backtests/composite-agreement-v1.json) | `composite-agreement@1` | `intersection@1` | flag_f1 | **does not outperform** | 20 |
 | [`composite-agreement-v2`](benchmark-results/backtests/composite-agreement-v2.json) | `composite-agreement@1` | `intersection@1` | flag_f1 | **outperforms** | 20 |
 | [`discrete-budget-v1`](benchmark-results/backtests/discrete-budget-v1.json) | `rule:discrete-budget@1` | `intersection@1` | flag_f1 | **does not outperform** | 20 |
+| [`discrete-budget-v2`](benchmark-results/backtests/discrete-budget-v2.json) | `rule:discrete-budget@2` | `intersection@1` | flag_f1 | **outperforms** | 20 |
 | [`discrete-composite-v1`](benchmark-results/backtests/discrete-composite-v1.json) | `rule:discrete-composite@1` | `intersection@1` | flag_f1 | **does not outperform** | 20 |
 
 **`composite-agreement-v1`** -- Thresholding the agreement-weighted composite score at the review budget improves
@@ -164,6 +165,19 @@ unchanged; every other scenario runs the default unchanged.
 Why it does not outperform:
 
 - stability regression on all_categorical: flag_jaccard_stability 0.6970 vs baseline 0.7600 (tolerance 0.05)
+
+**`discrete-budget-v2`** -- discrete-budget-v1 improved flag F1 on all-categorical data but failed on stability (round 2:
+flag Jaccard 0.70 vs the default's 0.76): its ranking shifts between fits, so rows near the
+budget cut change. Bagging the ranking -- averaging the default's combined score over 5 fits
+on 80% subsamples before flagging the review budget's top rows -- steadies it. Hypothesis:
+on all_categorical, flag F1 improves over the default with no false-positive-budget,
+ranking or stability regression; every other scenario runs the default unchanged.
+(A tie-consistent cut was considered first and rejected on the development seeds: tied
+groups never straddled the cut, and it changed nothing.)
+
+| hypothesis scenario | mean difference | 95% CI | p (Holm) | improved |
+| --- | --- | --- | --- | --- |
+| all_categorical | +0.2310 | [+0.1872, +0.2788] | 0.0002 | yes |
 
 **`discrete-composite-v1`** -- On data whose kept columns are all categorical or boolean, unanimity flags almost none of
 the anomalies even when the ranking is reasonable. Switching to the equal-weight composite
@@ -230,6 +244,24 @@ which is why confirmation is a separate step:
   less stable across refits (Jaccard 0.70 against the default's 0.76, beyond the 0.05
   tolerance). Rows near the budget cut-off change between refits, which a unanimous
   vote mostly avoids by flagging fewer rows.
+
+### Round 3 (2026-10-15, budgets v3)
+
+- **`rule:discrete-budget@2` outperforms `intersection@1`** (`discrete-budget-v2`). It
+  bags the default's ranking on all-discrete data: the combined score is averaged over 5
+  fits on 80% subsamples, then the review budget's top rows are flagged. Flag F1 on
+  all-categorical data rises from 0.00 to 0.23 (+0.23, 95% CI +0.19 to +0.28). Its flags
+  are now *more* stable than the default's (Jaccard 0.75 vs 0.72), where v1's were the
+  reason it failed. Average precision is 0.218 against 0.204, and it stays within the
+  review budget. Everywhere else it is the default, unchanged.
+- **Considered and rejected before registration:** a tie-consistent cut, on the
+  hypothesis that v1's instability came from identical rows being split by the budget.
+  On the development seeds tied groups never straddled the cut, so it changed nothing.
+  It was not registered: a candidate known to behave like one that already failed would
+  only be a retry on fresh seeds.
+- This is synthetic evidence only; none of the real datasets above is all-categorical.
+  As a candidate rule it stays out of the configuration until it is promoted to a
+  supported option.
 
 ### Real data
 
