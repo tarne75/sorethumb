@@ -206,3 +206,40 @@ def test_write_attributions_rejects_malformed_frames(tmp_path: Path, frame: pl.D
 
     with Workspace.init(tmp_path / "ws") as ws, pytest.raises(StoreError, match=match):
         write_attributions(ws, "run_x", "g", frame)
+
+
+@pytest.mark.parametrize("detector", ["ecod", "hbos"])
+def test_exact_attributions_add_back_up_to_the_detectors_score(tmp_path: Path, detector: str) -> None:
+    """The numeric pin for the exact methods, platform-independent by construction.
+
+    ECOD and HBOS scores are sums of per-feature terms. Run alone, with every
+    field recorded, the stored signed contributions must add back up to the
+    row's outlier score (the negated ``score_raw_<detector>``) through the
+    whole pipeline: feature plan, aggregation to original fields, records. A
+    sign flip, a dropped feature or a magnitude/signed mix-up breaks it.
+    """
+    from sorethumb_ml.store.results import read_results
+
+    cfg = _cfg(tmp_path, [detector])
+    cfg = cfg.model_copy(update={"explain": cfg.explain.model_copy(update={"top_n": 10})})
+    result = run_detection(cfg, no_report=True)
+    group = result.groups[0]
+    with Workspace.open(Path(cfg.run.workdir)) as ws:
+        records = read_attributions(ws, result.run_id, group.group_key)
+        detection = read_results(ws, result.run_id, group.group_key, with_explanations=False)
+    assert records is not None
+    assert detection is not None
+    totals = records.group_by("row_id").agg(
+        pl.col("signed_contribution").sum().alias("total"), pl.len().alias("n_fields")
+    )
+    joined = totals.join(detection.select("row_id", f"score_raw_{detector}"), on="row_id")
+    assert joined.height == group.n_anomalies
+    assert set(joined["n_fields"].to_list()) == {3}  # num_a, num_b, cat: every field recorded
+    np.testing.assert_allclose(
+        joined["total"].to_numpy(), -joined[f"score_raw_{detector}"].to_numpy(), atol=1e-9
+    )
+    for rec in records.iter_rows(named=True):
+        (method,) = rec["methods"]
+        assert method["method"] == f"{detector}_decomposition"
+        assert method["attribution_kind"] == "exact"
+        assert method["signed_contribution"] == pytest.approx(rec["signed_contribution"], abs=1e-12)

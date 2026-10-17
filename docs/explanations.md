@@ -84,8 +84,9 @@ the run summary, `sorethumb show` and the report. The explanation codes:
 ## The explanation record
 
 `reason_<k>` is a label. `attributions.parquet` (one row per explained flagged row
-and reason; read it with `store.results.read_attributions`, or
-`sorethumb anomalies --detail`) records how each one was produced:
+and reason; read it with `store.results.read_attributions`,
+`sorethumb anomalies --detail`, or the report's "Explanation detail" section)
+records how each one was produced:
 
 | column | meaning |
 | --- | --- |
