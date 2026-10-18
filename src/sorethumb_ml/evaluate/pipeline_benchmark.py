@@ -87,6 +87,9 @@ class AblationSpec:
     weighting: str = "equal"
     # None: the shipped profiling.near_constant_distinct default.
     near_constant_distinct: int | None = None
+    # True: one-hot dummies scaled like numeric columns (features.categorical_distance = null)
+    # instead of the shipped fixed categorical distance.
+    categorical_unscaled: bool = False
     # A candidate rule id (evaluate.candidates): picks combination/weighting
     # per fitted plan, overriding the two fields above.
     rule: str | None = None
@@ -117,9 +120,11 @@ ABLATIONS: list[AblationSpec] = [
     AblationSpec("combination_composite", combination="composite"),
     AblationSpec("combination_union", combination="union"),
     AblationSpec("combination_composite_agreement", combination="composite", weighting="agreement"),
-    # Keep 3-value columns (the threshold before 2026-10-14's restore of 3) -- the
-    # evidence for which profiling.near_constant_distinct default to ship.
-    AblationSpec("near_constant_2", near_constant_distinct=2),
+    # The evidence for the categorical defaults: the rule that dropped 3-value columns
+    # (profiling.near_constant_distinct = 3), and one-hot dummies scaled like numerics
+    # (features.categorical_distance = null).
+    AblationSpec("near_constant_3", near_constant_distinct=3),
+    AblationSpec("categorical_unscaled", categorical_unscaled=True),
     AblationSpec("rule_discrete_composite", rule="rule:discrete-composite@1"),
     AblationSpec("rule_discrete_budget", rule="rule:discrete-budget@1"),
     AblationSpec("rule_discrete_budget_v2", rule="rule:discrete-budget@2"),
@@ -346,7 +351,11 @@ def _build_pipeline_config(ablation: AblationSpec, seed: int) -> Any:
     return Config.model_validate(
         {
             "source": {"uri": "file:///dev/null"},
-            "features": {"pca": ablation.pca, "scaler": ablation.scaler},
+            "features": {
+                "pca": ablation.pca,
+                "scaler": ablation.scaler,
+                **({"categorical_distance": None} if ablation.categorical_unscaled else {}),
+            },
             "profiling": profiling,
             "scoring": {
                 "contamination": "auto",
@@ -1107,8 +1116,8 @@ _POLICY_MATRIX_MARKER_START = "<!-- policy-matrix-results-start -->"
 _POLICY_MATRIX_MARKER_END = "<!-- policy-matrix-results-end -->"
 
 # Ablations the published policy matrix runs: one per policy, plus the
-# near_constant_2 evidence row for the profiling.near_constant_distinct default.
-POLICY_MATRIX_ABLATIONS: tuple[str, ...] = (*POLICY_ABLATIONS, "near_constant_2")
+# near_constant_3 and categorical_unscaled: evidence rows for the categorical defaults.
+POLICY_MATRIX_ABLATIONS: tuple[str, ...] = (*POLICY_ABLATIONS, "near_constant_3", "categorical_unscaled")
 
 
 def policy_matrix_config(n_seeds: int = 10, n_bootstrap: int = 3) -> PipelineBenchmarkConfig:

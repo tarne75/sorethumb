@@ -216,17 +216,14 @@ class ProfilingConfig(BaseModel):
         ),
     )
     near_constant_distinct: int = Field(
-        3,
+        2,
         ge=2,
         description=(
-            "A non-empty column with 2 < n_unique <= this is classified 'near_constant' and "
-            "dropped. Binary columns (n_unique == 2) are never dropped by this rule. The default "
-            "(3) drops a column with exactly 3 distinct values: on the full-pipeline benchmark, "
-            "keeping such a column when it is noise pushed the local and varying-density "
-            "rankings below chance. Set it to 2 to keep every low-cardinality column -- for "
-            "example when a rare level of a 3-value category is itself the anomaly -- after "
-            "measuring that it helps on your data. Evidence: docs/benchmarks.md, ensemble "
-            "policy matrix."
+            "Drop a non-empty column with 2 < n_unique <= this as 'near_constant'. The default (2) "
+            "drops none: a column is never dropped just for having few distinct values, since a "
+            "rare level of a low-cardinality column can be exactly the anomaly. Constant (single-"
+            "valued) columns are always dropped. Raise it only after measuring that it helps on "
+            "your data."
         ),
     )
     identifier_cardinality_ratio: float = Field(
@@ -281,6 +278,18 @@ class FeaturesConfig(BaseModel):
         description=(
             "Categorical columns with n_unique <= this get one-hot encoding. "
             "Above this threshold frequency encoding is used instead."
+        ),
+    )
+    categorical_distance: float | None = Field(
+        0.5,
+        gt=0.0,
+        description=(
+            "How far apart two rows that differ only in one one-hot-encoded categorical column are, "
+            "in the units numeric features are scaled to (robust scaling: interquartile ranges). "
+            "The default 0.5 counts a change of category as about half a typical numeric spread, so "
+            "uninformative categorical columns cannot swamp the distance-based detectors; Isolation "
+            "Forest is unaffected. null scales one-hot dummies like numeric columns. See "
+            "docs/approximations.md."
         ),
     )
     max_feature_width: int = Field(

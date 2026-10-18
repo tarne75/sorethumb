@@ -133,7 +133,7 @@ def default_policy_report(
     """Split the shipped default's misses into accepted and unaccepted; find stale acceptances.
 
     Only *default_ablation* rows count: another ablation may run the same policy
-    with a non-default setting (``near_constant_2``, say) -- evidence, not the
+    with a non-default setting (``near_constant_3``, say) -- evidence, not the
     shipped configuration.
     """
     accepted_keys = {(a.scenario, a.bound) for a in budgets.accepted if a.policy == default_policy}
