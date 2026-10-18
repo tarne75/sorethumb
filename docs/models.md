@@ -63,13 +63,12 @@ each record gets isolated. Records that are isolated quickly are anomalies.
 - Very high-dimensional sparse data where every record looks isolated
 
 **Explanations.** This detector produces *model-specific* explanations via
-TreeSHAP, using the fitted trees' actual structure rather than a generic
-gradient/centroid heuristic. It is not a verified *exact* decomposition of
-the score, though: TreeSHAP is run with `check_additivity=False` because
-IsolationForest's score is a nonlinear transform of the path length SHAP
-explains, so nothing guarantees the attributions sum to the model output.
-(ECOD and HBOS produce genuinely *exact* explanations — see their entries
-below; KMeans, One-Class SVM, and LOF use heuristic approximations.)
+interventional TreeSHAP (with the `explain` extra), using the fitted trees'
+actual structure, against a background of normal rows. It is not an *exact*
+decomposition of the score, though: what TreeSHAP decomposes is the forest's
+path length, and the score is a nonlinear transform of it. (ECOD and HBOS
+produce genuinely *exact* explanations — see their entries below; KMeans,
+One-Class SVM, and LOF use heuristic approximations.)
 
 **Training cap.** 250,000 rows by default. Above that, a random sample is
 taken for training, but all rows are scored.
@@ -98,9 +97,8 @@ scores as anomalous, because it is nowhere near a big one.
 
 This is CBLOF-style scoring, and it matters: score every record against *its
 own* centre and a tight cluster of anomalies gets handed its own centroid and
-is rated perfectly normal. That was a real bug — `kmeans_distance` used to
-score planted anomalies as the *most* normal records (benchmark ROC-AUC
-~0.0002). Measuring against the big clusters only removes that failure mode.
+is rated perfectly normal. Measuring against the big clusters only removes that
+failure mode.
 
 "Big" is controlled by **`large_cluster_coverage`** (default `0.90`): the
 largest groups that together hold 90% of the training rows are the reference
@@ -260,9 +258,9 @@ if you're not a global one. This is what LOF detects.
 - Cases where every record is locally dense (LOF has nothing to contrast
   against)
 
-**Training cap.** 50,000 rows — the tightest cap of all detectors. Keep this
-in mind on large datasets; a representative sample is still used for fitting,
-but LOF is best suited to smaller datasets.
+**Training cap.** 50,000 rows, the second tightest after `one_class_svm`
+(25,000). Keep this in mind on large datasets; a representative sample is still
+used for fitting, but LOF is best suited to smaller datasets.
 
 **Config.**
 ```toml
@@ -369,12 +367,12 @@ check a plugin is a short `sorethumb run` with it as the only enabled detector.
 
 | Detector | Default | Train cap | Best for | Main weakness | Explanations |
 |---|---|---|---|---|---|
-| `isolation_forest` | ★ | 250k | General purpose; combination anomalies | Dense anomaly clusters | Exact (TreeSHAP) |
+| `isolation_forest` | ★ | 250k | General purpose; combination anomalies | Dense anomaly clusters | Model-specific (TreeSHAP) |
 | `kmeans_distance` | ★ | 200k | Datasets with clear natural groupings | Non-spherical clusters; anomalies > ~10% of rows; unusual combos | Heuristic |
 | `one_class_svm` | ★ | 25k | Ensemble diversity; compact normal regions | Slow on large data | Heuristic |
-| `ecod` | — | 500k | Marginal (single-column) outliers; many features | Combination anomalies | Heuristic |
+| `ecod` | — | 500k | Marginal (single-column) outliers; many features | Combination anomalies | Exact |
 | `lof` | — | 50k | Local density anomalies; mixed-density clusters | Large datasets; high dimensionality | Heuristic |
-| `hbos` | — | 500k | Speed; sanity baseline | Combination anomalies; least sensitive | Heuristic |
+| `hbos` | — | 500k | Speed; sanity baseline | Combination anomalies; least sensitive | Exact |
 
 **Advanced tuning.** `isolation_forest`, `kmeans_distance`, `one_class_svm` and
 `lof` wrap a scikit-learn estimator; pass any of its other constructor arguments
@@ -427,4 +425,4 @@ sorethumb run -d if,lof data.parquet           # focus on local density
 sorethumb run -d if,km,oc,ecod,lof,hbos data.parquet  # run everything
 ```
 
-Each run with `-d` automatically saves the detector list to your config file.
+`-d` applies to that run only; your config file is not changed.

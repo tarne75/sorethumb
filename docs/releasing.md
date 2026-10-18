@@ -1,7 +1,7 @@
 # Releasing, rehearsing, and rolling back
 
-Maintainer-only process documentation — not part of the user-facing docs
-index (`docs/index.md`), since it has nothing to do with using the library.
+Maintainer-only process documentation (listed last in `docs/index.md`, marked
+as such); it has nothing to do with using the library.
 
 ## Cutting a real release
 
@@ -39,6 +39,19 @@ refuses the tag until all of it holds, and lists every problem at once:
 - `SECURITY.md` and `README.md` no longer say the project is unreleased
   ("has not yet had its first tagged release", "Not yet on PyPI", "Status:
   pre-release", ...), and from 1.0 on no longer call it "pre-1.0".
+
+Concretely, for a release (the first one included, where every entry so far sits
+under `[Unreleased]`):
+
+1. Rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` (the tag date) and add a
+   new, empty `## [Unreleased]` above it.
+2. Set the footer links to
+   `[Unreleased]: https://github.com/tarne75/sorethumb/compare/vX.Y.Z...HEAD` and
+   `[X.Y.Z]: https://github.com/tarne75/sorethumb/releases/tag/vX.Y.Z`. Before the
+   first tag there is no `[X.Y.Z]` link, and `[Unreleased]` points at `commits/main`.
+3. Update `SECURITY.md` ("Supported Versions") and `README.md` (the status banner,
+   the installation section, a PyPI badge, and `blob/main` links switched to
+   `blob/vX.Y.Z`); `scripts/release.sh`'s comment block lists each change.
 
 Because the changelog date must equal the tag date, make this commit, push it,
 let CI pass, and tag on the same UTC day; if the day rolls over, re-date it in

@@ -76,8 +76,8 @@ the run summary, `sorethumb show` and the report. The explanation codes:
 - A single detector's explainer failing raises `AttributionBackendWarning`.
 - Neither ever fails the group or alters its detection output.
 - A `failed` explanation stage makes the run exit `partial` (code 4).
-- Under `run.strict`, any explanation warning makes the run exit `partial`; it no
-  longer fails the group, which would have discarded its detection output.
+- Under `run.strict`, any explanation warning makes the run exit `partial`. It
+  does not fail the group, so the detection output is never discarded.
 
 ---
 
@@ -101,7 +101,7 @@ records how each one was produced:
 | `methods` | per detector that informs the row: `detector`, `method`, `attribution_kind`, `weight` (its weight in this row's blend), `signed_contribution` (in the units it enters the blend). `signed_contribution` above is the weight-sum of these |
 | `transformed_features` | up to five derived features behind the field (scaled numerics, one-hot dummies, date parts), largest absolute contribution first, each with its signed contribution |
 | `approximation_flags` | every caveat that applies to this row (table below) |
-| `explainer_version` | `explain@2`. It changes whenever a change alters what an explanation means, so explanations from different logic are never compared as if alike. `explain@1` explained against all unflagged rows (or the whole group) with path-dependent TreeSHAP and unscaled centroid distances |
+| `explainer_version` | `explain@2`. It changes whenever a change alters what an explanation means, so explanations from different logic are never compared as if alike. (`explain@1` was a pre-release version; a workspace from a pre-release build can hold it.) |
 | `reference_id` | the reference population: `consensus_normal` or `lower_half` (see "The reference population"), suffixed `:<run_id>` when a `score --from-run` used its fitting run's |
 
 Method names: `tree_shap`, `ecod_decomposition`, `hbos_decomposition`,
@@ -164,7 +164,7 @@ flagged. It is plain JSON and is never unpickled.
 **`score --from-run`** explains new rows against the *fitting run's* summary,
 the same "normal" the models were fitted on, rather than against whatever else
 is in the new batch (`reference_id` gains the suffix `:<fitting run>`). If the
-fitting run saved none (explanations were off, or it predates `explain@2`) or
+fitting run saved none (explanations were off, or it was made by a pre-release build) or
 its summary cannot be read, the new rows' own reference is used instead, with
 an `explain.reference_fallback` warning that says why.
 
@@ -220,7 +220,7 @@ stands for, about 100 rows in all.
 **What it measures:** each feature's contribution to the row's expected path
 length, relative to the *reference rows* having that feature's value. A short
 path means the record was isolated early, which is what anomaly means for IF.
-The earlier path-dependent form (no background) weighed each branch by the
+The path-dependent alternative (no background) would weigh each branch by the
 share of training rows that took it, anomalies included; the interventional
 form asks the question an anomaly explanation needs: what changes when normal
 rows' values are swapped in.
@@ -367,10 +367,10 @@ in the explanation record, with the transformed features behind them.
   there is a 90% chance the anomaly is caused by unusual revenue.
 - **They are local.** The attribution is computed for the specific row, not for
   the class of anomalies that share its pattern.
-- **Only `exact` (ECOD, HBOS) is guaranteed to sum to the model output**, and
-  only because the score was already defined that way. Heuristic methods make
-  no such claim to begin with; `model_specific` (TreeSHAP) runs with
-  additivity checking disabled, so it isn't verified there either. Both are
-  directionally correct, not numerically exact.
+- **Only `exact` (ECOD, HBOS) is guaranteed to sum to the score**, and only
+  because the score was already defined that way. Heuristic methods make no such
+  claim; `model_specific` (TreeSHAP) sums to the forest's path length, not to the
+  score, which is a nonlinear transform of it. Both rank the fields within a row,
+  not numerically decompose the score.
 - **They do not imply causation.** An anomalous revenue figure may be caused by
   an anomalous quantity, not by revenue itself, if the two are correlated.

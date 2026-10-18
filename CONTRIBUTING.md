@@ -162,5 +162,7 @@ The exact output contract (shape, dtype, finiteness, fitted-state rules) and the
 - ruff for linting and formatting (`uv run ruff check --fix src/`, then `uv run ruff format src/`)
 - mypy strict on `src/` (`uv run mypy src/`)
 - No `print` in `src/sorethumb_ml/` — use `logging.getLogger(__name__)`
-- No literal thresholds in modules other than `config.py`
+- A threshold a user may need to change is a field in `config.py`, with a
+  description; a fixed internal constant is a named module-level constant with a
+  comment saying why it has that value, never a bare number in the logic
 - Every new degradation point gets a named `SorethumbWarning` subclass in `errors.py`

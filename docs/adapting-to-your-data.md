@@ -31,15 +31,20 @@ format = "auto"                  # inferred from extension
 sorethumb inspect --config sorethumb.toml
 ```
 
-This loads the dataset, profiles every column, and prints a classification table:
+This loads the dataset, profiles every column, and prints the feature plan: each
+column's class, its treatment and the reason. For example:
 
-| column | class | treatment | reason |
+| Column | Class | Treatment | Reason |
 | --- | --- | --- | --- |
-| id | identifier_like | drop | cardinality_ratio=1.00, uuid_pattern |
-| timestamp | datetime | time_derivatives | protected: time_column |
-| amount | numeric | scale | numeric, n_unique=8420 |
-| category | categorical | one_hot | cardinality_ratio=0.002, n_unique=4 |
-| description | free_text | drop | mean_length=87.4 |
+| id | identifier_like | drop | UUID pattern detected in sample (n=1000) |
+| timestamp | temporal | derive_time | temporal dtype (Datetime(time_unit='us', time_zone=None)) |
+| amount | numeric | impute_median | numeric dtype (Float64) |
+| category | categorical | one_hot | String with cardinality_ratio=0.0004 |
+| region | near_constant | drop | only 3 distinct value(s) (threshold=3) |
+| description | free_text | drop | mean length=87.4 > 20.0 |
+
+A column with exactly three distinct values (`region` above) is dropped by
+default; set `profiling.near_constant_distinct = 2` to keep such columns.
 
 Use this table to decide:
 
@@ -101,29 +106,37 @@ The defaults work well for most datasets. Common reasons to change them:
 | --- | --- |
 | Many columns dropped for high nulls when you want to keep them | Raise `profiling.null_ratio_drop` (default 0.70) |
 | Missing-indicator columns appearing for columns that are only rarely null | Raise `profiling.null_ratio_flag` (default 0.0 — any null emits an indicator) |
-| Low-cardinality IDs being used as features | Set `profiling.identifier_detection = "conservative"` (default) or `"off"` |
+| A high-cardinality text ID being used as a feature | Set `profiling.identifier_detection = "aggressive"` (flags any high-cardinality text column), or list it in `columns.ignore` |
+| An ID that carries signal being dropped | Set `profiling.identifier_detection = "off"`, or add it to `columns.group_by` |
 | Free-text columns kept when they should be dropped | Lower `profiling.free_text_mean_length` (default 20.0) |
 
 ---
 
 ## Step 3: Choose your detectors
 
-sorethumb ships three detectors and enables all three by default:
+sorethumb ships six detectors and runs three by default (`ecod`, `hbos` and `lof`
+are opt-in; see [Detector models](models.md)):
 
 | Detector | Best for | Limitation |
 | --- | --- | --- |
-| `isolation_forest` | High-dimensional tabular data; model-specific SHAP explanations | Quadratic memory in n_features |
+| `isolation_forest` | General-purpose tabular data; model-specific TreeSHAP explanations | Struggles with very high-dimensional sparse data |
 | `kmeans_distance` | Cluster-structured data; fast on large datasets | Assumes cluster structure exists |
 | `one_class_svm` | Compact, non-linear decision boundaries | Very slow without a row cap |
 
-For a first run, the defaults are fine. If scoring is slow, reduce
-`detectors[2].train_row_cap` for the SVM or disable it entirely:
+For a first run, the defaults are fine. A `[[detectors]]` list **replaces** the
+default ensemble, so to drop or tune one detector, list every detector you want.
+For example, if training is slow, keep the other two and leave out the SVM:
 
 ```toml
 [[detectors]]
-name = "one_class_svm"
-enabled = false
+name = "isolation_forest"
+
+[[detectors]]
+name = "kmeans_distance"
 ```
+
+(or keep it with a lower `train_row_cap`). A list naming only `one_class_svm`
+with `enabled = false` would leave no detector at all.
 
 ---
 
@@ -161,12 +174,14 @@ precision/recall; `contamination` itself never measures prevalence.
 sorethumb run --config sorethumb.toml
 ```
 
-Results are written per group to the workspace as Parquet files. An HTML report
-is generated at the workspace root. Open it to see:
+Results are written per group to the workspace as Parquet files, and an HTML
+report to `reports/<run_id>/index.html` inside the workspace (the run summary
+prints its path). Open it to see:
 
 - Per-group anomaly counts and rates
 - A per-anomaly explanation table: which features drove the score, labelled
-  exact, model_specific, or heuristic
+  exact, model_specific, or heuristic, with the record behind each reason
+- For a run with a period, the trend sections of [Trends](trends.md)
 
 The run is idempotent — running it again for the same dataset and period skips
 groups already completed. Use `--force` to re-run everything.
@@ -179,10 +194,10 @@ Common tuning loops:
 
 | Observation | Action |
 | --- | --- |
-| Too many anomalies flagged | Lower `scoring.contamination` or raise `profiling.null_ratio_drop` |
+| Too many (or too few) anomalies flagged | At the default `"auto"` you don't set the count. Set a numeric `scoring.contamination` with a composite policy (Step 4) to choose it |
 | No interesting patterns in the explanation table | Check if the relevant columns are being kept — run `sorethumb inspect` |
 | Explanations mention one-hot columns (`cat__A`) instead of the original | This is normal; the output aggregates them into `cat` |
-| Run is very slow | Set `detectors[2].enabled = false` for the SVM, or lower `train_row_cap` values |
+| Run is very slow | List only the detectors you want under `[[detectors]]` (leaving out `one_class_svm`), or lower `train_row_cap` values |
 | `MemoryBudgetError` (projected feature matrix too large) | Lower `run.max_rows` to subsample, lower `features.one_hot_max_cardinality`, enable `features.pca`, or raise `run.max_memory_mb` |
 
 ---

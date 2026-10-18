@@ -125,8 +125,8 @@ The short version; every point is expanded under [Honest limitations](#honest-li
 - **It is unsupervised.** Detectors fit on the same data they score, with no
   held-out normal reference, and the slower ones fit on a row sample.
 - **Scores are rankings, not probabilities,** and two independently fitted runs
-  are not on a common scale. Reuse a fitted run (`sorethumb score --from-run`)
-  for a comparable trend.
+  are not on a common scale. Reuse a fitted run (`sorethumb score --from-run`), or
+  set an anchor run for `sorethumb history`, to compare on one scale.
 - **Explanations are exact only for ECOD and HBOS.** The rest are model-specific
   or heuristic, labelled as such, and a missing `explain` extra downgrades some.
 - **A workspace is executable, not just data.** Persisted models are pickles; open
@@ -148,7 +148,8 @@ machinery those libraries leave to the user:
    detector scores onto [0, 1] against its own training distribution. Scores are
    comparable *across* runs only when a fitted calibrator is reused —
    `sorethumb score --from-run RUN_ID` — since a plain run self-calibrates.
-3. **Per-record explanations** in original feature terms, labelled model_specific or heuristic.
+3. **Per-record explanations** in original feature terms, labelled `exact`,
+   `model_specific` or `heuristic`, each with the record of how it was produced.
 4. **Run history you can reason about.** Models and calibrators are persisted,
    and `sorethumb history` reports four separate signals: population drift,
    score drift, threshold drift and anomaly counts, each with a verdict. A plain
@@ -182,8 +183,9 @@ whether a flagged record is actually interesting.
   as either.
 - **Compare over time on one scale.** For an absolute comparison across periods,
   fit one accepted reference run and score later data against it with
-  `sorethumb score --from-run RUN_ID`. Treat `backfill` and independent-run
-  history as relative diagnostics only.
+  `sorethumb score --from-run RUN_ID`, or set it as `history.anchor_run` so
+  `sorethumb history` measures every period against it. Without one, treat
+  `backfill` and independent-run history as relative diagnostics only.
 - **Only reuse models from a workspace you made or fully trust.** A workspace is
   executable, not just data: do not accept a downloaded, shared or externally
   supplied workspace. See [SECURITY.md](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md#trust-boundary-workspaces-are-executable-not-just-data).
@@ -313,19 +315,25 @@ workdir = "/path/to/my-analysis/sorethumb-workspace"   # where models, results a
 sorethumb inspect
 ```
 
-This profiles every column and prints the classification table:
+This profiles every column and prints the feature plan (abridged):
 
 ```
-┌─────────────────┬──────────────┬─────────┬───────────────────────────────┐
-│ column          │ treatment    │ missing │ reason                        │
-├─────────────────┼──────────────┼─────────┼───────────────────────────────┤
-│ age             │ numeric      │ 2.1 %   │ continuous, 847 unique values │
-│ country         │ one_hot      │ 0.0 %   │ categorical, 31 categories    │
-│ session_id      │ drop         │ 0.0 %   │ high cardinality (99.8 %)     │
-│ created_at      │ derive_time  │ 0.0 %   │ datetime → hour, dow, month   │
-│ …               │ …            │ …       │ …                             │
-└─────────────────┴──────────────┴─────────┴───────────────────────────────┘
+                                 Feature plan
+┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Column     ┃ Class           ┃ Treatment     ┃ Reason                                 ┃
+┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ amount     │ numeric         │ impute_median │ numeric dtype (Float64)                │
+│ country    │ categorical     │ one_hot       │ String with cardinality_ratio=0.0004   │
+│ session_id │ identifier_like │ drop          │ UUID pattern detected in sample (n=1000)│
+│ created_at │ temporal        │ derive_time   │ temporal dtype (Datetime(...))         │
+│ region     │ near_constant   │ drop          │ only 3 distinct value(s) (threshold=3) │
+└────────────┴─────────────────┴───────────────┴────────────────────────────────────────┘
+
+Projected feature width: 38 columns
 ```
+
+A column with exactly three distinct values is dropped by default (as `region`
+is here); set `profiling.near_constant_distinct = 2` to keep such columns.
 
 Edit `sorethumb.toml` to override any column treatment before running:
 
@@ -340,27 +348,26 @@ id_column = "session_id"      # excluded from features, used as row label
 sorethumb run --log-level INFO
 ```
 
-You'll see each stage scroll by in real time:
+Each stage logs as it runs, and the run ends with a summary (abridged; the
+numbers are illustrative):
 
 ```
-INFO  Loaded 84 231 rows × 22 columns from data.csv
-INFO  Profiling: 22 columns → 9 numeric, 6 one_hot, 3 derive_time, 4 drop
-INFO  Feature space: 38 output features after encoding
-INFO  [group=ALL] fitting isolation_forest on 84 231 rows × 38 features …
-INFO  [group=ALL] fitting kmeans_distance on 84 231 rows × 38 features …
-INFO  [group=ALL] fitting one_class_svm on 20 000 rows × 38 features (capped)
-INFO  [group=ALL] scoring + calibration …
-INFO  [group=ALL] SHAP explanations (TreeSHAP) for 421 flagged rows …
-INFO  Results written: results/<run_id>/ALL/anomalies.parquet
+… sorethumb_ml.detectors.one_class_svm INFO OneClassSVM: fitting nu=0.100 kernel=rbf on 25000 rows x 38 features.
+… sorethumb_ml.scoring.combine INFO ScoreEnsemble: weighting=equal combination=intersection contamination=auto [heuristic] per-detector rates {'isolation_forest': 1.8, 'kmeans_distance': 0.7, 'one_class_svm': 2.1} → intersection: 421/84231 (0.5%).
+… sorethumb_ml.store.results INFO Results written: run=run_5c72… group=4413… rows=421 path=…/anomalies.parquet
 
-Run abc12345  succeeded=1  skipped=0  failed=0
-  Flagged for review: 421 (0.50% of 84 231 rows) — a review shortlist, not an
-  estimate of true prevalence
+Run run_5c720f703718c39e3c5b55b171083f30  succeeded=1  skipped=0  failed=0
+  Ensemble policy: intersection@1
+  Flagged for review: 421 (0.50% of 84,231 rows) — a review shortlist, not an
+estimate of true prevalence
 
   Realised detector flag rates (own natural boundary):
     isolation_forest=1.83%, kmeans_distance=0.74%, one_class_svm=2.10%
 
-  Report: ./reports/abc12345/index.html
+  Group timings (slowest first):
+    __all__                           51.0s  anomalies=421
+
+Report: ./sorethumb-workspace/reports/run_5c720f703718c39e3c5b55b171083f30/index.html
 ```
 
 The three per-detector rates are heuristic boundaries, not measurements, and
@@ -369,33 +376,38 @@ when all three boundaries flag it, so the flagged count is what they agree on. I
 not a budget you set. Treat the count as *"records worth a look"*, never *"this is
 how many anomalies the data has"*.
 
-**4. Print the top anomalies with their SHAP reasons**
+**4. Print the top anomalies with their reasons**
 
 ```bash
 sorethumb anomalies           # latest run, top reasons for every flagged row
 sorethumb anomalies --top 20  # just the 20 most anomalous rows
 sorethumb anomalies --reasons 5 --top 50   # five reason columns
+sorethumb anomalies --detail --top 5       # the record behind each reason
 ```
 
 ```
-                    Anomalies — run abc12345678
-┌────┬────────┬────────────────┬──────────────────────┬────────────────────────┐
-│  # │  score │ kind           │ reason 1             │ reason 2               │
-├────┼────────┼────────────────┼──────────────────────┼────────────────────────┤
-│  1 │ 0.9821 │ model_specific │ amount=14 500.00     │ country=NG             │
-│  2 │ 0.9714 │ model_specific │ hour_of_day=3        │ failed_attempts=12     │
-│  3 │ 0.9601 │ heuristic      │ session_duration=0.1 │ amount=9 200.00        │
-│  …                                                                           │
-└────┴────────┴────────────────┴──────────────────────┴────────────────────────┘
-  421 flagged row(s)   run=abc12345678   workspace=.
+                      Anomalies — run run_5c720f70
+┏━━━━┳━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┓
+┃  # ┃  score ┃ kind      ┃ reason 1             ┃ reason 2           ┃
+┡━━━━╇━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━┩
+│  1 │ 0.9821 │ heuristic │ amount=14500.0       │ country=NG         │
+├────┼────────┼───────────┼──────────────────────┼────────────────────┤
+│  2 │ 0.9714 │ heuristic │ hour_of_day=3        │ failed_attempts=12 │
+├────┼────────┼───────────┼──────────────────────┼────────────────────┤
+│  … │        │           │                      │                    │
+└────┴────────┴───────────┴──────────────────────┴────────────────────┘
+  421 anomaly row(s)   run=run_5c720f703718c39e3c5b55b171083f30   workspace=sorethumb-workspace
 ```
 
 `kind=exact` means ECOD/HBOS's own additive score decomposition (summing it
 recovers the score with zero error, by construction); `kind=model_specific`
-means TreeSHAP (Isolation Forest) — it uses the fitted trees' actual
-structure, but (`check_additivity=False`) isn't a verified exact
-decomposition of the score; `kind=heuristic` means centroid distance
-(KMeans) or finite-difference gradient (One-Class SVM, LOF). See
+means TreeSHAP (Isolation Forest), which uses the fitted trees' actual
+structure but decomposes path length, of which the score is a nonlinear
+transform; `kind=heuristic` means centroid distance (KMeans), a
+finite-difference gradient or KernelSHAP (One-Class SVM, LOF), or a
+reference-scaled deviation where a score is flat. With several detectors, a row
+gets the weakest kind among them, so the default ensemble's rows are usually
+`heuristic`. See
 [docs/explanations.md](https://github.com/tarne75/sorethumb/blob/main/docs/explanations.md).
 
 For a machine-readable result pipe `--json`:
@@ -556,11 +568,10 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
 - ECOD and HBOS are the only detectors with a truly exact attribution — their
   score is already an additive sum of per-feature terms, so decomposing it is
   zero-error by construction. Isolation Forest yields model-specific
-  (TreeSHAP) attributions, and even those aren't a verified exact
-  decomposition of the score (`check_additivity=False`); KMeans and
-  One-Class SVM/LOF are heuristic (centroid distance or finite-difference
-  gradient, the latter restricted to the two detectors whose score responds
-  continuously to a small perturbation). See
+  (interventional TreeSHAP) attributions, which decompose path length rather
+  than the score itself; KMeans and One-Class SVM/LOF are heuristic (centroid
+  distance, or a finite-difference gradient restricted to the two detectors
+  whose score responds continuously to a small perturbation). See
   [docs/explanations.md](https://github.com/tarne75/sorethumb/blob/main/docs/explanations.md).
 - Feature reduction can discard exactly the signal that matters. Correlation
   pruning (`features.correlation_threshold`, default 0.95) drops one column
@@ -631,8 +642,11 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
 - [Detector models](https://github.com/tarne75/sorethumb/blob/main/docs/models.md)
 - [Example runs](https://github.com/tarne75/sorethumb/blob/main/docs/example-runs.md)
 - [Adapting to your data](https://github.com/tarne75/sorethumb/blob/main/docs/adapting-to-your-data.md)
-- [Explanations: model-specific vs heuristic](https://github.com/tarne75/sorethumb/blob/main/docs/explanations.md)
+- [Explanations: exact, model-specific and heuristic](https://github.com/tarne75/sorethumb/blob/main/docs/explanations.md)
 - [Approximations and error characteristics](https://github.com/tarne75/sorethumb/blob/main/docs/approximations.md)
+- [Ensemble policy: the default and the evidence](https://github.com/tarne75/sorethumb/blob/main/docs/ensemble-policy.md)
+- [Trends: what `sorethumb history` can and cannot tell you](https://github.com/tarne75/sorethumb/blob/main/docs/trends.md)
 - [Benchmark results](https://github.com/tarne75/sorethumb/blob/main/docs/benchmarks.md)
 - [API and stability policy](https://github.com/tarne75/sorethumb/blob/main/docs/stability.md)
+- [Security policy](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md)
 - [Contributing](https://github.com/tarne75/sorethumb/blob/main/CONTRIBUTING.md)

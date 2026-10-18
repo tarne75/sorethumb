@@ -1,5 +1,13 @@
 # Example runs
 
+> **A dated snapshot.** These figures come from a 144-run validation sweep made on
+> 2026-09-05 (commit `27057d7`), before later changes to the pipeline (among them
+> the `intersection` ranking, KMeans on discrete data, the near-constant column
+> rule and explanation logic). Flag counts and timings from the current version
+> will differ. Read them as an illustration of how the counts move with the
+> detector set and PCA, not as current results; `docs/benchmarks.md` has the
+> current, reproducible accuracy figures.
+
 Systematic validation of sorethumb across nine real-world datasets.
 Every run uses `combination = "intersection"` and `contamination = "auto"`.
 The baseline detector set is `isolation_forest + kmeans_distance + one_class_svm`;

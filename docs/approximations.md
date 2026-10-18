@@ -58,21 +58,19 @@ preserved, not a guarantee about anomaly sensitivity. Leaving `features.pca = fa
 (the default) avoids this risk entirely, at the cost of not compressing wide feature
 spaces.
 
-## TreeSHAP for Isolation Forest — additivity unverified, and not of the final score
+## TreeSHAP for Isolation Forest — exact for path length, not for the score
 
-`shap.TreeExplainer` is run with `check_additivity=False`, because IsolationForest's
-`score_samples` is not exactly the SHAP sum of its base value and per-feature
-contributions — the path-length trick breaks strict additivity, and additivity
-checking would otherwise raise on every call. Two consequences follow, and both
-are why the result is labelled `model_specific`, not `exact`: (1) with the check
-disabled, there is no runtime guarantee the returned values actually sum to the
-model output; (2) even where TreeSHAP's decomposition is exact, what it
-decomposes is path length, which IsolationForest's score is a nonlinear
-transform of — so an exact accounting of path length is still not an exact
-accounting of the score the user sees. `model_specific` reflects that this is
-more principled than a generic gradient/centroid heuristic (it uses the fitted
-trees' actual structure via the standard TreeSHAP algorithm), while stopping
-short of claiming the additivity guarantee "exact" would imply.
+`shap.TreeExplainer` runs in interventional mode against a background of normal
+rows (see "Attribution reference population" below), with shap's additivity check
+on: the values plus the base value must sum to the forest's output, or the values
+are recomputed without the check and flagged `treeshap_additivity_unchecked`. What
+TreeSHAP decomposes is the forest's expected path length, and IsolationForest's
+`score_samples` is a nonlinear (monotone) transform of it, so an exact accounting of
+path length is still not an exact accounting of the score the user sees (flag
+`treeshap_path_length`). That is why the result is labelled `model_specific`, not
+`exact`: it uses the fitted trees' actual structure via the standard TreeSHAP
+algorithm, and ranks the features within a row correctly, without the additivity
+guarantee `exact` implies.
 
 ## ECOD / HBOS — exact by construction, not an approximation
 
@@ -179,8 +177,9 @@ When `explain.kernel_shap = true`, attributions for OneClassSVM/LOF are computed
 their exact decomposition above, regardless of this setting). This uses Monte Carlo
 sampling of the feature space to estimate Shapley values. The result is labelled
 `heuristic`, not `model_specific` — it never touches the detector's internal structure,
-unlike TreeSHAP. Accuracy increases with `nsamples` but so does runtime. The default
-`nsamples` is documented in `explain/`.
+unlike TreeSHAP. It uses shap's `nsamples="auto"` against a background of at most 50
+k-means centres of the reference population; more samples would be more accurate and
+slower.
 
 ## Zero-inflated columns — robust scaling can leave them effectively unscaled
 
@@ -300,59 +299,36 @@ Measured against labelled data (see
 
 ## Full-pipeline scenario benchmark — training contamination masks rather than swamps
 
-`swamping` (`evaluate/scenarios.py`) was originally designed on the intuitive
-premise that unlabelled contamination baked into the *training* split would
-cause genuinely-normal points near where that contamination sat to be
-*swamped* -- falsely flagged more often, because the fitted boundary is
-distorted by the nearby outliers. That premise was never actually verified
-against a controlled comparison: the original design scored a contaminated
-fit against a random holdout slice that mostly never landed anywhere near
-the contamination region, so it could not have demonstrated the mechanism
-either way (`tests/benchmark/test_pipeline_accuracy_floors.py`'s own prior
-floor-test comment flagged this: "training contamination cost less than
-expected").
+`swamping` (`evaluate/scenarios.py`) tests whether unlabelled contamination in the
+*training* data makes genuinely normal points near it *swamped*: falsely flagged more
+often because the fitted boundary is distorted. It is a controlled comparison:
+`swamping_clean_reference` and `swamping_train_reference` share the identical normal
+population (same seed, differing only by the injected contamination), and both are
+scored against `swamping_at_risk_holdout`, the genuinely normal points nearest the
+contamination region, which are the ones susceptible to the effect.
 
-This was replaced with a real controlled experiment: `swamping_clean_reference`
-and `swamping_train_reference` share the *identical* normal population (same
-seed -> same draw, differing only by the injected contamination), both
-scored against `swamping_at_risk_holdout` -- genuinely normal points
-*selected* (not fabricated) as the tail nearest the contamination region,
-the population actually susceptible to the claimed effect. Measured this
-way, for the default *policy* (`combination="intersection"`), the
-contaminated fit's `flag_false_positive_rate` on these at-risk points is
-consistently *lower* than the clean fit's (~0.010 vs. ~0.011 on a 2026-09-29
-reference run of 20 seeds; 0.009 vs. 0.011 in the current 10-seed policy
-matrix) -- the opposite of the original premise. Note what this benchmark runs:
-like every pipeline-benchmark ablation, it sets `scoring.contamination` to the
-scenario's review budget, so each detector flags a fixed share of the
-holdout. It does not use the shipped `"auto"`, where each detector flags by its
-own boundary.
+For the default *policy* (`combination="intersection"`), the contaminated fit's
+`flag_false_positive_rate` on these at-risk points is consistently *lower* than the
+clean fit's (0.009 vs. 0.011 in the 10-seed policy matrix): the opposite of swamping.
+Like every pipeline-benchmark ablation, this runs with `scoring.contamination` set to
+the scenario's review budget, so each detector flags a fixed share of the holdout; it
+does not use the shipped `"auto"`. At a fixed budget, the lower rate means the
+detectors' top-k sets *agree* on fewer at-risk rows after a contaminated fit:
+contamination shifts each detector's ranking of those rows differently. The measured
+direction is the finding; what happens at `"auto"` is untested. (At `"auto"`,
+contamination at the extreme tail plausibly widens each detector's natural boundary,
+which would be *masking*, a different phenomenon, but this benchmark does not measure
+it.)
 
-An earlier version of this note explained the result through the
-`"auto"` mechanism. Under `"auto"`, the injected contamination would sit at the
-extreme tail of the training data and widen each detector's natural-flag
-threshold, making it *less* willing to flag a moderately-extreme point. That is
-**masking**: contamination making near-anomalies look more normal by comparison,
-a different phenomenon from swamping, though the two are often confused. That
-explanation is plausible for `"auto"`, but this benchmark never runs `"auto"`, so
-it is not what was measured. At a fixed budget, the lower rate means the detectors'
-top-k sets *agree* on fewer at-risk rows after a contaminated fit. Contamination
-shifts each detector's ranking of those rows differently. The measured direction is
-the finding; its mechanism at `"auto"` is untested.
-`composite` mode and any ablation with only one detector select a fixed
-top-`k` fraction of the holdout by score regardless of fit, which makes
-`flag_false_positive_rate` uninformative there by construction (`k` is
-fixed by `n_holdout * contamination`, not by how many points actually cross
-a data-dependent boundary) -- this is why the floor test guards only the
-default (`intersection`) ablation, not every combination mode. The scenario
-keeps the `swamping` name (the underlying concept -- unlabelled training
-contamination -- is still exactly what it tests) but no longer claims the
-naive false-positive-inflation story; see
+`composite` mode and any ablation with only one detector select a fixed top-`k`
+fraction of the holdout by score regardless of fit, which makes
+`flag_false_positive_rate` uninformative there by construction (`k` is fixed by
+`n_holdout * contamination`, not by how many points cross a data-dependent boundary).
+That is why the floor test guards only the default (`intersection`) ablation:
 `tests/benchmark/test_pipeline_accuracy_floors.py`'s
 `test_swamping_contamination_does_not_inflate_false_positives_on_at_risk_normals`
-for the guard this establishes (contaminated must never exceed clean's rate
-by more than a noise margin) and the module docstring there for the full
-writeup.
+requires the contaminated rate never to exceed the clean one by more than a noise
+margin.
 
 ## Full-pipeline scenario benchmark — sklearn baselines only, no PyOD
 
@@ -366,41 +342,33 @@ transitive dependencies, similar to the friction already documented for SHAP)
 purely for a comparison baseline. If PyOD-specific comparisons become valuable
 later, add it as its own optional extra rather than a core/benchmark dependency.
 
-## Full-pipeline scenario benchmark — intersection's flag decision stays conservative on `local`/`varying_density` even after the ranking fix
+## Full-pipeline scenario benchmark — intersection's flag decision stays conservative on `local`/`varying_density`
 
-`tests/benchmark/test_pipeline_accuracy_floors.py` previously measured that
-the pipeline's *shipped default* (`scoring.combination = "intersection"`, the
-default three-detector ensemble) scored **worse than random** (ROC-AUC as
-low as ~0.04) on the `local` and `varying_density` scenarios (see
-`evaluate/scenarios.py`). Root cause: `intersection`'s combined *ranking* was
-`min()` across each detector's calibrated score
-(`scoring/combine.py::ScoreEnsemble._combine`) — on both scenarios,
-`OneClassSVM`'s RBF-kernel boundary badly misranks points in a low-density
-gap between clusters or a mixed-density regime (individually measured
-ROC-AUC as low as 0.002), and `min()` let that one detector's bad ranking
-dominate the ensemble's, even though `isolation_forest` alone scores 0.90+ on
-the same data. Fixed: the ranking now uses the per-row *median* across
-detectors, which cannot be dominated by a single anti-correlated member out
-of three — ROC-AUC on these scenarios is now ~0.68–0.71, comfortably above
-random, and both are floor-tested under the default ablation (see
-`scoring/combine.py`'s "Continuous ranking" docstring section).
+`intersection`'s continuous *ranking* is the per-row **median** of the detectors'
+calibrated scores (`scoring/combine.py::ScoreEnsemble._combine`), not their minimum.
+On the `local` and `varying_density` scenarios (`evaluate/scenarios.py`),
+`OneClassSVM`'s RBF-kernel boundary badly misranks points in a low-density gap between
+clusters or a mixed-density regime (individually as low as ROC-AUC 0.002); a minimum
+would let that one detector dominate and push the ensemble below random, while the
+median cannot be dominated by one anti-correlated member out of three. With it,
+ROC-AUC on these scenarios is about 0.68–0.71, and both are floor-tested under the
+default ablation.
 
 The *flag* decision itself (an AND of all three detectors' independent
-votes, deliberately unchanged by the ranking fix) is a separate matter and
-remains a genuine, current limitation on these two scenarios. It was measured,
+votes) is a separate matter and a genuine, current limitation on these two
+scenarios. It was measured,
 like every pipeline-benchmark flag figure, with each detector at the scenario's
 review budget, not at the shipped `"auto"`: intersection's
 conservative, unanimous-agreement requirement still produces very few actual
 flags there, and those it does produce are not reliably true positives
-(`flag_precision`/`flag_recall` measured at 0.0 on both scenarios even
-post-fix — see `PipelineBenchmarkRow.flag_precision`/`flag_recall`, computed
+(`flag_precision`/`flag_recall` measured at 0.0 on both scenarios — see `PipelineBenchmarkRow.flag_precision`/`flag_recall`, computed
 against the real `anomaly_flag`, not the ranking). In other words: the
 *ranking* now correctly says "these rows look most anomalous" even on this
 data, but the *flag* — needing all three detectors' independent, individually
 weaker boundaries to agree exactly — still rarely fires correctly here.
 `union`'s flag rule (any one detector agrees) is markedly more permissive and
 not affected by this; its ranking (`max()` across detectors) was already
-robust to a single bad member for the same reason the new `intersection`
+robust to a single bad member for the same reason the `intersection`
 median is.
 
 ## Full-pipeline scenario benchmark — `contextual` anomalies are near-chance for every combination mode

@@ -255,7 +255,7 @@ time_derivatives = ["day", "month", "quarter", "year"]
 
 ### Preserve all features for interpretability
 
-Disable correlation reduction so every original feature is visible in SHAP
+Disable correlation reduction so every original feature is visible in
 explanations — useful when you need to explain decisions to stakeholders.
 
 ```toml
@@ -507,7 +507,8 @@ one_class_svm    = 0.1
 
 ### Disable explanations for speed
 
-SHAP attribution is the slowest stage. Skip it when you only need ranked scores.
+Explanation is often the slowest stage. Skip it when you only need ranked scores
+and flags; detection is the same either way.
 
 ```toml
 [source]
@@ -536,10 +537,12 @@ top_n    = 7
 max_rows = 10_000
 ```
 
-### KernelSHAP fallback for non-tree models
+### KernelSHAP for One-Class SVM and LOF
 
-Required if you add a custom detector that is not tree-based. Much slower than
-TreeSHAP — keep `max_rows` small.
+Explain One-Class SVM and LOF with KernelSHAP (needs the `explain` extra) instead of
+finite-difference gradients. Much slower — keep `max_rows` small. Other detectors are
+unaffected, and a third-party (plugin) detector is never explained either way: its
+share of the score is reported as unexplained, with a warning.
 
 ```toml
 [source]
@@ -605,7 +608,7 @@ slow_stage_seconds   = 120
 
 ### Hourly monitoring pipeline
 
-Compare each hour's batch against the same hour in previous days.
+One period per hour, with a week of history.
 
 ```toml
 [source]
@@ -619,13 +622,13 @@ time_column = "event_time"
 
 [history]
 period_granularity  = "hour"
-lookback_periods    = 168    # one week of hours
-bootstrap_periods   = 72     # require three days before activating
+lookback_periods    = 168    # backfill looks a week back for missing hours
+bootstrap_periods   = 72     # the first backfill fills the last three days
 ```
 
 ### Monthly business reporting
 
-Exclude weekends from the baseline to avoid weekend-vs-weekday drift.
+One period per calendar month, with a year of history.
 
 ```toml
 [source]
@@ -639,7 +642,6 @@ time_column = "sale_date"
 
 [history]
 period_granularity    = "month"
-roll_non_business     = false
 lookback_periods      = 12
 low_volume_threshold  = 500
 ```
@@ -689,4 +691,26 @@ workdir = "./workspace"
 
 [report]
 rolling_windows = [3, 7, 30]
+```
+
+### Trend on one fixed scale (anchor run)
+
+Score every period against one accepted run as well as its own fit, so
+`sorethumb history` can tell a real change in scores from a moved threshold. Use the
+id of a completed run of this dataset (from `sorethumb runs`); re-run earlier periods
+(`sorethumb backfill --force-period LABEL`) to score them against it. See
+[Trends](trends.md).
+
+```toml
+[source]
+uri = "/data/transactions.parquet"
+
+[run]
+workdir = "./workspace"
+
+[columns]
+time_column = "created_at"
+
+[history]
+anchor_run = "run_5c720f703718c39e3c5b55b171083f30"
 ```

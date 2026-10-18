@@ -152,20 +152,20 @@
         },
         "kernel_shap": {
           "default": false,
-          "description": "Fall back to KernelSHAP for models where TreeSHAP is unavailable. Much slower; sets a FallbackAttributionWarning.",
+          "description": "Explain One-Class SVM and LOF with KernelSHAP (needs the explain extra) instead of finite-difference gradients. Much slower; keep explain.max_rows small. Other detectors are unaffected.",
           "title": "Kernel Shap",
           "type": "boolean"
         },
         "max_rows": {
           "default": 5000,
-          "description": "Explain at most this many rows; rows beyond the cap are skipped.",
+          "description": "Rows (most anomalous first) the gradient and KernelSHAP methods explain per group. Beyond it those detectors contribute nothing to a row's explanation; the other methods explain every flagged row.",
           "minimum": 1,
           "title": "Max Rows",
           "type": "integer"
         },
         "permutation_importance": {
           "default": false,
-          "description": "Also compute permutation importance as a cross-check. Roughly doubles explanation runtime.",
+          "description": "Also compute permutation importance per detector as a cross-check, written to the log only. Roughly doubles explanation runtime.",
           "title": "Permutation Importance",
           "type": "boolean"
         },
@@ -223,7 +223,7 @@
         },
         "missing_indicators": {
           "default": true,
-          "description": "Emit '<col>__is_missing' boolean features for high-null columns.",
+          "description": "Emit '<col>__is_missing' features for columns whose null ratio exceeds profiling.null_ratio_flag (by default, any column with a null), including high-null columns that are otherwise dropped.",
           "title": "Missing Indicators",
           "type": "boolean"
         },
@@ -266,7 +266,7 @@
           "type": "string"
         },
         "time_derivatives": {
-          "description": "Temporal derivatives to extract from the chosen time column. Supported: hour, dayofweek, day, month, year, quarter.",
+          "description": "Derived features to extract from each date/time column (not only time_column). Supported: hour, dayofweek, day, month, year, quarter.",
           "items": {
             "type": "string"
           },
@@ -297,14 +297,14 @@
         },
         "bootstrap_periods": {
           "default": 28,
-          "description": "Minimum periods of history required before history scoring activates.",
+          "description": "How many periods the first sorethumb backfill fills, when no period has been completed yet under this configuration.",
           "minimum": 1,
           "title": "Bootstrap Periods",
           "type": "integer"
         },
         "lookback_periods": {
           "default": 28,
-          "description": "Number of historical periods used to build the baseline.",
+          "description": "How far back sorethumb backfill looks for missing periods once history exists, in periods before the current one.",
           "minimum": 1,
           "title": "Lookback Periods",
           "type": "integer"
@@ -318,7 +318,7 @@
         },
         "max_backfill_periods": {
           "default": 30,
-          "description": "Maximum periods to backfill when catch-up runs are requested.",
+          "description": "The most periods one sorethumb backfill runs (the most recent ones); --max-periods overrides it.",
           "minimum": 0,
           "title": "Max Backfill Periods",
           "type": "integer"
@@ -337,7 +337,7 @@
         },
         "roll_non_business": {
           "default": true,
-          "description": "Include weekends and holidays when computing rolling baselines.",
+          "description": "Treat only Monday-Friday as periods (day granularity): a run on a weekend is filed under the preceding Friday, backfill skips weekend days, and a trend window does not expect them. False makes every calendar day a period. There is no holiday calendar.",
           "title": "Roll Non Business",
           "type": "boolean"
         }
@@ -486,14 +486,14 @@
         },
         "retention_days": {
           "default": 90,
-          "description": "Prune run artefacts older than this many days from workdir.",
+          "description": "Default retention, in days, for sorethumb workspace prune (its --days overrides it). Nothing is pruned automatically.",
           "minimum": 1,
           "title": "Retention Days",
           "type": "integer"
         },
         "reuse_models": {
           "default": false,
-          "description": "If a matching model artefact exists in workdir, skip retraining. Useful for score-forward runs.",
+          "description": "When this run already has a saved model for a group and detector (an earlier attempt of the same run, or a --force re-run), score with it instead of fitting again. score --from-run always reuses its source run's models, whatever this says.",
           "title": "Reuse Models",
           "type": "boolean"
         },
@@ -512,7 +512,7 @@
         },
         "strict": {
           "default": false,
-          "description": "Promote all SorethumbWarnings to errors. Always active in the test suite.",
+          "description": "Promote every sorethumb warning to an error. Explanation warnings make the run exit partial instead of failing the group, so detection output is never lost.",
           "title": "Strict",
           "type": "boolean"
         },

@@ -770,6 +770,25 @@ def test_workspace_prune_rejects_negative_days(workspace):
     assert "retention_days" in result.output
 
 
+def test_workspace_prune_defaults_to_the_configs_retention_days(workspace, monkeypatch):
+    """run.retention_days is prune's default; --days overrides it; without a config it is 90."""
+    from sorethumb_ml.store.workspace import Workspace
+
+    _, toml_path, _ = workspace
+    toml_path.write_text(
+        toml_path.read_text(encoding="utf-8").replace("[run]\n", "[run]\nretention_days = 7\n", 1),
+        encoding="utf-8",
+    )
+    runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
+    seen: list[int] = []
+    monkeypatch.setattr(Workspace, "prune", lambda _self, days, **_kw: seen.append(days) or [])
+    assert runner.invoke(app, ["workspace", "prune", "--config", str(toml_path)]).exit_code == 0
+    assert (
+        runner.invoke(app, ["workspace", "prune", "--config", str(toml_path), "--days", "30"]).exit_code == 0
+    )
+    assert seen == [7, 30]
+
+
 def test_workspace_vacuum(workspace):
     _, toml_path, _ = workspace
     runner.invoke(app, ["run", "--config", str(toml_path), "--no-report"])
