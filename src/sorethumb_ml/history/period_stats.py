@@ -17,6 +17,10 @@ migration 013):
 ``composite``
     Percentiles of the combined score, the threshold and contamination used,
     the number flagged and the ensemble policy.
+``anchor`` (only with ``history.anchor_run``)
+    The same rows scored with the anchor run's models and fixed rule: the count
+    above its fixed threshold, the combined-score percentiles on its scale, and
+    score drift against the anchor's own rows (see ``history/anchor.py``).
 
 Population drift compares two sets of these summaries (for example a
 window's groups and periods against the prior window's) with the Population
@@ -39,7 +43,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-STATS_VERSION = 1
+STATS_VERSION = 2  # 2: optional "anchor" section (history/anchor.py)
 PERCENTILES = list(range(101))
 TOP_K = 20
 _PSI_EPS = 1e-4

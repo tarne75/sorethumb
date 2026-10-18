@@ -701,6 +701,40 @@ def _resolve_and_filter_period(
 _PERIOD_STATS_FILENAME = "period_stats.json"
 
 
+def _save_anchor_rule(
+    ws: Workspace,
+    run_id: str,
+    group_key: str,
+    *,
+    config: Config,
+    calibrated_map: dict[str, np.ndarray],
+    composite_score: np.ndarray,
+    result_dict: dict[str, Any],
+    source_row: np.ndarray | None,
+) -> None:
+    """Save this fitting run's fixed flag rule for the group, so it can later serve as an anchor.
+
+    Never fails the group: without a rule the run simply cannot be an anchor
+    for this group, which a later anchored run reports as not comparable.
+    """
+    from sorethumb_ml.history.anchor import build_rule, save_rule  # noqa: PLC0415
+
+    try:
+        threshold = result_dict.get("threshold")
+        rule = build_rule(
+            combination=config.scoring.combination,
+            contamination=config.scoring.contamination,
+            weights=dict(result_dict.get("weights") or {}),
+            threshold=float(threshold) if threshold is not None else None,
+            calibrated=calibrated_map,
+            combined=np.asarray(composite_score, dtype=np.float64),
+            source_row=source_row,
+        )
+        save_rule(ws, run_id, group_key, rule)
+    except Exception:
+        logger.warning("Could not save the anchor rule for group %s.", group_key, exc_info=True)
+
+
 def _save_period_stats(
     ws: Workspace,
     run_id: str,
@@ -743,6 +777,10 @@ def _save_period_stats(
             combination=config.scoring.combination,
             ensemble_policy=_ensemble_policy_id(config),
         )
+        if config.history.anchor_run:
+            from sorethumb_ml.history.anchor import score_against_anchor  # noqa: PLC0415
+
+            stats["anchor"] = score_against_anchor(ws, config.history.anchor_run, group_key, df_group)
         atomic_write_text(path, json.dumps(stats, allow_nan=False))
     except Exception:
         logger.warning(
@@ -951,7 +989,10 @@ def run_detection(
         # run_id is derived deterministically so that a repeat call with identical
         # dataset + config + period finds the same ledger entries and can skip
         # already-complete groups (resume behaviour).
-        run_id = _make_run_id(dataset_fp, config.config_hash(), period_label, snapshot_fp)
+        _validate_anchor_run(ws, config, dataset_fp)
+        run_id = _make_run_id(
+            dataset_fp, config.config_hash(), period_label, snapshot_fp, config.history.anchor_run
+        )
         policy_evidence_id = _policy_evidence_gate(ws, config, dataset_fp, issued_warnings)
         config_json = _redacted_config_json(config)
         import sorethumb_ml as _st  # noqa: PLC0415
@@ -1484,18 +1525,48 @@ def score_forward(
 
 
 def _make_run_id(
-    dataset_fp: str, config_hash: str, period_label: str | None, snapshot_fp: str | None = None
+    dataset_fp: str,
+    config_hash: str,
+    period_label: str | None,
+    snapshot_fp: str | None = None,
+    anchor_run: str | None = None,
 ) -> str:
-    """Stable run identifier derived from dataset identity, snapshot, config, and period.
+    """Stable run identifier derived from dataset identity, snapshot, config, period and anchor.
 
     Same inputs always produce the same ID, so a repeat invocation can find
     prior ledger entries and skip already-complete groups (resume behaviour).
     ``snapshot_fp`` is part of the key so a changed source snapshot yields a
     fresh run rather than resuming against stale results -- while period /
     totals history stays keyed on the stable ``dataset_fp`` alone.
+    ``history.anchor_run`` is not in the config hash (it changes no flag or
+    total), but a run scored against an anchor records more than one without,
+    so setting or changing it yields a fresh run instead of resuming one that
+    never scored against it. Unset, the key is unchanged.
     """
     key = f"{dataset_fp}:{snapshot_fp or '__no_snapshot__'}:{config_hash}:{period_label or '__no_period__'}"
+    if anchor_run:
+        key += f":anchor={anchor_run}"
     return "run_" + hashlib.sha256(key.encode()).hexdigest()[:32]
+
+
+def _validate_anchor_run(ws: Workspace, config: Config, dataset_fp: str) -> None:
+    """Refuse a ``history.anchor_run`` that cannot serve as a fixed scale for this dataset."""
+    anchor = config.history.anchor_run
+    if not anchor:
+        return
+    row = ws.store.get_run(anchor)
+    problem = None
+    if row is None:
+        problem = "is not a run in this workspace"
+    elif row.get("status") != "complete":
+        problem = f"has status {row.get('status')!r}; only a complete run has the models to score with"
+    elif row.get("source_run_id"):
+        problem = "is a score-forward run; the anchor must be a run that fitted its own models"
+    elif str(row.get("dataset_fp")) != dataset_fp:
+        problem = "was run on a different dataset"
+    if problem:
+        msg = f"history.anchor_run {anchor!r} {problem}."
+        raise ConfigError(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -2098,6 +2169,17 @@ def _finalize_group(
     # gets a read-only view and writes only its own file.
     flagged_idx.setflags(write=False)
 
+    if source_run_id is None:
+        _save_anchor_rule(
+            ws,
+            run_id,
+            group_key,
+            config=config,
+            calibrated_map=calibrated_map,
+            composite_score=composite_score,
+            result_dict=result_dict,
+            source_row=group_space.row_ids,
+        )
     # Period runs only: score-forward writes no history, so its statistics would have no reader.
     if period_label is not None and source_run_id is None:
         _save_period_stats(

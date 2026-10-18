@@ -271,6 +271,16 @@ First public release.
     the change in row count and the fields that moved most by Population
     Stability Index, with conventional heuristic bands. No model is involved,
     so self-calibration cannot hide or invent a change.
+  - **Anchor run** (`history.anchor_run`). Each period run also scores its
+    rows with one fixed run's models, calibrators and flag rule. `sorethumb
+    history` then splits each window's change in anomaly count exactly into
+    volume, score drift (the rate above a fixed threshold moved) and threshold
+    drift (self-recalibration moved the bar). It also shows anchor-scale score
+    PSI and tail share.
+    - Every fitting run saves its rule (`anchor_rule.json`, plain JSON).
+    - Periods the anchor cannot score are left out, with the reason.
+    - The anchor is not part of the config hash but is part of the run id, so
+      setting it keeps one trend while giving re-run periods fresh runs.
 
 ### Security
 

@@ -1874,6 +1874,16 @@ def history(
         for line in _drift_notes(drift):
             console.print(line, soft_wrap=False, highlight=False)
 
+        from sorethumb_ml.history.windows import compute_count_decomposition  # noqa: PLC0415
+
+        decomposition = compute_count_decomposition(
+            ws.store, dataset_fp, config_hash, ref_label, _windows, cfg.history.period_granularity, group_keys
+        )
+        if any(d.anchor_run_id for d in decomposition):
+            console.print(_decomposition_table(decomposition))
+        for line in _decomposition_notes(decomposition, configured_anchor=cfg.history.anchor_run):
+            console.print(line, soft_wrap=False, highlight=False)
+
 
 def _fmt_pct(v: float | None) -> str:
     return f"{v * 100:.2f}" if v is not None else "—"
@@ -1968,6 +1978,75 @@ def _drift_notes(drift: list[Any]) -> list[str]:
             "  [dim]A window without summaries has no drift figure: periods run before per-period "
             "statistics existed have none.[/dim]"
         )
+    return notes
+
+
+def _decomposition_table(decomposition: list[Any]) -> Table:
+    """Render the anchor-based split of each window's change in anomaly count."""
+    anchors = sorted({d.anchor_run_id for d in decomposition if d.anchor_run_id})
+    table = Table(title=f"Count change against anchor {_e(', '.join(anchors))}", show_header=True)
+    for name in (
+        "Window",
+        "Anchor rate cur % [95% CI]",
+        "Anchor rate prior % [95% CI]",
+        "Δ count",
+        "= volume",
+        "+ score drift",
+        "+ threshold drift",
+        "Score PSI",
+        "Above anchor p95",
+        "Cells used (excl.)",
+    ):
+        table.add_column(name, justify="left" if name == "Window" else "right")
+
+    def _n(v: float | None) -> str:
+        return f"{v:+.1f}" if v is not None else "—"
+
+    for d in decomposition:
+        _add_row(
+            table,
+            str(d.window_size),
+            _fmt_pct(d.current_anchor_rate) + _fmt_ci(d.anchor_rate_ci_current),
+            _fmt_pct(d.prior_anchor_rate) + _fmt_ci(d.anchor_rate_ci_prior),
+            f"{d.count_change:+d}" if d.count_change is not None else "—",
+            _n(d.volume),
+            _n(d.score_drift),
+            _n(d.threshold_drift),
+            f"{d.score_psi:.2f}" if d.score_psi is not None else "—",
+            f"{d.tail_share * 100:.1f}%" if d.tail_share is not None else "—",
+            f"{d.cells_used} ({d.cells_excluded})",
+        )
+    return table
+
+
+def _decomposition_notes(decomposition: list[Any], *, configured_anchor: str | None) -> list[str]:
+    """Explain the decomposition, or how to get one."""
+    if not any(d.anchor_run_id for d in decomposition):
+        if configured_anchor:
+            return [
+                f"  [dim]history.anchor_run is {_e(configured_anchor)}, but no period in these windows was "
+                "scored against it: periods run before it was set are scored only when re-run "
+                "(sorethumb backfill --force-period LABEL).[/dim]"
+            ]
+        return [
+            "  [dim]Score drift and threshold drift cannot be told apart without a fixed scale: set "
+            "history.anchor_run to a completed run and re-run periods to score them against it.[/dim]"
+        ]
+    notes = [
+        "  [dim]Each period is also scored with the anchor run's models and fixed threshold. Δ count (own "
+        "flags, current minus prior window) = volume (more or fewer rows at the prior rate) + score drift "
+        "(the rate above the anchor's fixed threshold moved) + threshold drift (each period's own "
+        "recalibrated threshold moved relative to the anchor's). Computed per group, then summed.[/dim]",
+        "  [dim]Score PSI compares the current window's anchor-scale scores with the anchor's own; "
+        "'Above anchor p95' is 5% on the anchor's own rows. Cells: (group, period) summaries used, "
+        "and those left out (no anchor score, not comparable, or no counterpart window).[/dim]",
+    ]
+    if any(d.anchor_run_id == "mixed" for d in decomposition):
+        notes.append(
+            "  [yellow]More than one anchor run in these windows: no decomposition is shown.[/yellow]"
+        )
+    reasons = sorted({r for d in decomposition for r in d.not_comparable_reasons})
+    notes.extend(f"  [dim]Not comparable: {_e(r)}.[/dim]" for r in reasons)
     return notes
 
 

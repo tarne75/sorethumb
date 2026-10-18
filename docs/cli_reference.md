@@ -655,6 +655,41 @@ detector, its score percentiles and flag count. Periods run before these
 statistics existed have none, and a window without them shows no drift
 figure.
 
+**Count change against an anchor.** Set `history.anchor_run` to a completed
+fitting run of the same dataset. Each period run then also scores its rows with
+that run's models, calibrators and *fixed* flag rule:
+
+- `composite`: its weights and threshold;
+- `intersection` / `union` with `"auto"`: each model's own boundary;
+- with a numeric contamination: each detector's cut-off from the anchor run.
+
+A third table then splits each window's change in anomaly count, exactly, into:
+
+- **volume**: more or fewer rows at the prior rate;
+- **score drift**: the share of rows above the anchor's fixed threshold moved,
+  i.e. the data scores differently under one unchanging model;
+- **threshold drift**: each period's own recalibrated threshold moved relative
+  to the anchor's. Self-calibration can absorb a real change this way, or create
+  an apparent one.
+
+Each term is computed per group and then summed, so a change in the group mix
+doesn't leak into any term. The table also shows:
+
+- the anchor-scale rate with its 95% interval;
+- the PSI of the current window's anchor-scale scores against the anchor's own;
+- the share of rows above the anchor's 95th percentile (5% on the anchor's own
+  rows).
+
+A period the anchor can't score is left out and its reason listed. That
+happens when the anchor has no model or rule for the group, or the feature
+schema differs.
+
+`history.anchor_run` is not part of the config hash, so setting it keeps one
+trend. Periods already run are scored against the anchor only when re-run:
+`sorethumb backfill --force-period LABEL`, or a fresh `sorethumb run` for that
+period. Every fitting run saves its rule, so any complete fitting run can serve
+as an anchor.
+
 **Options:**
 
 | Option | Default | Description |

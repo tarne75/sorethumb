@@ -140,6 +140,7 @@ so trivial changes do not invalidate cached artefacts.
 | `history.bootstrap_periods` | int | 28 | Minimum periods of history required before history scoring activates. |
 | `history.max_backfill_periods` | int | 30 | Maximum periods to backfill when catch-up runs are requested. |
 | `history.low_volume_threshold` | int | 100 | A rolling window is flagged low-volume (in sorethumb history and the HTML report) when its current or prior population is below this -- informational only; low-volume periods are still included in every aggregate. |
+| `history.anchor_run` | str \| null | null | Run id of a completed fitting run of this dataset whose models, calibrators and flag rule score every period run as well as that period's own fit. Gives a fixed scale, so sorethumb history can split a change in anomaly count into volume, score drift and threshold drift. Not part of the config hash, so setting it keeps the trend's history; periods already run are scored against it only when re-run. |
 
 ## `[report]` — Output report settings (cosmetic; excluded from config hash).
 

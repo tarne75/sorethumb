@@ -427,3 +427,170 @@ def compute_population_drift(
             )
         )
     return results
+
+
+@dataclass(frozen=True)
+class DecompositionResult:
+    """A window's change in anomaly count split into volume, score drift and threshold drift (``history/anchor.py``).
+
+    Built only from (group, period) cells scored against one anchor on both
+    sides, so ``volume + score_drift + threshold_drift == count_change``
+    exactly. Cells without an anchor score, or not comparable to it, are left
+    out and counted in ``cells_excluded``.
+    """
+
+    window_size: int
+    period_label: str
+    anchor_run_id: str | None  # None: no anchored cells; "mixed": more than one anchor in the span
+    groups_used: int
+    cells_used: int
+    cells_excluded: int
+    current_rows: int
+    prior_rows: int
+    current_count: int  # own (self-fitted) flags
+    prior_count: int
+    current_anchor_count: int  # flags under the anchor's fixed rule
+    prior_anchor_count: int
+    volume: float | None
+    score_drift: float | None
+    threshold_drift: float | None
+    count_change: int | None
+    anchor_rate_ci_current: tuple[float, float] | None = None
+    anchor_rate_ci_prior: tuple[float, float] | None = None
+    anchor_change_ci: tuple[float, float] | None = None
+    score_psi: float | None = None  # current window's anchor-scale scores vs the anchor's own
+    tail_share: float | None = None  # share above the anchor's 95th percentile (0.05 on its own rows)
+    not_comparable_reasons: tuple[str, ...] = ()
+
+    @property
+    def current_anchor_rate(self) -> float | None:
+        """Share of current-window rows above the anchor's fixed threshold."""
+        return self.current_anchor_count / self.current_rows if self.current_rows else None
+
+    @property
+    def prior_anchor_rate(self) -> float | None:
+        """Share of prior-window rows above the anchor's fixed threshold."""
+        return self.prior_anchor_count / self.prior_rows if self.prior_rows else None
+
+
+def _anchored(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Split stats rows into those comparable to an anchor and the reasons the others are not."""
+    ok: list[dict[str, Any]] = []
+    reasons: list[str] = []
+    for r in rows:
+        anchor = r["stats"].get("anchor")
+        if anchor and anchor.get("comparable"):
+            ok.append(r)
+        elif anchor:
+            reasons.append(str(anchor.get("reason")))
+    return ok, reasons
+
+
+def compute_count_decomposition(
+    store: Store,
+    dataset_fp: str,
+    config_hash: str,
+    reference_label: str,
+    windows: list[int],
+    granularity: PeriodGranularity,
+    group_keys: list[str] | None = None,
+) -> list[DecompositionResult]:
+    """Return, per window size, the anchor-based decomposition of the change in anomaly count.
+
+    Per group present on both sides: ``N`` rows, ``r`` own flag rate and ``r*``
+    anchor flag rate summed over its anchored periods in each window; the three
+    terms are computed per group and summed, which also keeps a change in the
+    group mix out of every term.
+    """
+    from sorethumb_ml.history.period_stats import _numeric_psi  # noqa: PLC0415
+
+    results: list[DecompositionResult] = []
+    for w in sorted(windows):
+        cur_start = step_back(reference_label, granularity, w - 1)
+        cur_labels = period_range(cur_start, reference_label, granularity)
+        pri_labels = period_range(
+            step_back(cur_start, granularity, w), step_back(cur_start, granularity, 1), granularity
+        )
+        cur_all = store.period_stats_for_periods(dataset_fp, cur_labels, config_hash, group_keys)
+        pri_all = store.period_stats_for_periods(dataset_fp, pri_labels, config_hash, group_keys)
+        cur, cur_reasons = _anchored(cur_all)
+        pri, pri_reasons = _anchored(pri_all)
+        anchors = {r["stats"]["anchor"]["anchor_run_id"] for r in cur + pri}
+        groups = sorted({r["group_key"] for r in cur} & {r["group_key"] for r in pri})
+        used_cur = [r for r in cur if r["group_key"] in groups]
+        used_pri = [r for r in pri if r["group_key"] in groups]
+        reasons = tuple(sorted(set(cur_reasons + pri_reasons)))
+        excluded = len(cur_all) + len(pri_all) - len(used_cur) - len(used_pri)
+
+        def _sums(rows: list[dict[str, Any]], key: str) -> tuple[int, int, int]:
+            sub = [r for r in rows if r["group_key"] == key]
+            n = sum(int(r["stats"]["n_rows"]) for r in sub)
+            own = sum(int(r["stats"]["composite"]["flagged"]) for r in sub)
+            anc = sum(int(r["stats"]["anchor"]["flagged"]) for r in sub)
+            return n, own, anc
+
+        volume = score = threshold = 0.0
+        tot = {"cn": 0, "pn": 0, "co": 0, "po": 0, "ca": 0, "pa": 0}
+        for key in groups:
+            n1, own1, anc1 = _sums(used_cur, key)
+            n0, own0, anc0 = _sums(used_pri, key)
+            if not n1 or not n0:
+                continue
+            r1, r0, s1, s0 = own1 / n1, own0 / n0, anc1 / n1, anc0 / n0
+            volume += (n1 - n0) * r0
+            score += n1 * (s1 - s0)
+            threshold += n1 * ((r1 - s1) - (r0 - s0))
+            for k, v in (("cn", n1), ("pn", n0), ("co", own1), ("po", own0), ("ca", anc1), ("pa", anc0)):
+                tot[k] += v
+
+        usable = bool(groups) and len(anchors) == 1 and tot["cn"] > 0 and tot["pn"] > 0
+        psi = tail = None
+        if usable:
+            cur_scores = [
+                {
+                    "kind": "numeric",
+                    "n": r["stats"]["anchor"]["n_rows"],
+                    "missing": 0,
+                    "percentiles": r["stats"]["anchor"]["combined_percentiles"],
+                }
+                for r in used_cur
+            ]
+            base = used_cur[0]["stats"]["anchor"].get("anchor_percentiles")
+            if base:
+                psi = _numeric_psi(
+                    [{"kind": "numeric", "n": 1, "missing": 0, "percentiles": base}], cur_scores
+                )
+            tails = [
+                (r["stats"]["anchor"].get("tail_share"), r["stats"]["anchor"]["n_rows"]) for r in used_cur
+            ]
+            if all(t is not None for t, _ in tails):
+                tail = sum(t * n for t, n in tails) / sum(n for _, n in tails)
+        results.append(
+            DecompositionResult(
+                window_size=w,
+                period_label=reference_label,
+                anchor_run_id=(next(iter(anchors)) if len(anchors) == 1 else "mixed") if anchors else None,
+                groups_used=len(groups) if usable else 0,
+                cells_used=len(used_cur) + len(used_pri) if usable else 0,
+                cells_excluded=excluded if usable else len(cur_all) + len(pri_all),
+                current_rows=tot["cn"],
+                prior_rows=tot["pn"],
+                current_count=tot["co"],
+                prior_count=tot["po"],
+                current_anchor_count=tot["ca"],
+                prior_anchor_count=tot["pa"],
+                volume=volume if usable else None,
+                score_drift=score if usable else None,
+                threshold_drift=threshold if usable else None,
+                count_change=tot["co"] - tot["po"] if usable else None,
+                anchor_rate_ci_current=wilson_interval(tot["ca"], tot["cn"]) if usable else None,
+                anchor_rate_ci_prior=wilson_interval(tot["pa"], tot["pn"]) if usable else None,
+                anchor_change_ci=newcombe_interval(tot["ca"], tot["cn"], tot["pa"], tot["pn"])
+                if usable
+                else None,
+                score_psi=psi,
+                tail_share=tail,
+                not_comparable_reasons=reasons,
+            )
+        )
+    return results
