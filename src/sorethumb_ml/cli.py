@@ -1754,7 +1754,10 @@ def history(
     windows: Annotated[
         list[int] | None, typer.Option("--window", help="Rolling window sizes (e.g. --window 7 --window 28).")
     ] = None,
-    group_key: Annotated[str | None, typer.Option("--group", help="Limit to a specific group key.")] = None,
+    group_key: Annotated[
+        str | None,
+        typer.Option("--group", help="Limit to one group: its label (as --only-group takes) or key."),
+    ] = None,
     period: Annotated[
         str | None,
         typer.Option(
@@ -1842,6 +1845,8 @@ def history(
             )
             raise typer.Exit(0)
 
+        if group_key:
+            group_key = _resolve_group(group_key, ws.store.dataset_groups(dataset_fp), json_output)
         report = build_trend_report(
             ws.store,
             dataset_fp=dataset_fp,
@@ -1858,6 +1863,32 @@ def history(
         typer.echo(json.dumps(report.to_dict(), allow_nan=False))
         return
     _print_trend_report(report)
+
+
+def _resolve_group(value: str, known: dict[str, str], json_output: bool) -> str:
+    """Return the group key *value* names: a group label (as ``--only-group`` takes) or a key itself.
+
+    Fails with exit code 3, listing the known labels, when it names neither.
+    """
+    if value in known:
+        return value
+    matches = [key for key, label in known.items() if label == value]
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        _fail(
+            json_output,
+            f"Group label {value!r} matches {len(matches)} groups; pass one of their keys: {', '.join(sorted(matches))}.",
+            ExitCode.PREFLIGHT,
+        )
+    labels = sorted(set(known.values()))
+    shown = ", ".join(labels[:20]) + (f", ... ({len(labels)} in all)" if len(labels) > 20 else "")
+    _fail(
+        json_output,
+        f"No group labelled or keyed {value!r}"
+        + (f"; known groups: {shown}." if labels else "; no groups recorded."),
+        ExitCode.NOT_FOUND,
+    )
 
 
 def _print_trend_report(report: Any) -> None:
@@ -2282,7 +2313,10 @@ def show(
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
     log_level: _LOG_LEVEL_OPT = None,
-    group: Annotated[str | None, typer.Option("--group", help="Group key to show detail for.")] = None,
+    group: Annotated[
+        str | None,
+        typer.Option("--group", help="Group to show detail for: its label (as --only-group takes) or key."),
+    ] = None,
     json_output: _JSON_OPT = False,
 ) -> None:
     """Show detail for one run or group, including feature plan summary."""
@@ -2302,7 +2336,10 @@ def show(
         _fail(json_output, str(exc), _classify_error(exc))
 
     if group:
-        groups = [g for g in groups if g.get("group_key") == group]
+        key = _resolve_group(
+            group, {str(g["group_key"]): str(g.get("group_label", "")) for g in groups}, json_output
+        )
+        groups = [g for g in groups if g.get("group_key") == key]
 
     if evidence is not None:
         evidence = {k: v for k, v in evidence.items() if k != "details_json"}
