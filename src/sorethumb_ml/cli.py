@@ -2849,7 +2849,13 @@ def workspace_prune(
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
     log_level: _LOG_LEVEL_OPT = None,
-    days: Annotated[int, typer.Option("--days", help="Retention window in days.")] = 90,
+    days: Annotated[
+        int | None,
+        typer.Option(
+            "--days",
+            help="Retention window in days (default: run.retention_days from the config, else 90).",
+        ),
+    ] = None,
     dry_run: _DRY_RUN_OPT = False,
 ) -> None:
     """Remove regenerable artefacts and failed runs older than --days.
@@ -2858,11 +2864,12 @@ def workspace_prune(
     database rows together — never one without the other.
     """
     _setup_logging(log_level or "INFO")
-    ws_path, _ = _resolve_workdir(config, workdir, log_level)
+    ws_path, loaded = _resolve_workdir(config, workdir, log_level)
+    retention = days if days is not None else (loaded.run.retention_days if loaded is not None else 90)
 
     try:
         with Workspace.open(ws_path) as ws:
-            removed = ws.prune(days, dry_run=dry_run)
+            removed = ws.prune(retention, dry_run=dry_run)
     except SorethumbError as exc:
         _fail(False, f"workspace prune failed: {exc}", _classify_error(exc))
 

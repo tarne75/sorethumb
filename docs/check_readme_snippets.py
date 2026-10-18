@@ -1,6 +1,8 @@
-"""Execute / validate every fenced code block in README.md.
+"""Execute / validate every fenced code block in README.md, and the toml/bash blocks of every doc.
 
-CI runs this so a snippet that stops being copy-paste runnable fails the build:
+CI runs this so a snippet that stops being copy-paste runnable fails the build.
+README.md's python blocks are executed; every ```toml``` and ```bash``` block in
+README.md, docs/*.md, SECURITY.md and CONTRIBUTING.md is checked as below:
 
     python docs/check_readme_snippets.py
 
@@ -157,8 +159,8 @@ def _check_bash(body: str) -> list[str]:
 
         args = [t for t in tokens[1:] if not t.startswith("-")]
         sub = args[0] if args else ""
-        if sub in {"", "--version"}:
-            continue
+        if sub in {"", "--version"} or sub.startswith("[") or sub.isupper():
+            continue  # a usage synopsis (`sorethumb [OPTIONS] COMMAND`), not an invocation
         # `config schema`, `workspace vacuum`, … are two-token subcommands.
         path = tuple(args[:2]) if sub in groups and len(args) > 1 else (sub,)
         if path not in commands:
@@ -213,15 +215,29 @@ def main() -> None:
             counts["bash"] += 1
             problems += [f"README.md:{line_no}: {p}" for p in _check_bash(body)]
 
+    other_docs = [*sorted((ROOT / "docs").glob("*.md")), ROOT / "SECURITY.md", ROOT / "CONTRIBUTING.md"]
+    doc_counts = {"toml": 0, "bash": 0}
+    for doc in other_docs:
+        rel = doc.relative_to(ROOT).as_posix()
+        for line_no, lang, body in _blocks(doc.read_text(encoding="utf-8")):
+            if lang == "toml":
+                doc_counts["toml"] += 1
+                if (p := _check_toml(body)) is not None:
+                    problems.append(f"{rel}:{line_no}: {p}")
+            elif lang == "bash":
+                doc_counts["bash"] += 1
+                problems += [f"{rel}:{line_no}: {p}" for p in _check_bash(body)]
+
     if problems:
-        print("ERROR: README.md snippets have problems:")
+        print("ERROR: documentation snippets have problems:")
         for p in problems:
             print(f"  - {p}")
         sys.exit(1)
 
     print(
         f"OK: {counts['python']} python, {counts['toml']} toml, {counts['bash']} bash "
-        "README snippets checked."
+        f"README snippets checked; {doc_counts['toml']} toml and {doc_counts['bash']} bash "
+        "blocks in the other docs."
     )
 
 

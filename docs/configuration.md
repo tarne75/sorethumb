@@ -76,9 +76,9 @@ so trivial changes do not invalidate cached artefacts.
 | --- | --- | --- | --- |
 | `features.one_hot_max_cardinality` | int | 20 | Categorical columns with n_unique <= this get one-hot encoding. Above this threshold frequency encoding is used instead. |
 | `features.max_feature_width` | int | 2000 | If the encoded feature matrix would exceed this many columns a FeatureWidthWarning is raised (or error in strict mode). |
-| `features.missing_indicators` | bool | true | Emit '<col>__is_missing' boolean features for high-null columns. |
+| `features.missing_indicators` | bool | true | Emit '<col>__is_missing' features for columns whose null ratio exceeds profiling.null_ratio_flag (by default, any column with a null), including high-null columns that are otherwise dropped. |
 | `features.array_features` | bool | true | Derive __len/__mean/__min/__max features from List columns. |
-| `features.time_derivatives` | list[str] | ['hour', 'dayofweek', 'day', 'month'] | Temporal derivatives to extract from the chosen time column. Supported: hour, dayofweek, day, month, year, quarter. |
+| `features.time_derivatives` | list[str] | ['hour', 'dayofweek', 'day', 'month'] | Derived features to extract from each date/time column (not only time_column). Supported: hour, dayofweek, day, month, year, quarter. |
 | `features.scaler` | "standard" \| "robust" | "robust" | 'robust' uses median+IQR (less sensitive to extreme outliers). 'standard' uses mean+std (required if downstream models assume z-scores). |
 | `features.dtype` | "float32" \| "float64" | "float32" | Output dtype of the feature matrix. float32 halves memory vs float64. |
 | `features.correlation_reduction` | bool | true | Drop one column from each pair with Pearson \|r\| >= correlation_threshold. Reduces redundancy for distance-based detectors. |
@@ -112,9 +112,9 @@ so trivial changes do not invalidate cached artefacts.
 | --- | --- | --- | --- |
 | `explain.enabled` | bool | true | Disable to skip the explanation stage entirely. |
 | `explain.top_n` | int | 3 | Number of top contributing features to surface per anomalous row. |
-| `explain.max_rows` | int | 5000 | Explain at most this many rows; rows beyond the cap are skipped. |
-| `explain.kernel_shap` | bool | false | Fall back to KernelSHAP for models where TreeSHAP is unavailable. Much slower; sets a FallbackAttributionWarning. |
-| `explain.permutation_importance` | bool | false | Also compute permutation importance as a cross-check. Roughly doubles explanation runtime. |
+| `explain.max_rows` | int | 5000 | Rows (most anomalous first) the gradient and KernelSHAP methods explain per group. Beyond it those detectors contribute nothing to a row's explanation; the other methods explain every flagged row. |
+| `explain.kernel_shap` | bool | false | Explain One-Class SVM and LOF with KernelSHAP (needs the explain extra) instead of finite-difference gradients. Much slower; keep explain.max_rows small. Other detectors are unaffected. |
+| `explain.permutation_importance` | bool | false | Also compute permutation importance per detector as a cross-check, written to the log only. Roughly doubles explanation runtime. |
 
 ## `[run]` — Execution-level settings.
 
@@ -122,11 +122,11 @@ so trivial changes do not invalidate cached artefacts.
 | --- | --- | --- | --- |
 | `run.workdir` | str | **required** | Workspace root directory where all run artefacts are stored. Required when using the library; the CLI fills in ./sorethumb-workspace/ (relative to the current directory) when neither --workdir nor this field is given. |
 | `run.seed` | int | 42 | Global random seed for reproducible results. |
-| `run.strict` | bool | false | Promote all SorethumbWarnings to errors. Always active in the test suite. |
+| `run.strict` | bool | false | Promote every sorethumb warning to an error. Explanation warnings make the run exit partial instead of failing the group, so detection output is never lost. |
 | `run.max_memory_mb` | int | 8192 | Pre-flight cap on the projected feature matrix's memory, sized for how many copies of it (rows x encoded columns x dtype bytes) can realistically be alive at once -- 2x the bare matrix size (one group's matrix plus polars encode/scale headroom), or 4x when explain.enabled (the default) and features.dtype='float32' (explain needs an additional float64 copy of the full matrix). A run whose estimate exceeds this aborts with MemoryBudgetError before any model is fitted. It is not a live RSS ceiling, and does not include detector-internal memory (e.g. a kernel-based fit's O(train_rows^2) usage) -- actual peak memory can still exceed the budget. |
 | `run.max_rows` | int \| null | null | Truncate the input to at most this many rows (after filtering). Triggers SampleTruncatedWarning. None uses all rows. |
-| `run.reuse_models` | bool | false | If a matching model artefact exists in workdir, skip retraining. Useful for score-forward runs. |
-| `run.retention_days` | int | 90 | Prune run artefacts older than this many days from workdir. |
+| `run.reuse_models` | bool | false | When this run already has a saved model for a group and detector (an earlier attempt of the same run, or a --force re-run), score with it instead of fitting again. score --from-run always reuses its source run's models, whatever this says. |
+| `run.retention_days` | int | 90 | Default retention, in days, for sorethumb workspace prune (its --days overrides it). Nothing is pruned automatically. |
 | `run.log_level` | str | "INFO" | Python logging level for the sorethumb_ml logger. Logs are written to both the console and {workdir}/logs/sorethumb.log (rotating, 10 MB limit, 5 backups). Does not affect the config hash. |
 | `run.slow_stage_seconds` | int | 300 | Emit a SlowStageWarning if any pipeline stage exceeds this many seconds. Purely diagnostic; does not affect results. |
 
@@ -135,10 +135,10 @@ so trivial changes do not invalidate cached artefacts.
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `history.period_granularity` | "hour" \| "day" \| "week" \| "month" | "day" | Bucket size for period-over-period comparisons. |
-| `history.roll_non_business` | bool | true | Include weekends and holidays when computing rolling baselines. |
-| `history.lookback_periods` | int | 28 | Number of historical periods used to build the baseline. |
-| `history.bootstrap_periods` | int | 28 | Minimum periods of history required before history scoring activates. |
-| `history.max_backfill_periods` | int | 30 | Maximum periods to backfill when catch-up runs are requested. |
+| `history.roll_non_business` | bool | true | Treat only Monday-Friday as periods (day granularity): a run on a weekend is filed under the preceding Friday, backfill skips weekend days, and a trend window does not expect them. False makes every calendar day a period. There is no holiday calendar. |
+| `history.lookback_periods` | int | 28 | How far back sorethumb backfill looks for missing periods once history exists, in periods before the current one. |
+| `history.bootstrap_periods` | int | 28 | How many periods the first sorethumb backfill fills, when no period has been completed yet under this configuration. |
+| `history.max_backfill_periods` | int | 30 | The most periods one sorethumb backfill runs (the most recent ones); --max-periods overrides it. |
 | `history.low_volume_threshold` | int | 100 | A rolling window is flagged low-volume (in sorethumb history and the HTML report) when its current or prior population is below this -- informational only; low-volume periods are still included in every aggregate. |
 | `history.anchor_run` | str \| null | null | Run id of a completed fitting run of this dataset whose models, calibrators and flag rule score every period run as well as that period's own fit. Gives a fixed scale, so sorethumb history can split a change in anomaly count into volume, score drift and threshold drift. Not part of the config hash, so setting it keeps the trend's history; periods already run are scored against it only when re-run. |
 

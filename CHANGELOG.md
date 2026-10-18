@@ -6,10 +6,6 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-09-21
-
-First public release.
-
 ### Added
 
 - **Names**: install the `sorethumb-ml` distribution (`pip install sorethumb-ml`;
@@ -84,15 +80,47 @@ First public release.
   decision and is not changing for now; see "Where things stand" in
   `docs/ensemble-policy.md` for the evidence and its limits.
 - **Explanations**: up to `explain.top_n` reasons per flagged row
-  (`reason_1`, `reason_2`, ...), labelled per row by `attribution_kind`:
-  `exact` for ECOD and HBOS, `model_specific` (TreeSHAP) for Isolation Forest
-  with the `explain` extra installed, and `heuristic` otherwise (centroid
-  distance, input gradient, or the reference-scaled deviation used for rows far
-  outside the data). See `docs/explanations.md`.
+  (`reason_1`, `reason_2`, ...), labelled by `attribution_kind`: `exact` for ECOD
+  and HBOS, `model_specific` for Isolation Forest (interventional TreeSHAP, with
+  the `explain` extra) and `heuristic` otherwise (centroid distance, input
+  gradient, KernelSHAP, or the reference-scaled deviation used where a score is
+  flat). See `docs/explanations.md`.
+  - **Detection first.** Each group's detection output (`anomalies.parquet`:
+    scores, flags, ranks) is written, and its SHA-256 recorded as
+    `detection_digest`, before any explanation is computed. Nothing the
+    explanation stage does, including failing, changes which rows are flagged.
+    Detection always uses `features.dtype`, whatever the explain settings.
+  - **Explained against normal rows.** Every method measures a flagged row
+    against a reference of rows no detector flags (falling back to the less
+    anomalous half of the unflagged rows, and to no explanation when neither has
+    10 rows), never against the anomalies. A fitting run saves the reference
+    summary (`models/<run>/<group>/reference.json`, plain JSON), and
+    `score --from-run` explains against it.
+  - **Per-row status.** Each flagged row has an `explain_status` (`ok`,
+    `partial`, `unavailable`) and an `explain_issue` saying what is missing; an
+    unavailable row has no `reason_<k>`. Each group records `explain_status`,
+    `n_explained` and `n_explain_unavailable` (`run --json`, `show`).
+  - **The record behind each reason** (`attributions.parquet`): original field,
+    raw value, reference value and direction, signed contribution (positive
+    toward anomaly) and the magnitude reasons are ranked by, each detector's
+    method, weight and share, the transformed features behind the field, every
+    approximation caveat (`approximation_flags`), `explainer_version`
+    (`explain@2`) and `reference_id`. Shown by `sorethumb anomalies --detail` and
+    the HTML report's "Explanation detail" section; `index.json` carries it under
+    `attributions`.
+  - **Failures are reported, not hidden.** An explanation failure is a warning
+    with a stable code (`explain.stage_failed`, `explain.backend_failed`,
+    `explain.no_signal`, `explain.reference_unavailable`, ...), never a group
+    failure. A failed explanation stage makes the run exit `partial`, as does any
+    explanation warning under `run.strict`.
+- **Structured warnings**: every warning carries a stable `code`, its stage and,
+  where they apply, the detector and rows affected. They are stored with each
+  group, shown with their codes in the run summary, `show` and the report, and
+  listed in `run --json` (`warnings`).
 - **CLI**: `init`, `inspect`, `run`, `score`, `report`, `backfill`, `history`,
-  `runs`, `show`, `anomalies`, `explain-plan`, `detectors`, `config`
-  (`check`, `schema`, `show`) and `workspace` (`ls`, `du`, `prune`, `vacuum`,
-  `migrate`, `reset`). `sorethumb run data.csv` works with no config file, and
+  `backtest`, `evidence`, `runs`, `show`, `anomalies`, `explain-plan`, `detectors`,
+  `config` (`check`, `schema`, `show`) and `workspace` (`ls`, `du`, `prune`,
+  `vacuum`, `migrate`, `reset`). `sorethumb run data.csv` works with no config file, and
   the read-only commands after it need none either. Runs are resumable and
   idempotent, tracked in a SQLite workspace. Exit codes are stable (`0` ok,
   `1` runtime failure, `2` pre-flight rejection, `3` not found, `4` partial
@@ -102,11 +130,28 @@ First public release.
   fitted run's persisted models and calibrators, without refitting, so scores
   stay on one scale across calls. A config whose fit-time settings differ from
   the source run's is rejected.
-- **History**: `sorethumb history` shows rolling-window trends and
-  `sorethumb backfill` fills missing periods, both scoped to the dataset and
-  the exact configuration that produced each period. A period window that
-  selects no rows fails immediately, naming the window, the time column and
-  the data's available range.
+- **History**: `sorethumb backfill` fills missing periods and `sorethumb history`
+  reports how the data is changing, scoped to the dataset and the exact
+  configuration that produced each period. A period window that selects no rows
+  fails immediately, naming the window, the time column and the data's available
+  range. See `docs/trends.md`.
+  - Four signals, each with a verdict per window (`ok`, caveats with reasons, or
+    n/a with why): **population** drift (PSI per input field, and volume; no
+    model involved), **scores** and **threshold** (with an anchor run, below),
+    and **counts** (the anomaly rate per window with Wilson and Newcombe 95%
+    intervals, coverage and matched groups).
+  - Under `composite` with a numeric contamination the rate is set by the review
+    budget, so no change is shown.
+  - **Anchor run** (`history.anchor_run`): each period run also scores its rows
+    with one fixed run's models, calibrators and flag rule, so a change in
+    anomaly count splits exactly into volume, score drift and threshold drift.
+    Every fitting run saves its rule (`anchor_rule.json`, plain JSON), so any
+    complete fitting run can be an anchor.
+  - Each period run records per-period statistics (`period_stats`): per input
+    field, its missing count and percentiles or top values; per detector, score
+    percentiles and flag count.
+  - `history --json` prints the whole report; each period run's HTML report shows
+    it per group, and `index.json` carries it under `trend`.
 - **Reports**: self-contained HTML plus CSV and JSON, re-renderable from
   persisted state with `sorethumb report`.
 - **Windows** (10/11 x64): every command, the Python API and reports work as
@@ -149,7 +194,9 @@ First public release.
   must pass before it can be said to outperform the default (pre-registration,
   disjoint confirmation seeds, paired bootstrap with Holm correction, no budget
   or stability regressions, confirmation in rounds of fresh seeds) and
-  publishes each confirmation result.
+  publishes each confirmation result. `docs/explanations.md` and
+  `docs/trends.md` say what each explanation and trend figure means and where it
+  stops.
 - **`sorethumb backtest`**: compares every registered ensemble policy with the
   default on your own data, using `columns.reference_column` labels, and records
   each verdict in the workspace (migration 011, `policy_evidence`). A `run` or
@@ -165,79 +212,6 @@ First public release.
   within `--ranking-tolerance`, 10%): decision rule 2, which `run` requires of the
   evidence it relies on. With `scoring.contamination = "auto"`, `--review-budget`
   states the budget flags are judged against.
-- **Detection and explanation separated**: each group's detection output
-  (`anomalies.parquet`: scores, flags, ranks) is written, and its SHA-256
-  recorded as `detection_digest`, before any explanation is computed.
-  Explanations go to `explanations.parquet`, joined back by `row_id` for
-  `sorethumb anomalies` and the report, and each group records an
-  `explain_status` (`ok`, `partial`, `failed`, `not_requested`,
-  `no_flagged_rows`), `n_explained` and `n_explain_unavailable` (migration 012;
-  `run --json`, `show`).
-  - An explanation failure is a warning (`ExplanationFailedWarning`,
-    `AttributionBackendWarning`) and never fails the group or changes its
-    detection output.
-  - A failed explanation stage makes the run exit `partial`. Under `run.strict`,
-    any explanation warning does too, where it used to fail the group and lose
-    its detection results.
-  - Flagged rows that nothing explained used to show `attribution_kind = "none"`.
-    They are now reported as a failed explanation.
-  - Detection no longer depends on the explain settings. Turning explanations on
-    used to upcast the detectors' input to float64, which shifted their scores
-    slightly. Detection now always uses `features.dtype`.
-- **Structured warnings**: every project warning carries a stable `code` (e.g.
-  `explain.backend_failed`, `explain.rows_beyond_max_rows`), its stage and,
-  where they apply, the detector and rows affected. Warnings are persisted as
-  records in `run_group.warnings_json`, shown with their codes in the run
-  summary, `show` and the report, and listed in `run --json` (`warnings`).
-  Older plain-string warnings read back as `legacy`.
-  - Explanation problems that used to be silent are now warnings: a detector
-    with no attribution method, a failed PCA back-projection (previously only
-    logged), rows beyond `explain.max_rows`, and a reference that includes
-    flagged rows.
-  - Each explained row records `explain_status` (`ok`, `partial`,
-    `unavailable`) and `explain_issue`. An unavailable row's `reason_1` is now
-    null; it used to hold the text "unavailable (...)".
-- **Explanation record**: `attributions.parquet` records, for every reason, the
-  original field, its raw value, the reference value and the row's direction
-  against it, the signed contribution (positive toward anomaly) alongside the
-  magnitude reasons are ranked by, each detector's method, weight and share, the
-  transformed features behind the field, every approximation caveat that applies
-  (`approximation_flags`), the `explainer_version` (`explain@1`) and the
-  `reference_id`. `sorethumb anomalies --detail` shows it, as does each
-  group's "Explanation detail" section in the HTML report (`index.json` carries
-  the records under `attributions`). Ranking and the `reason_<k>` labels are
-  unchanged.
-  - A row is now `partial`, with `explain_issue` naming the detectors, when a
-    detector that counts toward the score says nothing about that row: it is
-    beyond that detector's `explain.max_rows`, or its attribution there is zero.
-    Such rows used to show as `ok`.
-  - A row every source attributes as zero is now `unavailable`
-    (`no_attribution_signal`, warning `explain.no_signal`). It used to list its
-    first fields as reasons, all with zero weight.
-  - A group whose explanation stage fails no longer keeps an earlier attempt's
-    explanation files.
-- **Explanations measured against a consensus-normal reference** (`explain@2`):
-  - The reference is the rows no detector flags, falling back to the less
-    anomalous half of the unflagged rows. It used to be all unflagged rows, or
-    the whole group, flagged rows included, when fewer than 10 were unflagged.
-    When neither population has 10 rows, the flagged rows are `unavailable`
-    (`no_reference`, warning `explain.reference_unavailable`) rather than
-    explained against anomalies.
-  - Isolation Forest attributions use interventional TreeSHAP with that
-    reference as background, with shap's additivity check on. They used to be
-    path-dependent with the check off.
-  - KMeans centroid attributions are divided by each dimension's spread in the
-    reference.
-  - A fitting run saves the reference summary as
-    `models/<run>/<group>/reference.json`; `score --from-run` explains against
-    it, falling back with a warning when there is none.
-  - Explanation values and, in some rows, reasons change from `explain@1`. The
-    flags `treeshap_path_dependent` and `reference_includes_flagged_rows` are
-    gone; `treeshap_path_length` and `reference_lower_half` are new.
-  - Within one attribution source, gradient rows and marginal-deviation rows
-    are judged separately when deciding whether a row's attribution is
-    negligible, so a small real gradient is no longer discarded because the
-    same source attributed a far-out row by marginal deviation.
 - **Real-data policy evidence**: the pre-registered backtest protocol applied to
   KDD Cup 1999 (SA), Covertype (2 vs 4) and a time-ordered credit-card fraud
   dataset, with disjoint development and confirmation slices; results in
@@ -248,46 +222,6 @@ First public release.
   `docs/ensemble-policy.md` gives a recommended setup for users with a review
   budget, and qualifies the default's precision-first rationale: it holds at the
   shipped `"auto"`, and the default's real weakness is unpredictable volume.
-- **Honest rolling-window trends** (`sorethumb history`, report):
-  - Each trend states its basis. Under `composite` with a numeric
-    contamination the rate is set by the review budget, so no change is shown.
-  - The trend ends at the latest *elapsed* period with totals (new
-    `--period`), and shows coverage per window.
-  - Only groups present in both windows are compared (new `--all-groups`
-    turns this off), and the composition is shown.
-  - Rates carry Wilson 95% intervals and the change a Newcombe interval;
-    `Δ %` is withheld below 10 prior anomalies. Low volume is flagged for every
-    window, not only the shortest.
-  - Comparability caveats now also cover mixed library versions, mixed
-    ensemble policies, incomplete coverage and a changed group mix.
-  - The HTML report's trend table is now filled in for runs with a period; it
-    was never populated before.
-  - **Per-period statistics** (migration 013, `period_stats`), recorded with each
-    period's totals:
-    - per original field: missing count, plus percentiles or top values;
-    - per detector: score percentiles and flag count;
-    - the composite threshold, contamination and flag count.
-  - `sorethumb history` adds a **population drift** table. Per window it shows
-    the change in row count and the fields that moved most by Population
-    Stability Index, with conventional heuristic bands. No model is involved,
-    so self-calibration cannot hide or invent a change.
-  - **Anchor run** (`history.anchor_run`). Each period run also scores its
-    rows with one fixed run's models, calibrators and flag rule. `sorethumb
-    history` then splits each window's change in anomaly count exactly into
-    volume, score drift (the rate above a fixed threshold moved) and threshold
-    drift (self-recalibration moved the bar). It also shows anchor-scale score
-    PSI and tail share.
-    - Every fitting run saves its rule (`anchor_rule.json`, plain JSON).
-    - Periods the anchor cannot score are left out, with the reason.
-    - The anchor is not part of the config hash but is part of the run id, so
-      setting it keeps one trend while giving re-run periods fresh runs.
-  - **Four-section `sorethumb history`**: a verdict summary, then
-    1 Population, 2 Scores, 3 Threshold and 4 Counts. Each section has a
-    verdict per window: ok, caveats with reasons, or n/a with why.
-    - `history --json` prints the whole report.
-    - Each period run's HTML report shows the same sections per group, and its
-      `index.json` carries them under `trend`.
-    - New guide: [docs/trends.md](docs/trends.md).
 
 ### Security
 
@@ -324,15 +258,14 @@ First public release.
   `run.config_json`, `RunResult.dataset_uri`, `run --json`, `show`, reports,
   the `httpx` request log line and download errors, with no opt-out. A new
   `source_digest` (SHA-256 of the canonical full URI) on `dataset` and `run`
-  keeps query-differing sources distinguishable. Migration 009 irreversibly
-  scrubs values stored by earlier versions and compacts the database (best
-  effort: skipped with a warning if another process has it open); logs and
-  reports written by earlier versions are not touched (see SECURITY.md). Without
+  keeps query-differing sources distinguishable. A workspace created by a
+  pre-release build is scrubbed when opened (migration 009; see SECURITY.md for
+  what it does not reach). Without
   `source.dataset_id`, a run whose query key set differs from the dataset's
   previous run is refused, naming the `dataset_id` that keeps its history.
 - **Persisted-model trust boundary**: a workspace's fitted models are
-  `joblib`/pickle files, and `score --from-run` and `run.reuse_models` unpickle
-  them with no sandboxing. That is arbitrary code execution, not safe data
+  `joblib`/pickle files, and `score --from-run`, `run.reuse_models` and
+  `history.anchor_run` unpickle them with no sandboxing. That is arbitrary code execution, not safe data
   loading. The SHA-256 digests checked on load catch corruption or a swapped
   file; they are **not** a security boundary against a deliberately malicious
   one. Only use workspaces you created or fully trust. See
@@ -353,10 +286,17 @@ First public release.
   data only and is not a selectable setting. No policy recovers contextual
   anomalies. Full list: "Where things stand" in `docs/ensemble-policy.md`.
 - **Without the `explain` extra**, Isolation Forest explanations are
-  `heuristic` rather than `model_specific`.
+  `heuristic` rather than `model_specific`. Explanations are exact only for ECOD
+  and HBOS; TreeSHAP decomposes Isolation Forest's path length, not its score.
+- **`run.max_memory_mb` is a projection, not a limit**: it refuses a run whose
+  estimated feature-matrix size exceeds it, but cannot cap actual memory use.
+- **A column with exactly three distinct values is dropped** by default
+  (`profiling.near_constant_distinct = 3`, chosen on the benchmark); set it to 2
+  to keep such columns.
 - Every detector fits on the same unlabelled data it scores; there is no
   held-out "known normal" reference. Independent runs are not on a common score
-  scale; use `score --from-run` for a comparable trend. See
+  scale: `sorethumb history` separates score drift from threshold drift only
+  with an anchor run, and `score --from-run` reuses a fitted run's scale. See
   `docs/approximations.md` for this and the other approximations (PCA,
   correlation pruning, row-capped detector training, zero-inflated scaling).
 - **The `swamping` benchmark scenario** found no false-positive inflation from
@@ -369,5 +309,4 @@ First public release.
   workspace needs a local drive, not a network share or synced folder. See
   the README's Supported platforms section.
 
-[Unreleased]: https://github.com/tarne75/sorethumb/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/tarne75/sorethumb/releases/tag/v0.1.0
+[Unreleased]: https://github.com/tarne75/sorethumb/commits/main

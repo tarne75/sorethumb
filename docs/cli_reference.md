@@ -120,8 +120,9 @@ data file, `inspect`, `score`, `backfill`, `explain-plan` without a run ID).
 and creates the workspace at `path/sorethumb-workspace/`, with `run.workdir` in the
 new file already set to that absolute path.
 
-If a `sorethumb.db` exists in the current directory (a workspace made under the
-older default of `.`) and nothing names a workspace, sorethumb refuses to guess:
+If a `sorethumb.db` exists in the current directory (a workspace a pre-release
+build made under its default of `.`) and nothing names a workspace, sorethumb
+refuses to guess:
 pass `--workdir .` to keep using it, or move its contents into
 `./sorethumb-workspace/`.
 
@@ -164,8 +165,8 @@ cache/  tmp/  logs/     downloaded-dataset and feature caches, scratch, rotating
 ```
 
 The `models/` files make a workspace **executable, not just data**: unpickling
-them is arbitrary code execution. `sorethumb score --from-run` and
-`run.reuse_models` load them with no sandboxing, and the SHA-256 digests only
+them is arbitrary code execution. `sorethumb score --from-run`,
+`run.reuse_models` and `history.anchor_run` load them with no sandboxing, and the SHA-256 digests only
 detect accidental corruption, not a crafted file. Treat a workspace you did not
 create yourself like a script you downloaded — see
 [SECURITY.md](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md).
@@ -273,7 +274,7 @@ expected. Edit `sorethumb.toml` and re-run `inspect` until the plan looks right.
 ## `sorethumb run [data_file]`
 
 Run full anomaly detection: load data, build features, train detectors, score,
-explain (SHAP), and write a report.
+explain the flagged rows, and write a report.
 
 ```bash
 # Zero-config — runs with all defaults, workdir = ./sorethumb-workspace/
@@ -290,7 +291,7 @@ sorethumb run /path/to/new_data.csv
 sorethumb run --only-group store_42 --only-group store_99
 sorethumb run --group-filter "^store_(1|2|3)$"
 
-# Override detector selection on the fly (updates sorethumb.toml automatically)
+# Override detector selection for this run only (sorethumb.toml is not changed)
 sorethumb run --detectors if,km,oc,lof
 sorethumb run -d if,ecod,hbos
 ```
@@ -321,7 +322,7 @@ rows at all), which is not treated as an error.
 | `--no-report` | off | Skip HTML/CSV/JSON report generation. |
 | `--only-group STR` | — | Run only these group label(s). Repeatable. |
 | `--group-filter REGEX` | — | Run only groups whose label matches this regex. |
-| `--period YYYY-MM-DD` | — | Force a specific period label (for time-series datasets). |
+| `--period LABEL` | — | Force a specific period label (for time-series datasets): `YYYY-MM-DD` for day, week and month periods, `YYYY-MM-DDTHH` for hours. |
 | `--limit-groups INT` | — | Cap the number of groups processed, applied after `--only-group`/`--group-filter`. Groups are sorted by label first, so the same limit always keeps the same groups. Must be >= 1 when given (exit code 2 otherwise). |
 | `--detectors STR`, `-d` | — | Comma-separated detector aliases, replacing the config list for this invocation only. Aliases: `if`=isolation_forest · `km`=kmeans_distance · `oc`=one_class_svm · `ecod` · `lof` · `hbos`. Full names also accepted. Never modifies `sorethumb.toml`. |
 | `--save-config / --no-save-config` | ask on a terminal, else no | With `data_file` and no `sorethumb.toml`: save (or don't save) this run's settings to `sorethumb.toml` without asking. No effect when the config file already exists. |
@@ -512,7 +513,7 @@ evidence record as `policy_evidence`.
 
 ```bash
 sorethumb show abc12345
-sorethumb show abc12345 --group store_42
+sorethumb show abc12345 --group 3fa9c2e1d0b74c55a8e6f2b1c9d04e17   # a group key, as listed by show
 sorethumb show abc12345 --json
 ```
 
@@ -527,7 +528,7 @@ sorethumb show abc12345 --json
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--config`, `--workdir`, `--log-level` | — | See [Common options](#common-options). |
-| `--group STR` | — | Show detail for a specific group key only. |
+| `--group KEY` | — | Show detail for one group, by its group key (the digest in the "Group key" column; not the label). |
 | `--json` | off | Machine-readable JSON. |
 
 ---
@@ -593,7 +594,7 @@ period runs. See [Trends](trends.md) for what each figure means and its limits.
 ```bash
 sorethumb history
 sorethumb history --window 7 --window 28   # two rolling windows
-sorethumb history --group store_42
+sorethumb history --group 3fa9c2e1d0b74c55a8e6f2b1c9d04e17   # a group key, from sorethumb show
 sorethumb history --period 2026-09-30      # end the trend at a given period
 sorethumb history --json                   # the whole report as JSON
 ```
@@ -633,7 +634,7 @@ group, and its `index.json` carries them under `trend`.
 |--------|---------|-------------|
 | `--config`, `--workdir`, `--log-level` | — | See [Common options](#common-options). |
 | `--window INT` | from config | Rolling window size(s) in periods. Repeatable. |
-| `--group STR` | — | Limit trend display to a specific group. |
+| `--group KEY` | — | Limit the trend to one group, by its group key (as `sorethumb show` lists it; not the label). |
 | `--period LABEL` | latest elapsed period | Period label the trend ends at. |
 | `--all-groups` | off | Sum every group in each window, not only groups present in both. |
 | `--json` | off | The whole report as one JSON document on stdout. |
@@ -801,7 +802,7 @@ files and database rows together — never one without the other.
 
 ```bash
 sorethumb workspace prune --dry-run     # preview what would be removed
-sorethumb workspace prune               # remove artefacts older than 90 days
+sorethumb workspace prune               # older than run.retention_days (default 90)
 sorethumb workspace prune --days 30
 ```
 
@@ -810,7 +811,7 @@ sorethumb workspace prune --days 30
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--config`, `--workdir`, `--log-level` | — | See [Common options](#common-options). |
-| `--days INT` | 90 | Retention window; artefacts older than this are removed. |
+| `--days INT` | `run.retention_days` from the config, else 90 | Retention window; artefacts older than this are removed. |
 | `--dry-run` | off | Preview without removing anything. |
 
 ---
@@ -830,14 +831,17 @@ sorethumb workspace vacuum
 
 ### `sorethumb workspace migrate`
 
-Apply pending schema migrations to the workspace database. Run this after
-upgrading sorethumb to a new minor version.
+Apply pending schema migrations to the workspace database. Every command does
+this anyway when it opens a workspace, so this is only needed to upgrade a
+workspace without running anything else. If no workspace exists at the path, it
+creates one.
 
 ```bash
 sorethumb workspace migrate
 ```
 
-**Options:** `--config`, `--workdir`, `--log-level`
+**Options:** `--config`, `--workdir`, `--log-level`, and `--dry-run` (apply
+nothing; it does not list the pending migrations).
 
 ---
 
@@ -901,13 +905,16 @@ sorethumb run --log-level INFO
 sorethumb anomalies --top 50
 ```
 
-### Iterate on column config without retraining
+### Iterate on column config
 
 ```bash
 # edit sorethumb.toml: adjust [columns] or [profiling]
-sorethumb inspect                    # re-check column plan
-sorethumb run --force                # re-run (force because ledger has a result)
+sorethumb inspect                    # re-check the column plan; nothing is trained
+sorethumb run                        # a changed config is a new run, so no --force needed
 ```
+
+`--force` is only for re-running an *unchanged* configuration on the same data,
+whose groups are already complete.
 
 ### Score new data against existing models
 

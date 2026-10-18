@@ -106,3 +106,21 @@ def test_snippet_bash_check_catches_a_bogus_command_and_flag() -> None:
 
 def test_snippet_toml_check_catches_an_invalid_config_value() -> None:
     assert crs._check_toml('[scoring]\ncombination = "banana"\n') is not None
+
+
+def test_every_doc_toml_and_bash_block_checks_out() -> None:
+    """Not only the README: docs/*.md, SECURITY.md and CONTRIBUTING.md examples stay valid too."""
+    docs = [*sorted((_ROOT / "docs").glob("*.md")), _ROOT / "SECURITY.md", _ROOT / "CONTRIBUTING.md"]
+    problems = []
+    for doc in docs:
+        for line_no, lang, body in crs._blocks(doc.read_text(encoding="utf-8")):
+            if lang == "toml" and (p := crs._check_toml(body)) is not None:
+                problems.append(f"{doc.name}:{line_no}: {p}")
+            elif lang == "bash":
+                problems += [f"{doc.name}:{line_no}: {p}" for p in crs._check_bash(body)]
+    assert problems == []
+
+
+def test_a_usage_synopsis_is_not_an_invocation_but_a_bad_flag_still_is() -> None:
+    assert crs._check_bash("sorethumb [OPTIONS] COMMAND [ARGS...]") == []
+    assert any("--nope" in p for p in crs._check_bash("sorethumb history --nope"))

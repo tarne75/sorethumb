@@ -293,7 +293,11 @@ class FeaturesConfig(BaseModel):
     )
     missing_indicators: bool = Field(
         True,
-        description="Emit '<col>__is_missing' boolean features for high-null columns.",
+        description=(
+            "Emit '<col>__is_missing' features for columns whose null ratio exceeds "
+            "profiling.null_ratio_flag (by default, any column with a null), including high-null "
+            "columns that are otherwise dropped."
+        ),
     )
     array_features: bool = Field(
         True,
@@ -302,7 +306,7 @@ class FeaturesConfig(BaseModel):
     time_derivatives: list[str] = Field(
         default_factory=lambda: ["hour", "dayofweek", "day", "month"],
         description=(
-            "Temporal derivatives to extract from the chosen time column. "
+            "Derived features to extract from each date/time column (not only time_column). "
             "Supported: hour, dayofweek, day, month, year, quarter."
         ),
     )
@@ -478,19 +482,25 @@ class ExplainConfig(BaseModel):
     max_rows: int = Field(
         5000,
         ge=1,
-        description="Explain at most this many rows; rows beyond the cap are skipped.",
+        description=(
+            "Rows (most anomalous first) the gradient and KernelSHAP methods explain per group. "
+            "Beyond it those detectors contribute nothing to a row's explanation; the other methods "
+            "explain every flagged row."
+        ),
     )
     kernel_shap: bool = Field(
         False,
         description=(
-            "Fall back to KernelSHAP for models where TreeSHAP is unavailable. "
-            "Much slower; sets a FallbackAttributionWarning."
+            "Explain One-Class SVM and LOF with KernelSHAP (needs the explain extra) instead of "
+            "finite-difference gradients. Much slower; keep explain.max_rows small. Other "
+            "detectors are unaffected."
         ),
     )
     permutation_importance: bool = Field(
         False,
         description=(
-            "Also compute permutation importance as a cross-check. Roughly doubles explanation runtime."
+            "Also compute permutation importance per detector as a cross-check, written to the log "
+            "only. Roughly doubles explanation runtime."
         ),
     )
 
@@ -510,7 +520,10 @@ class RunConfig(BaseModel):
     seed: int = Field(42, description="Global random seed for reproducible results.")
     strict: bool = Field(
         False,
-        description="Promote all SorethumbWarnings to errors. Always active in the test suite.",
+        description=(
+            "Promote every sorethumb warning to an error. Explanation warnings make the run exit "
+            "partial instead of failing the group, so detection output is never lost."
+        ),
     )
     max_memory_mb: int = Field(
         8192,
@@ -538,13 +551,18 @@ class RunConfig(BaseModel):
     reuse_models: bool = Field(
         False,
         description=(
-            "If a matching model artefact exists in workdir, skip retraining. Useful for score-forward runs."
+            "When this run already has a saved model for a group and detector (an earlier "
+            "attempt of the same run, or a --force re-run), score with it instead of fitting "
+            "again. score --from-run always reuses its source run's models, whatever this says."
         ),
     )
     retention_days: int = Field(
         90,
         ge=1,
-        description="Prune run artefacts older than this many days from workdir.",
+        description=(
+            "Default retention, in days, for sorethumb workspace prune (its --days overrides it). "
+            "Nothing is pruned automatically."
+        ),
     )
     log_level: str = Field(
         "INFO",
@@ -575,22 +593,35 @@ class HistoryConfig(BaseModel):
     )
     roll_non_business: bool = Field(
         True,
-        description="Include weekends and holidays when computing rolling baselines.",
+        description=(
+            "Treat only Monday-Friday as periods (day granularity): a run on a weekend is "
+            "filed under the preceding Friday, backfill skips weekend days, and a trend window "
+            "does not expect them. False makes every calendar day a period. There is no "
+            "holiday calendar."
+        ),
     )
     lookback_periods: int = Field(
         28,
         ge=1,
-        description="Number of historical periods used to build the baseline.",
+        description=(
+            "How far back sorethumb backfill looks for missing periods once history exists, in "
+            "periods before the current one."
+        ),
     )
     bootstrap_periods: int = Field(
         28,
         ge=1,
-        description="Minimum periods of history required before history scoring activates.",
+        description=(
+            "How many periods the first sorethumb backfill fills, when no period has been "
+            "completed yet under this configuration."
+        ),
     )
     max_backfill_periods: int = Field(
         30,
         ge=0,
-        description="Maximum periods to backfill when catch-up runs are requested.",
+        description=(
+            "The most periods one sorethumb backfill runs (the most recent ones); --max-periods overrides it."
+        ),
     )
     low_volume_threshold: int = Field(
         100,

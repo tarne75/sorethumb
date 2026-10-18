@@ -2,7 +2,9 @@
 
 The 0.1.0 notes once listed a ``benchmark`` command after it had moved to
 ``scripts/run_benchmark.py``. Release notes are what PyPI users read first, so
-this checks the newest released section of CHANGELOG.md against the Typer app:
+this checks the newest released section of CHANGELOG.md (before the first tag,
+``[Unreleased]``, which the release-state commit renames into it) against the
+Typer app:
 
 - every backticked ``sorethumb <command> [<subcommand>]`` names a real command
   (and, for a command group, a real subcommand);
@@ -30,13 +32,17 @@ _INLINE_INVOCATION = re.compile(r"`sorethumb ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?"
 _CLI_ITEM = re.compile(r"`([a-z][a-z-]*)`(?:\s*\(([^)]*)\))?")
 
 
+_UNRELEASED_HEADING = re.compile(r"^## \[Unreleased\][^\n]*$", re.MULTILINE)
+
+
 def _latest_release_section() -> str:
+    """The newest released section, or -- before the first tag -- [Unreleased], which becomes it."""
     path = _ROOT / "CHANGELOG.md"
     if not path.is_file():
         pytest.skip("CHANGELOG.md is not present")
     text = path.read_text(encoding="utf-8")
-    match = _RELEASE_HEADING.search(text)
-    assert match is not None, "CHANGELOG.md has no released '## [X.Y.Z]' section"
+    match = _RELEASE_HEADING.search(text) or _UNRELEASED_HEADING.search(text)
+    assert match is not None, "CHANGELOG.md has neither a '## [X.Y.Z]' nor a '## [Unreleased]' section"
     nxt = re.search(r"^## \[", text[match.end() :], flags=re.MULTILINE)
     return text[match.end() : match.end() + nxt.start()] if nxt else text[match.end() :]
 
