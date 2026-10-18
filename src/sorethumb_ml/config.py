@@ -596,8 +596,8 @@ class HistoryConfig(BaseModel):
         100,
         ge=1,
         description=(
-            "The shortest rolling window is flagged low-volume (shown in the HTML "
-            "report) when its current population is below this -- informational "
+            "A rolling window is flagged low-volume (in sorethumb history and the HTML "
+            "report) when its current or prior population is below this -- informational "
             "only; low-volume periods are still included in every aggregate."
         ),
     )

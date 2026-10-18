@@ -592,7 +592,45 @@ of completed runs.
 sorethumb history
 sorethumb history --window 7 --window 28   # two rolling windows
 sorethumb history --group store_42
+sorethumb history --period 2026-09-30      # end the trend at a given period
 ```
+
+**What the numbers are.** Every period is fitted and calibrated on its own rows,
+so the trend compares independently calibrated snapshots. Each window compares
+the current *w* periods with the *w* before them:
+
+- **Basis.**
+  - With `combination = "composite"` and a numeric `contamination`, every period
+    flags the same fraction by construction. The rate is set by the review
+    budget, so the change is shown as "set by budget" rather than as a number.
+  - Otherwise each period flags against boundaries fitted to its own rows. A
+    change mixes real change with how far each period's boundary moved: a
+    relative signal, not an absolute anomaly level.
+  - For a single fixed scale, score every period against one run with
+    `sorethumb score --from-run RUN_ID`.
+- **Coverage.** Periods with totals out of periods expected, for the current
+  and prior windows. Weekend days are not expected when
+  `history.roll_non_business` is set.
+- **Groups.** Only groups present in both windows are compared, so a group
+  appearing or disappearing cannot move the rate on its own. `1 (+1/-0)`
+  means one group compared, one only in the current window, none only in the
+  prior; those left out are not summed. `--all-groups` sums every group instead.
+- **Rates and change.** Rates are volume-weighted, with Wilson 95% intervals.
+  The change (percentage points) has a Newcombe 95% interval, and `*` marks an
+  interval that excludes 0. The intervals cover sampling noise only, not the
+  boundary movement above. `Δ %` is withheld when the prior window has fewer
+  than 10 anomalies.
+- **Caveats** name anything that makes a comparison unreliable. The notes under
+  the table explain each one shown:
+  - `other_config_in_span`: another configuration has totals in the span.
+  - `mixed_library_versions`, `mixed_ensemble_policies`.
+  - `incomplete_current`, `incomplete_prior`.
+  - `group_mix_changed`.
+  - `low_volume`: below `history.low_volume_threshold`.
+
+The trend ends at the most recent period with totals that has already ended, not
+at the period in progress. If the only totals are for the period in progress, it
+says so.
 
 **Options:**
 
@@ -601,6 +639,11 @@ sorethumb history --group store_42
 | `--config`, `--workdir`, `--log-level` | — | See [Common options](#common-options). |
 | `--window INT` | from config | Rolling window size(s) in periods. Repeatable. |
 | `--group STR` | — | Limit trend display to a specific group. |
+| `--period LABEL` | latest elapsed period | Period label the trend ends at. |
+| `--all-groups` | off | Sum every group in each window, not only groups present in both. |
+
+The HTML report of a run with a period shows the same windows per group, ending
+at that run's period.
 
 ---
 

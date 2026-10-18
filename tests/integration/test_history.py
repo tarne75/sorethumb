@@ -503,7 +503,7 @@ class TestRollingWindows:
         assert r.current_anomaly_count == 5
         assert r.current_population == 1000
 
-    def test_low_volume_flag_on_shortest_window(self, ws):
+    def test_low_volume_flag_is_per_window(self, ws):
         with ws:
             self._setup(ws)
             gk = make_group_key({"g": "A"})
@@ -518,8 +518,9 @@ class TestRollingWindows:
                 low_volume_threshold=100,
             )
         by_w = {r.window_size: r for r in results}
+        # Every window whose population is below the threshold says so, not only the shortest.
         assert by_w[1].low_volume is True
-        assert by_w[7].low_volume is False
+        assert by_w[7].low_volume is True
 
     def test_calibration_break_detects_other_config_hash_in_window(self, ws):
         """calibration_break is real provenance now: it fires when this span

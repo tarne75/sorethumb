@@ -1092,6 +1092,38 @@ class Store:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def period_labels_with_totals(self, dataset_fp: str, config_hash: str) -> list[str]:
+        """Return the distinct period labels that have totals for this dataset and configuration, ascending."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT period_label FROM totals WHERE dataset_fp=? AND config_hash=? ORDER BY period_label",
+            [dataset_fp, config_hash],
+        ).fetchall()
+        return [str(r["period_label"]) for r in rows]
+
+    def run_period_labels(self, run_id: str, group_key: str) -> list[str]:
+        """Return the period labels whose totals for *group_key* were written by *run_id* (empty once superseded)."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT period_label FROM totals WHERE run_id=? AND group_key=? ORDER BY period_label",
+            [run_id, group_key],
+        ).fetchall()
+        return [str(r["period_label"]) for r in rows]
+
+    def run_provenance(self, run_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Return ``{run_id: {"library_version", "ensemble_policy"}}`` for the given runs (unknown ids omitted)."""
+        if not run_ids:
+            return {}
+        ph = ",".join("?" * len(run_ids))
+        rows = self._conn.execute(
+            f"SELECT run_id, library_version, ensemble_policy FROM run WHERE run_id IN ({ph})", run_ids
+        ).fetchall()
+        return {
+            str(r["run_id"]): {
+                "library_version": r["library_version"],
+                "ensemble_policy": r["ensemble_policy"],
+            }
+            for r in rows
+        }
+
     def other_config_hashes_for_periods(
         self, dataset_fp: str, period_labels: list[str], config_hash: str
     ) -> set[str]:

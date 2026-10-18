@@ -1755,8 +1755,27 @@ def history(
         list[int] | None, typer.Option("--window", help="Rolling window sizes (e.g. --window 7 --window 28).")
     ] = None,
     group_key: Annotated[str | None, typer.Option("--group", help="Limit to a specific group key.")] = None,
+    period: Annotated[
+        str | None,
+        typer.Option(
+            "--period",
+            help="Period label the trend ends at (default: the most recent period with totals that has ended).",
+        ),
+    ] = None,
+    all_groups: Annotated[
+        bool,
+        typer.Option(
+            "--all-groups",
+            help="Sum every group in each window, not only groups present in both (risks group-mix artefacts).",
+        ),
+    ] = False,
 ) -> None:
     """Show rolling-window anomaly trends for the configured dataset.
+
+    Each period is fitted and calibrated on its own rows, so the trend compares
+    independently calibrated snapshots: a relative signal, not an absolute
+    anomaly level. Each window shows its coverage, the groups compared, 95%
+    intervals and anything that makes the comparison unreliable.
 
     With no sorethumb.toml (and no --config), shows the dataset and
     configuration of the workspace's most recent run, using that run's own
@@ -1800,11 +1819,26 @@ def history(
         from datetime import datetime  # noqa: PLC0415
 
         from sorethumb_ml.history.periods import resolve_period  # noqa: PLC0415
-        from sorethumb_ml.history.windows import compute_rolling_windows  # noqa: PLC0415
+        from sorethumb_ml.history.windows import (  # noqa: PLC0415
+            compute_rolling_windows,
+            default_reference_label,
+            trend_basis,
+        )
 
-        ref = datetime.now(UTC)
-        _, _, ref_label = resolve_period(ref, cfg.history.period_granularity, cfg.history.roll_non_business)
+        _, _, now_label = resolve_period(
+            datetime.now(UTC), cfg.history.period_granularity, cfg.history.roll_non_business
+        )
+        in_progress = False
+        ref_label: str | None = period
+        if ref_label is None:
+            ref_label, in_progress = default_reference_label(ws.store, dataset_fp, config_hash, now_label)
+        if ref_label is None:
+            console.print(
+                f"[yellow]No history available yet for this dataset under config {_e(config_hash[:8])}.[/yellow]"
+            )
+            raise typer.Exit(0)
 
+        basis = trend_basis(cfg.scoring.combination, cfg.scoring.contamination)
         group_keys = [group_key] if group_key else None
         window_results = compute_rolling_windows(
             ws.store,
@@ -1814,41 +1848,100 @@ def history(
             _windows,
             cfg.history.period_granularity,
             group_keys=group_keys,
+            low_volume_threshold=cfg.history.low_volume_threshold,
+            basis=basis,
+            roll_non_business=cfg.history.roll_non_business,
+            match_groups=not all_groups,
         )
 
-        if not window_results:
-            console.print(
-                f"[yellow]No history available yet for this dataset under config {_e(config_hash[:8])}.[/yellow]"
-            )
-            raise typer.Exit(0)
+        console.print(_trend_table(window_results, ref_label=ref_label, config_hash=config_hash))
+        for line in _trend_notes(window_results, basis=basis, in_progress=in_progress):
+            console.print(line, soft_wrap=False, highlight=False)
 
-        table = Table(
-            title=f"Rolling windows (ref={_e(ref_label)}, config={_e(config_hash[:8])})", show_header=True
+
+def _fmt_pct(v: float | None) -> str:
+    return f"{v * 100:.2f}" if v is not None else "—"
+
+
+def _fmt_ci(ci: tuple[float, float] | None) -> str:
+    return f" [{ci[0] * 100:.2f}, {ci[1] * 100:.2f}]" if ci is not None else ""
+
+
+def _trend_table(window_results: list[Any], *, ref_label: str, config_hash: str) -> Table:
+    """Render one row per window: counts, rates with 95% intervals, change, coverage and caveats."""
+    table = Table(
+        title=f"Rolling windows (ending {_e(ref_label)}, config={_e(config_hash[:8])})", show_header=True
+    )
+    for name, justify in (
+        ("Window", "left"),
+        ("Coverage", "right"),
+        ("Groups", "right"),
+        ("Cur count / pop", "right"),
+        ("Cur rate % [95% CI]", "right"),
+        ("Prior rate % [95% CI]", "right"),
+        ("Δ pp [95% CI]", "right"),
+        ("Δ %", "right"),
+        ("Caveats", "left"),
+    ):
+        table.add_column(name, justify=justify)  # type: ignore[arg-type]
+    for wr in window_results:
+        groups = str(wr.groups_matched)
+        if wr.groups_current_only or wr.groups_prior_only:
+            groups += f" (+{wr.groups_current_only}/-{wr.groups_prior_only})"
+        if wr.basis == "budget":
+            change = "set by budget"
+        elif wr.absolute_change is None:
+            change = "—"
+        else:
+            change = f"{wr.absolute_change * 100:+.2f}{_fmt_ci(wr.change_ci)}" + (
+                " *" if wr.change_significant else ""
+            )
+        caveats = [*wr.comparability, *(["low_volume"] if wr.low_volume else [])]
+        _add_row(
+            table,
+            str(wr.window_size),
+            f"{wr.current_periods_covered}/{wr.current_periods_expected} · "
+            f"{wr.prior_periods_covered}/{wr.prior_periods_expected}",
+            groups,
+            f"{wr.current_anomaly_count} / {wr.current_population}",
+            _fmt_pct(wr.current_rate) + _fmt_ci(wr.current_rate_ci),
+            _fmt_pct(wr.prior_rate) + _fmt_ci(wr.prior_rate_ci),
+            change,
+            _fmt_pct(wr.pct_change) if wr.basis != "budget" else "—",
+            ", ".join(caveats),
         )
-        table.add_column("Window", style="cyan")
-        table.add_column("Cur count", justify="right")
-        table.add_column("Cur pop", justify="right")
-        table.add_column("Cur rate %", justify="right")
-        table.add_column("Prior rate %", justify="right")
-        table.add_column("Δ %", justify="right")
-        table.add_column("Cal break", style="red")
+    return table
 
-        for wr in window_results:
 
-            def _pct(v: float | None) -> str:
-                return f"{v * 100:.2f}" if v is not None else "—"
+def _trend_notes(window_results: list[Any], *, basis: str, in_progress: bool) -> list[str]:
+    """Explain what the table's numbers mean, and every caveat it shows, in plain words."""
+    from sorethumb_ml.history.windows import COMPARABILITY  # noqa: PLC0415
 
-            _add_row(
-                table,
-                str(wr.window_size),
-                str(wr.current_anomaly_count),
-                str(wr.current_population),
-                _pct(wr.current_rate),
-                _pct(wr.prior_rate),
-                _pct(wr.pct_change),
-                "⚡ yes" if wr.calibration_break else "",
-            )
-        console.print(table)
+    notes: list[str] = []
+    if in_progress:
+        notes.append(
+            "[yellow]The only period with totals is still in progress; it may be incomplete.[/yellow]"
+        )
+    if basis == "budget":
+        notes.append(
+            "  [dim]Rates are set by the review budget (composite with a numeric contamination flags the "
+            "same fraction every period), so the change between windows is not shown.[/dim]"
+        )
+    else:
+        notes.append(
+            "  [dim]Each period is fitted and calibrated on its own rows: a change mixes real change with "
+            "how far each period's own boundary moved. Intervals cover sampling noise only. "
+            "* = the 95% interval for the change excludes 0.[/dim]"
+        )
+    notes.append(
+        "  [dim]Coverage: periods with totals / periods expected, current · prior. Groups: compared in "
+        "both windows (+ only in current / - only in prior; both left out).[/dim]"
+    )
+    if any(wr.low_volume for wr in window_results):
+        notes.append("  [dim]low_volume: a window's population is below history.low_volume_threshold.[/dim]")
+    used = sorted({c for wr in window_results for c in wr.comparability})
+    notes.extend(f"  [dim]{_e(code)}: {_e(COMPARABILITY[code])}.[/dim]" for code in used)
+    return notes
 
 
 # ---------------------------------------------------------------------------

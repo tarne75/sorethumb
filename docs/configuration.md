@@ -139,7 +139,7 @@ so trivial changes do not invalidate cached artefacts.
 | `history.lookback_periods` | int | 28 | Number of historical periods used to build the baseline. |
 | `history.bootstrap_periods` | int | 28 | Minimum periods of history required before history scoring activates. |
 | `history.max_backfill_periods` | int | 30 | Maximum periods to backfill when catch-up runs are requested. |
-| `history.low_volume_threshold` | int | 100 | The shortest rolling window is flagged low-volume (shown in the HTML report) when its current population is below this -- informational only; low-volume periods are still included in every aggregate. |
+| `history.low_volume_threshold` | int | 100 | A rolling window is flagged low-volume (in sorethumb history and the HTML report) when its current or prior population is below this -- informational only; low-volume periods are still included in every aggregate. |
 
 ## `[report]` — Output report settings (cosmetic; excluded from config hash).
 

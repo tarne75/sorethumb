@@ -248,6 +248,20 @@ First public release.
   `docs/ensemble-policy.md` gives a recommended setup for users with a review
   budget, and qualifies the default's precision-first rationale: it holds at the
   shipped `"auto"`, and the default's real weakness is unpredictable volume.
+- **Honest rolling-window trends** (`sorethumb history`, report):
+  - Each trend states its basis. Under `composite` with a numeric
+    contamination the rate is set by the review budget, so no change is shown.
+  - The trend ends at the latest *elapsed* period with totals (new
+    `--period`), and shows coverage per window.
+  - Only groups present in both windows are compared (new `--all-groups`
+    turns this off), and the composition is shown.
+  - Rates carry Wilson 95% intervals and the change a Newcombe interval;
+    `Δ %` is withheld below 10 prior anomalies. Low volume is flagged for every
+    window, not only the shortest.
+  - Comparability caveats now also cover mixed library versions, mixed
+    ensemble policies, incomplete coverage and a changed group mix.
+  - The HTML report's trend table is now filled in for runs with a period; it
+    was never populated before.
 
 ### Security
 

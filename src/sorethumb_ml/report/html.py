@@ -315,7 +315,7 @@ def _group_section(grp: GroupSection, idx: int, *, csv_written: bool) -> str:
 
     # Windows table
     if grp.window_results:
-        windows_html = _windows_table(grp.window_results) + f"<p><small>{_TREND_NOTE}</small></p>"
+        windows_html = _windows_table(grp.window_results) + _windows_notes(grp.window_results)
         parts[-1] = parts[-1].replace("</div>", windows_html + "</div>")
 
     # Contrast tab
@@ -473,40 +473,78 @@ def _plan_table(dropped: list[dict[str, str]]) -> str:
 
 
 def _windows_table(window_results: list[Any]) -> str:
+    def _pct(v: float | None) -> str:
+        return f"{v * 100:.2f}" if v is not None else "—"
+
+    def _ci(ci: tuple[float, float] | None) -> str:
+        return f" [{ci[0] * 100:.2f}, {ci[1] * 100:.2f}]" if ci is not None else ""
+
     headers = [
         "Window",
-        "Cur count",
-        "Cur pop",
-        "Cur rate %",
-        "Prior rate %",
-        "Δ abs",
+        "Coverage",
+        "Groups",
+        "Cur count / pop",
+        "Cur rate % [95% CI]",
+        "Prior rate % [95% CI]",
+        "Δ pp [95% CI]",
         "Δ %",
-        "Low vol",
-        "Cal break",
+        "Caveats",
     ]
     header_html = "<tr>" + "".join(f"<th>{html.escape(h)}</th>" for h in headers) + "</tr>"
     rows: list[str] = []
     for wr in window_results:
-
-        def _fmt_pct(v: float | None) -> str:
-            return f"{v * 100:.2f}" if v is not None else "—"
-
-        def _fmt_f(v: float | None) -> str:
-            return f"{v:.4f}" if v is not None else "—"
-
+        if wr.basis == "budget":
+            change = "set by budget"
+        elif wr.absolute_change is None:
+            change = "—"
+        else:
+            change = f"{wr.absolute_change * 100:+.2f}{_ci(wr.change_ci)}" + (
+                " *" if wr.change_significant else ""
+            )
+        groups = str(wr.groups_matched)
+        if wr.groups_current_only or wr.groups_prior_only:
+            groups += f" (+{wr.groups_current_only}/-{wr.groups_prior_only})"
         cells = [
             str(wr.window_size),
-            str(wr.current_anomaly_count),
-            str(wr.current_population),
-            _fmt_pct(wr.current_rate),
-            _fmt_pct(wr.prior_rate),
-            _fmt_f(wr.absolute_change),
-            _fmt_pct(wr.pct_change),
-            "yes" if wr.low_volume else "no",
-            "⚡ yes" if wr.calibration_break else "no",
+            f"{wr.current_periods_covered}/{wr.current_periods_expected} · "
+            f"{wr.prior_periods_covered}/{wr.prior_periods_expected}",
+            groups,
+            f"{wr.current_anomaly_count} / {wr.current_population}",
+            _pct(wr.current_rate) + _ci(wr.current_rate_ci),
+            _pct(wr.prior_rate) + _ci(wr.prior_rate_ci),
+            change,
+            _pct(wr.pct_change) if wr.basis != "budget" else "—",
+            ", ".join([*wr.comparability, *(["low_volume"] if wr.low_volume else [])]),
         ]
         rows.append("<tr>" + "".join(f"<td>{html.escape(c)}</td>" for c in cells) + "</tr>")
     return (
         "<h2>Rolling windows</h2>"
         "<table><thead>" + header_html + "</thead><tbody>" + "".join(rows) + "</tbody></table>"
     )
+
+
+def _windows_notes(window_results: list[Any]) -> str:
+    """Explain the basis, the columns and every caveat the table shows (each note is safe HTML)."""
+    from sorethumb_ml.history.windows import COMPARABILITY  # noqa: PLC0415
+
+    budget = any(wr.basis == "budget" for wr in window_results)
+    notes = [
+        html.escape(
+            "Rates are set by the review budget (composite with a numeric contamination flags the same "
+            "fraction every period), so the change between windows is not shown."
+        )
+        if budget
+        else _TREND_NOTE
+        + html.escape(
+            " Intervals cover sampling noise only. * = the 95% interval for the change excludes 0."
+        ),
+        html.escape(
+            "Coverage: periods with totals / periods expected, current · prior. Groups: compared in both "
+            "windows (+ only in current / - only in prior; both left out)."
+        ),
+    ]
+    if any(wr.low_volume for wr in window_results):
+        notes.append(html.escape("low_volume: a window's population is below history.low_volume_threshold."))
+    used = sorted({c for wr in window_results for c in wr.comparability})
+    notes.extend(html.escape(f"{code}: {COMPARABILITY[code]}.") for code in used)
+    return "".join(f"<p><small>{n}</small></p>" for n in notes)
