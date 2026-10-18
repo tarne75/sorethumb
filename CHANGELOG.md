@@ -203,8 +203,10 @@ First public release.
   magnitude reasons are ranked by, each detector's method, weight and share, the
   transformed features behind the field, every approximation caveat that applies
   (`approximation_flags`), the `explainer_version` (`explain@1`) and the
-  `reference_id`. `sorethumb anomalies --detail` shows it. Ranking and the
-  `reason_<k>` labels are unchanged.
+  `reference_id`. `sorethumb anomalies --detail` shows it, as does each
+  group's "Explanation detail" section in the HTML report (`index.json` carries
+  the records under `attributions`). Ranking and the `reason_<k>` labels are
+  unchanged.
   - A row is now `partial`, with `explain_issue` naming the detectors, when a
     detector that counts toward the score says nothing about that row: it is
     beyond that detector's `explain.max_rows`, or its attribution there is zero.

@@ -95,6 +95,7 @@ from sorethumb_ml.store.models import (
 )
 from sorethumb_ml.store.results import (
     file_digest,
+    read_attributions,
     read_results,
     remove_explanation_outputs,
     results_path,
@@ -2876,6 +2877,7 @@ def _render_report_or_reason(
                     records=rdf if rdf is not None else pl.DataFrame(),
                     plan_dropped=dropped,
                     warnings=warns,
+                    attributions=read_attributions(ws, run_id, gk),
                 )
             )
 

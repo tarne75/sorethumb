@@ -538,6 +538,14 @@ inference is re-run. Use it after changing `[report]` configuration, or to
 restore a report that was deleted. Re-rendering the same run reproduces the
 same file.
 
+Each group's Records tab ends with an **Explanation detail** section: one
+collapsed block per flagged row, most anomalous first, holding the record
+behind each reason (value against the reference, signed contribution, each
+detector's method and share, transformed features, approximation flags), and a
+key to the flags it uses. Rows with no explanation say why. `index.json`
+carries the same records per group under `attributions`. A run without
+explanations renders neither.
+
 ```bash
 sorethumb report              # re-render the latest run
 sorethumb report abc12345

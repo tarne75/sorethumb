@@ -77,6 +77,9 @@ class GroupSection:
     contrast: pl.DataFrame | None = None
     window_results: list[Any] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # attributions.parquet: the record behind each reason (None when the run
+    # has no explanations, or predates them).
+    attributions: pl.DataFrame | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +157,7 @@ def _write_json_report(run_meta: RunMeta, groups: list[GroupSection], out_dir: P
                 "n_records": len(g.records),
                 "records": g.records.to_dicts(),
                 "warnings": g.warnings,
+                **({"attributions": g.attributions.to_dicts()} if g.attributions is not None else {}),
             }
             for g in groups
         ],
@@ -187,6 +191,13 @@ tr:nth-child(even) { background: #fafafa; }
 .provenance pre { margin: 0; white-space: pre-wrap; }
 .dropped-col { color: #888; font-size: 0.78rem; }
 .csv-link { font-size: 0.82rem; }
+.reason-detail details { margin: 0.25rem 0; }
+.reason-detail summary { cursor: pointer; font-size: 0.85rem; }
+.reason-detail .meta { color: #666; font-size: 0.78rem; }
+.reason-detail .pos { color: #a33; }
+.reason-detail .neg { color: #276; }
+.reason-detail dt { font-family: monospace; font-size: 0.8rem; margin-top: 0.3rem; }
+.reason-detail dd { font-size: 0.8rem; margin-left: 1rem; }
 """
 
 _JS = """
@@ -297,6 +308,7 @@ def _group_section(grp: GroupSection, idx: int, *, csv_written: bool) -> str:
         else ""
     )
     records_html = _df_to_table(grp.records) if len(grp.records) > 0 else "<p>No anomalies flagged.</p>"
+    records_html += _reason_detail(grp)
     parts.append(
         f'<div class="tab-panel active" data-group="{idx}" data-tab="records">{csv_link}{records_html}</div>'
     )
@@ -319,6 +331,123 @@ def _group_section(grp: GroupSection, idx: int, *, csv_written: bool) -> str:
     parts.append(f'<div class="tab-panel" data-group="{idx}" data-tab="plan">{plan_html}</div>')
 
     return "\n".join(parts)
+
+
+def _fmt_signed(v: Any) -> str:
+    if v is None:
+        return ""
+    cls = "pos" if v > 0 else "neg" if v < 0 else ""
+    return f'<span class="{cls}">{html.escape(f"{v:+.4g}")}</span>'
+
+
+def _cell(v: Any) -> str:
+    return html.escape(str(v)) if v is not None else "—"
+
+
+def _reason_detail(grp: GroupSection) -> str:
+    """Render the record behind each reason, one collapsed block per flagged row, most anomalous first.
+
+    Empty when the group has no attribution records, so a run without
+    explanations renders exactly as before.
+    """
+    from sorethumb_ml.explain.record import APPROXIMATION_FLAGS  # noqa: PLC0415
+
+    att = grp.attributions
+    if att is None or len(att) == 0 or "row_id" not in grp.records.columns:
+        return ""
+    by_row: dict[Any, list[dict[str, Any]]] = {}
+    for rec in att.sort(["row_id", "reason_rank"]).iter_rows(named=True):
+        by_row.setdefault(rec["row_id"], []).append(rec)
+    rows = grp.records.sort("rank") if "rank" in grp.records.columns else grp.records
+    first = att.row(0, named=True)
+    parts = [
+        '<div class="reason-detail"><h2>Explanation detail</h2>',
+        '<p class="meta">What produced each reason: the field\'s value against the reference '
+        "population's typical value, its signed contribution (positive pushes toward anomaly), "
+        "each detector's method and share, and every caveat that applies. "
+        f"Explainer {html.escape(str(first['explainer_version']))}, "
+        f"reference {html.escape(str(first['reference_id']))}.</p>",
+    ]
+    used_flags: set[str] = set()
+    for row in rows.iter_rows(named=True):
+        rid = row.get("row_id")
+        status = row.get("explain_status")
+        label = f"#{row.get('rank', '')} · row {rid}"
+        if rid not in by_row:
+            if status in (None, "ok", "partial"):
+                continue
+            issue = row.get("explain_issue")
+            parts.append(
+                f'<p class="meta">{html.escape(label)}: no explanation'
+                f"{' (' + html.escape(str(issue)) + ')' if issue else ''}.</p>"
+            )
+            continue
+        recs = by_row[rid]
+        summary = " · ".join(
+            [html.escape(label), html.escape(str(row.get("reason_1") or "")), html.escape(str(status or ""))]
+        )
+        body = [
+            "<table><thead><tr>"
+            + "".join(
+                f"<th>{h}</th>"
+                for h in (
+                    "#",
+                    "Field",
+                    "Value",
+                    "Reference",
+                    "Direction",
+                    "Signed",
+                    "Magnitude",
+                    "Methods (weight, share)",
+                    "Transformed features",
+                    "Flags",
+                )
+            )
+            + "</tr></thead><tbody>"
+        ]
+        for rec in recs:
+            methods = "<br>".join(
+                f"{html.escape(str(m['detector']))}: {html.escape(str(m['method']))} "
+                f"({html.escape(str(m['attribution_kind']))}) w={m['weight']:.2f}, {_fmt_signed(m['signed_contribution'])}"
+                for m in rec.get("methods") or []
+            )
+            feats = "<br>".join(
+                f"{html.escape(str(f['feature']))} {_fmt_signed(f['signed_contribution'])}"
+                for f in rec.get("transformed_features") or []
+            )
+            flags = rec.get("approximation_flags") or []
+            used_flags.update(flags)
+            body.append(
+                "<tr>"
+                f"<td>{rec['reason_rank']}</td>"
+                f"<td>{_cell(rec['original_field'])}</td>"
+                f"<td>{_cell(rec['raw_value'])}</td>"
+                f"<td>{_cell(rec['reference_value'])}</td>"
+                f"<td>{_cell(rec['direction'])}</td>"
+                f"<td>{_fmt_signed(rec['signed_contribution'])}</td>"
+                f"<td>{html.escape(format(rec['contribution_magnitude'], '.4g'))}</td>"
+                f"<td>{methods or '—'}</td>"
+                f"<td>{feats or '—'}</td>"
+                f"<td>{'<br>'.join(html.escape(str(f)) for f in flags) or '—'}</td>"
+                "</tr>"
+            )
+        body.append("</tbody></table>")
+        parts.append(f"<details><summary>{summary}</summary>{''.join(body)}</details>")
+    if used_flags:
+        keys = sorted({f.split(":", 1)[0] for f in used_flags})
+        items = []
+        for key in keys:
+            doc_key = next((k for k in APPROXIMATION_FLAGS if k.split(":", 1)[0] == key), None)
+            if doc_key is not None:
+                items.append(
+                    f"<dt>{html.escape(doc_key)}</dt><dd>{html.escape(APPROXIMATION_FLAGS[doc_key])}</dd>"
+                )
+        if items:
+            parts.append(
+                f"<details><summary>What the flags mean</summary><dl>{''.join(items)}</dl></details>"
+            )
+    parts.append("</div>")
+    return "".join(parts)
 
 
 def _df_to_table(df: pl.DataFrame | None) -> str:
