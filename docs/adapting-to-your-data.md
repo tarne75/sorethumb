@@ -196,8 +196,9 @@ sorethumb backfill --config sorethumb.toml --max-periods 90
 ```
 
 This fills missing periods up to the configured maximum. Then
-`sorethumb history --config sorethumb.toml` shows rolling-window anomaly rates
-across them. Each period is fitted and self-calibrated independently, so those
-trends show relative movement period to period rather than an absolute anomaly
-level on one scale. For a single-scale trend, score each period against one
-fixed run with `sorethumb score --from-run RUN_ID`.
+`sorethumb history --config sorethumb.toml` shows how the data is changing:
+population drift, and the anomaly rate per window. Each period is fitted and
+self-calibrated independently, so its rate is relative to that period's own
+threshold, not an absolute anomaly level. To tell a real change in scores from a
+moved threshold, set `history.anchor_run` to one accepted run, which every
+period is then also scored against. See [Trends](trends.md).

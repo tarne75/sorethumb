@@ -305,6 +305,11 @@ def test_a_period_run_report_shows_its_trend(tmp_path: Path) -> None:
     run_detection(cfg, period_label_override=labels[0])
     second = run_detection(cfg, period_label_override=labels[1])
     page = (tmp_path / "ws" / "reports" / second.run_id / "index.html").read_text(encoding="utf-8")
-    assert "Rolling windows" in page
+    # Once, in the records panel -- not once per nested div (the explanation detail has its own).
+    assert page.count("Trend ending 2024-01-16") == 1
+    assert "Explanation detail" in page
+    for heading in ("1. Population", "2. Scores", "3. Threshold", "4. Counts"):
+        assert heading in page
     assert "1/1 · 1/1" in page
     assert "Intervals cover sampling noise only" in page
+    assert "set history.anchor_run" in page

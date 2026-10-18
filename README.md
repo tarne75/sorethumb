@@ -149,10 +149,12 @@ machinery those libraries leave to the user:
    comparable *across* runs only when a fitted calibrator is reused —
    `sorethumb score --from-run RUN_ID` — since a plain run self-calibrates.
 3. **Per-record explanations** in original feature terms, labelled model_specific or heuristic.
-4. **Run history you can reason about** — models and calibrators are persisted, so a
-   `score --from-run` trend line moves with the data, not with a refitted model. A
-   plain `backfill` refits each period; its trend shows relative movement, not an
-   absolute drift level (see limitations).
+4. **Run history you can reason about.** Models and calibrators are persisted,
+   and `sorethumb history` reports four separate signals: population drift,
+   score drift, threshold drift and anomaly counts, each with a verdict. A plain
+   `backfill` refits each period, so score and threshold drift need a fixed
+   anchor run (`history.anchor_run`); see the
+   [trends guide](https://github.com/tarne75/sorethumb/blob/main/docs/trends.md).
 5. **Idempotent, resumable execution** with a completion ledger.
 
 It runs on a single machine, uses Polars throughout, and has no dependency on Spark,
@@ -579,10 +581,12 @@ Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 
   [docs/approximations.md](https://github.com/tarne75/sorethumb/blob/main/docs/approximations.md).
 - Self-calibration maps every run's scores to roughly uniform on [0, 1] by
   construction, so two independently-fitted runs — including the per-period runs
-  `sorethumb backfill` produces — are not on a common scale. A `sorethumb history`
-  trend surfaces *relative* change (which groups/records move, period to period),
-  not an absolute level of "how anomalous is this period". For a trend on one
-  fixed scale, reuse a fitted run: `sorethumb score --from-run RUN_ID`.
+  `sorethumb backfill` produces — are not on a common scale. A raw rate trend
+  mixes real change with each period's moving threshold. `sorethumb history`
+  reports population drift without a model, and with `history.anchor_run` scores
+  every period against one fixed run to separate score drift from threshold
+  drift. For one-off comparisons, reuse a fitted run:
+  `sorethumb score --from-run RUN_ID`.
 - The default ensemble policy (`intersection@1`: every detector must flag a row, each at
   its own boundary under the default `scoring.contamination = "auto"`) is a deliberate
   design decision. It can be precise, but how many rows it flags is unpredictable: on the

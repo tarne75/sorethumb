@@ -2995,30 +2995,27 @@ def render_report_for_run(
     return _render_report_or_reason(ws, run_id, formats=formats, csv_bom=csv_bom)[0]
 
 
-def _group_trend(ws: Workspace, run_row: dict[str, Any], config: Config, group_key: str) -> list[Any]:
-    """Return rolling windows for one group, ending at the period this run computed; empty without one.
+def _group_trend(ws: Workspace, run_row: dict[str, Any], config: Config, group_key: str) -> Any:
+    """Return the group's trend report, ending at the period this run computed; None without one.
 
     The period is the one whose totals this run wrote for the group, so a run
     with no time column has no trend, and neither has a run whose totals a
     later run of the same period has superseded (that later run's report
     carries the trend).
     """
-    from sorethumb_ml.history.windows import compute_rolling_windows, trend_basis  # noqa: PLC0415
+    from sorethumb_ml.history.trend import build_trend_report  # noqa: PLC0415
 
     labels = ws.store.run_period_labels(str(run_row["run_id"]), group_key)
     if len(labels) != 1:
-        return []
-    return compute_rolling_windows(
+        return None
+    return build_trend_report(
         ws.store,
-        str(run_row["dataset_fp"]),
-        str(run_row["config_hash"]),
-        str(labels[0]),
-        list(config.report.rolling_windows),
-        config.history.period_granularity,
+        dataset_fp=str(run_row["dataset_fp"]),
+        config_hash=str(run_row["config_hash"]),
+        config=config,
+        reference_label=str(labels[0]),
+        windows=list(config.report.rolling_windows),
         group_keys=[group_key],
-        low_volume_threshold=config.history.low_volume_threshold,
-        basis=trend_basis(config.scoring.combination, config.scoring.contamination),
-        roll_non_business=config.history.roll_non_business,
     )
 
 
@@ -3078,7 +3075,7 @@ def _render_report_or_reason(
                     plan_dropped=dropped,
                     warnings=warns,
                     attributions=read_attributions(ws, run_id, gk),
-                    window_results=_group_trend(ws, run_row, config, gk),
+                    trend=_group_trend(ws, run_row, config, gk),
                 )
             )
 

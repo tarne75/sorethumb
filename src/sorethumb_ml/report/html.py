@@ -80,6 +80,9 @@ class GroupSection:
     # attributions.parquet: the record behind each reason (None when the run
     # has no explanations, or predates them).
     attributions: pl.DataFrame | None = None
+    # history.trend.TrendReport for this group, ending at the run's period
+    # (None for a run without a period). Supersedes window_results.
+    trend: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +161,7 @@ def _write_json_report(run_meta: RunMeta, groups: list[GroupSection], out_dir: P
                 "records": g.records.to_dicts(),
                 "warnings": g.warnings,
                 **({"attributions": g.attributions.to_dicts()} if g.attributions is not None else {}),
+                **({"trend": g.trend.to_dict()} if g.trend is not None else {}),
             }
             for g in groups
         ],
@@ -314,9 +318,11 @@ def _group_section(grp: GroupSection, idx: int, *, csv_written: bool) -> str:
     )
 
     # Windows table
-    if grp.window_results:
+    if grp.trend is not None:
+        parts[-1] = _append_to_panel(parts[-1], _trend_html(grp.trend))
+    elif grp.window_results:
         windows_html = _windows_table(grp.window_results) + _windows_notes(grp.window_results)
-        parts[-1] = parts[-1].replace("</div>", windows_html + "</div>")
+        parts[-1] = _append_to_panel(parts[-1], windows_html)
 
     # Contrast tab
     contrast_html = (
@@ -450,6 +456,12 @@ def _reason_detail(grp: GroupSection) -> str:
     return "".join(parts)
 
 
+def _append_to_panel(panel: str, extra: str) -> str:
+    """Insert *extra* before the panel's own closing tag (the last one), never before a nested div's."""
+    head, sep, tail = panel.rpartition("</div>")
+    return head + extra + sep + tail
+
+
 def _df_to_table(df: pl.DataFrame | None) -> str:
     if df is None or len(df) == 0:
         return "<p>No data.</p>"
@@ -548,3 +560,185 @@ def _windows_notes(window_results: list[Any]) -> str:
     used = sorted({c for wr in window_results for c in wr.comparability})
     notes.extend(html.escape(f"{code}: {COMPARABILITY[code]}.") for code in used)
     return "".join(f"<p><small>{n}</small></p>" for n in notes)
+
+
+_VERDICT_TEXT = {"ok": "ok", "caveats": "caveats", "not_available": "n/a"}
+
+
+def _html_table(headers: list[str], rows: list[list[str]]) -> str:
+    """Render a plain table; every cell is escaped here."""
+    head = "<tr>" + "".join(f"<th>{html.escape(h)}</th>" for h in headers) + "</tr>"
+    body = "".join("<tr>" + "".join(f"<td>{html.escape(c)}</td>" for c in r) + "</tr>" for r in rows)
+    return f"<table><thead>{head}</thead><tbody>{body}</tbody></table>"
+
+
+def _note(text: str) -> str:
+    return f"<p><small>{html.escape(text)}</small></p>"
+
+
+def _verdict_notes(report: Any, section: str) -> str:
+    out = []
+    for size in report.window_sizes:
+        v = report.verdict(section, size)
+        reasons = f": {'; '.join(v.reasons)}" if v.reasons else ""
+        out.append(_note(f"Window {size}: {_VERDICT_TEXT[v.status]}{reasons}"))
+    return "".join(out)
+
+
+def _trend_html(report: Any) -> str:
+    """Render the four trend sections (see history/trend.py), each with its verdicts."""
+
+    def _pct(v: float | None) -> str:
+        return f"{v * 100:.2f}" if v is not None else "—"
+
+    def _ci(ci: tuple[float, float] | None) -> str:
+        return f" [{ci[0] * 100:.2f}, {ci[1] * 100:.2f}]" if ci is not None else ""
+
+    def _signed(v: float | None) -> str:
+        return f"{v:+.1f}" if v is not None else "—"
+
+    sections = ("population", "scores", "threshold", "counts")
+    parts = [
+        f"<h2>Trend ending {html.escape(report.reference_label)}</h2>",
+        _html_table(
+            ["Window", "1. Population", "2. Scores", "3. Threshold", "4. Counts"],
+            [
+                [str(size), *(_VERDICT_TEXT[report.verdict(s, size).status] for s in sections)]
+                for size in report.window_sizes
+            ],
+        ),
+    ]
+    anchored = any(d.anchor_run_id for d in report.decomposition)
+    no_anchor = (
+        "Score drift and threshold drift cannot be told apart without a fixed scale: set "
+        "history.anchor_run to a completed run and re-run periods to score them against it."
+    )
+
+    parts.append("<h3>1. Population: did the input data change?</h3>")
+    parts.append(
+        _html_table(
+            [
+                "Window",
+                "Rows cur / prior",
+                "Δ rows %",
+                "Summaries cur · prior",
+                "Largest field drift (PSI)",
+                "Band",
+            ],
+            [
+                [
+                    str(d.window_size),
+                    f"{d.current_rows} / {d.prior_rows}",
+                    f"{d.volume_change * 100:+.1f}" if d.volume_change is not None else "—",
+                    f"{d.current_stats} · {d.prior_stats}",
+                    ", ".join(f"{f} {psi:.2f}" for f, psi, _ in d.top_fields(3)) or "—",
+                    d.max_band or "—",
+                ]
+                for d in report.drift
+            ],
+        )
+    )
+    parts.append(
+        _note(
+            "Population Stability Index per input field, prior window against current; no model is "
+            "involved. Bands: below 0.1 stable, 0.1-0.25 moderate, above 0.25 large -- heuristics, "
+            "not a significance test."
+        )
+    )
+    parts.append(_verdict_notes(report, "population"))
+
+    parts.append("<h3>2. Scores: do the anchor run's fixed models score it differently?</h3>")
+    if anchored:
+        parts.append(
+            _html_table(
+                [
+                    "Window",
+                    "Anchor rate cur % [95% CI]",
+                    "Anchor rate prior % [95% CI]",
+                    "Score PSI",
+                    "Above anchor p95",
+                    "Cells used (excl.)",
+                ],
+                [
+                    [
+                        str(d.window_size),
+                        _pct(d.current_anchor_rate) + _ci(d.anchor_rate_ci_current),
+                        _pct(d.prior_anchor_rate) + _ci(d.anchor_rate_ci_prior),
+                        f"{d.score_psi:.2f}" if d.score_psi is not None else "—",
+                        f"{d.tail_share * 100:.1f}%" if d.tail_share is not None else "—",
+                        f"{d.cells_used} ({d.cells_excluded})",
+                    ]
+                    for d in report.decomposition
+                ],
+            )
+        )
+        reasons = sorted({r for d in report.decomposition for r in d.not_comparable_reasons})
+        parts.extend(_note(f"Not comparable: {r}.") for r in reasons)
+    else:
+        parts.append(_note(no_anchor))
+    parts.append(_verdict_notes(report, "scores"))
+
+    parts.append("<h3>3. Threshold: did each period's own recalibrated threshold move?</h3>")
+    if anchored:
+        rows = []
+        for d in report.decomposition:
+            own_cur = d.current_count / d.current_rows if d.current_rows else None
+            gap_cur = (
+                own_cur - d.current_anchor_rate
+                if own_cur is not None and d.current_anchor_rate is not None
+                else None
+            )
+            rows.append(
+                [
+                    str(d.window_size),
+                    _pct(own_cur),
+                    _pct(d.current_anchor_rate),
+                    f"{gap_cur * 100:+.2f}" if gap_cur is not None else "—",
+                    _signed(d.threshold_drift),
+                ]
+            )
+        parts.append(
+            _html_table(
+                ["Window", "Own rate cur %", "Anchor rate cur %", "Gap cur pp", "Threshold drift (rows)"],
+                rows,
+            )
+        )
+    else:
+        parts.append(_note(no_anchor))
+    parts.append(_verdict_notes(report, "threshold"))
+
+    parts.append("<h3>4. Counts: the anomaly rate per window</h3>")
+    parts.append(_windows_table(report.windows).replace("<h2>Rolling windows</h2>", ""))
+    parts.append(_windows_notes(report.windows))
+    if anchored:
+        parts.append(
+            _html_table(
+                [
+                    "Window",
+                    "Own count cur / prior",
+                    "Δ count",
+                    "= volume",
+                    "+ score drift",
+                    "+ threshold drift",
+                ],
+                [
+                    [
+                        str(d.window_size),
+                        f"{d.current_count} / {d.prior_count}",
+                        f"{d.count_change:+d}" if d.count_change is not None else "—",
+                        _signed(d.volume),
+                        _signed(d.score_drift),
+                        _signed(d.threshold_drift),
+                    ]
+                    for d in report.decomposition
+                ],
+            )
+        )
+        parts.append(
+            _note(
+                "Against the anchor run: Δ count = volume + score drift + threshold drift, per group then "
+                "summed, over periods scored against the anchor; the three add up exactly."
+            )
+        )
+    parts.append(_verdict_notes(report, "counts"))
+    return "".join(parts)

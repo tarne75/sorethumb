@@ -394,7 +394,7 @@ def test_report_open_after_launches_browser_only_when_set(
 
 
 def test_history_defaults_to_report_rolling_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import sorethumb_ml.history.windows as hw
+    import sorethumb_ml.history.trend as hw
 
     seen: dict[str, list[int]] = {}
 

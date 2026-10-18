@@ -281,6 +281,13 @@ First public release.
     - Periods the anchor cannot score are left out, with the reason.
     - The anchor is not part of the config hash but is part of the run id, so
       setting it keeps one trend while giving re-run periods fresh runs.
+  - **Four-section `sorethumb history`**: a verdict summary, then
+    1 Population, 2 Scores, 3 Threshold and 4 Counts. Each section has a
+    verdict per window: ok, caveats with reasons, or n/a with why.
+    - `history --json` prints the whole report.
+    - Each period run's HTML report shows the same sections per group, and its
+      `index.json` carries them under `trend`.
+    - New guide: [docs/trends.md](docs/trends.md).
 
 ### Security
 

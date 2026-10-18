@@ -586,109 +586,46 @@ sorethumb explain-plan abc12345 --json
 
 ## `sorethumb history`
 
-Show rolling-window anomaly-rate trends over time for the configured dataset.
-Requires a `time_column` in the config and at least `[history].bootstrap_periods`
-of completed runs.
+Show how the configured dataset is changing, as four separate signals, each
+with a verdict per window. Requires a `time_column` in the config and completed
+period runs. See [Trends](trends.md) for what each figure means and its limits.
 
 ```bash
 sorethumb history
 sorethumb history --window 7 --window 28   # two rolling windows
 sorethumb history --group store_42
 sorethumb history --period 2026-09-30      # end the trend at a given period
+sorethumb history --json                   # the whole report as JSON
 ```
 
-**What the numbers are.** Every period is fitted and calibrated on its own rows,
-so the trend compares independently calibrated snapshots. Each window compares
-the current *w* periods with the *w* before them:
+Each period is fitted and calibrated on its own rows, so a single anomaly rate
+per period can't say why it moved. The output is:
 
-- **Basis.**
-  - With `combination = "composite"` and a numeric `contamination`, every period
-    flags the same fraction by construction. The rate is set by the review
-    budget, so the change is shown as "set by budget" rather than as a number.
-  - Otherwise each period flags against boundaries fitted to its own rows. A
-    change mixes real change with how far each period's boundary moved: a
-    relative signal, not an absolute anomaly level.
-  - For a single fixed scale, score every period against one run with
-    `sorethumb score --from-run RUN_ID`.
-- **Coverage.** Periods with totals out of periods expected, for the current
-  and prior windows. Weekend days are not expected when
-  `history.roll_non_business` is set.
-- **Groups.** Only groups present in both windows are compared, so a group
-  appearing or disappearing cannot move the rate on its own. `1 (+1/-0)`
-  means one group compared, one only in the current window, none only in the
-  prior; those left out are not summed. `--all-groups` sums every group instead.
-- **Rates and change.** Rates are volume-weighted, with Wilson 95% intervals.
-  The change (percentage points) has a Newcombe 95% interval, and `*` marks an
-  interval that excludes 0. The intervals cover sampling noise only, not the
-  boundary movement above. `Δ %` is withheld when the prior window has fewer
-  than 10 anomalies.
-- **Caveats** name anything that makes a comparison unreliable. The notes under
-  the table explain each one shown:
-  - `other_config_in_span`: another configuration has totals in the span.
-  - `mixed_library_versions`, `mixed_ensemble_policies`.
-  - `incomplete_current`, `incomplete_prior`.
-  - `group_mix_changed`.
-  - `low_volume`: below `history.low_volume_threshold`.
+- **Verdict summary.** One row per window: `ok`, `caveats` or `n/a` for each
+  section.
+- **1. Population.** Did the input data change? Change in rows, and the fields
+  that moved most by Population Stability Index (PSI). No model is involved.
+- **2. Scores.** Do the anchor run's fixed models score the data differently?
+  The share of rows above the anchor's fixed threshold, score PSI against the
+  anchor, and the share above the anchor's 95th percentile. Needs
+  `history.anchor_run`.
+- **3. Threshold.** Did each period's own recalibrated threshold move? Own rate
+  against anchor-scale rate on the same rows, and the threshold-drift term.
+  Needs `history.anchor_run`.
+- **4. Counts.** The own anomaly rate per window, with:
+  - coverage and the groups compared;
+  - Wilson and Newcombe 95% intervals;
+  - caveats.
 
-The trend ends at the most recent period with totals that has already ended, not
-at the period in progress. If the only totals are for the period in progress, it
-says so.
+  With an anchor, the change in count splits exactly into volume + score drift
+  + threshold drift.
 
-**Population drift.** A second table compares the input data itself between the
-same two windows, with the same group matching. No model is involved, so
-per-period self-calibration can't hide or invent a change. Per window it shows:
-
-- the change in row count;
-- how many per-period summaries back each side;
-- the fields that moved most, by Population Stability Index (PSI);
-- the band of the largest.
-
-PSI is computed per original field. For numbers and dates it uses the earlier
-window's deciles; for other fields, the most common values plus "other".
-Missing values are a bin of their own. The bands (below 0.1 stable,
-0.1–0.25 moderate, above 0.25 large) are conventional heuristics, not a
-significance test.
-
-The figures come from per-period statistics that each period run records with
-its totals: per field, its missing count and percentiles or top values; per
-detector, its score percentiles and flag count. Periods run before these
-statistics existed have none, and a window without them shows no drift
-figure.
-
-**Count change against an anchor.** Set `history.anchor_run` to a completed
-fitting run of the same dataset. Each period run then also scores its rows with
-that run's models, calibrators and *fixed* flag rule:
-
-- `composite`: its weights and threshold;
-- `intersection` / `union` with `"auto"`: each model's own boundary;
-- with a numeric contamination: each detector's cut-off from the anchor run.
-
-A third table then splits each window's change in anomaly count, exactly, into:
-
-- **volume**: more or fewer rows at the prior rate;
-- **score drift**: the share of rows above the anchor's fixed threshold moved,
-  i.e. the data scores differently under one unchanging model;
-- **threshold drift**: each period's own recalibrated threshold moved relative
-  to the anchor's. Self-calibration can absorb a real change this way, or create
-  an apparent one.
-
-Each term is computed per group and then summed, so a change in the group mix
-doesn't leak into any term. The table also shows:
-
-- the anchor-scale rate with its 95% interval;
-- the PSI of the current window's anchor-scale scores against the anchor's own;
-- the share of rows above the anchor's 95th percentile (5% on the anchor's own
-  rows).
-
-A period the anchor can't score is left out and its reason listed. That
-happens when the anchor has no model or rule for the group, or the feature
-schema differs.
-
-`history.anchor_run` is not part of the config hash, so setting it keeps one
-trend. Periods already run are scored against the anchor only when re-run:
-`sorethumb backfill --force-period LABEL`, or a fresh `sorethumb run` for that
-period. Every fitting run saves its rule, so any complete fitting run can serve
-as an anchor.
+Under `combination = "composite"` with a numeric `contamination`, every period
+flags the same fraction, so the rate is set by the review budget and no change
+is shown. Only groups present in both windows are compared (`--all-groups` sums
+every group). The trend ends at the most recent period with totals that has
+already ended. The HTML report of a period run shows the same four sections per
+group, and its `index.json` carries them under `trend`.
 
 **Options:**
 
@@ -699,9 +636,7 @@ as an anchor.
 | `--group STR` | — | Limit trend display to a specific group. |
 | `--period LABEL` | latest elapsed period | Period label the trend ends at. |
 | `--all-groups` | off | Sum every group in each window, not only groups present in both. |
-
-The HTML report of a run with a period shows the same windows per group, ending
-at that run's period.
+| `--json` | off | The whole report as one JSON document on stdout. |
 
 ---
 
@@ -719,9 +654,9 @@ sorethumb backfill --max-periods 14             # cap depth
 
 Each pending period is fitted and scored independently (a full `sorethumb run`
 for that period's window) and self-calibrated. The resulting `sorethumb history`
-trend therefore shows *relative* period-to-period movement, not an absolute
-anomaly level on a shared scale — for that, score every period against one fixed
-run with `sorethumb score --from-run RUN_ID`.
+trend therefore compares independently calibrated snapshots. Set
+`history.anchor_run` to also score every period against one fixed run, which
+separates score drift from threshold drift (see [Trends](trends.md)).
 
 A failing period never stops the others. Periods whose run finished with failed
 groups, and periods whose run raised a project error (for example an unreadable
