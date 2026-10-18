@@ -297,7 +297,7 @@
         },
         "low_volume_threshold": {
           "default": 100,
-          "description": "The shortest rolling window is flagged low-volume (shown in the HTML report) when its current population is below this -- informational only; low-volume periods are still included in every aggregate.",
+          "description": "A rolling window is flagged low-volume (in sorethumb history and the HTML report) when its current or prior population is below this -- informational only; low-volume periods are still included in every aggregate.",
           "minimum": 1,
           "title": "Low Volume Threshold",
           "type": "integer"
