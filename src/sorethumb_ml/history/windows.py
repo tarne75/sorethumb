@@ -347,3 +347,83 @@ def _comparability(
     if group_mix_changed:
         codes.append("group_mix_changed")
     return tuple(codes)
+
+
+@dataclass(frozen=True)
+class DriftResult:
+    """Population drift between the current and prior window, from per-period statistics."""
+
+    window_size: int
+    period_label: str
+    current_rows: int
+    prior_rows: int
+    volume_change: float | None  # relative change in rows; None without a prior
+    fields: dict[str, dict[str, Any]]  # field -> {"psi", "band", "kind"} (period_stats.population_drift)
+    current_stats: int  # (group, period) summaries behind the current window
+    prior_stats: int
+    groups_matched: int
+
+    def top_fields(self, k: int = 3) -> list[tuple[str, float, str]]:
+        """Return the *k* fields with the largest PSI, as ``(field, psi, band)``."""
+        scored = [(f, d["psi"], d["band"]) for f, d in self.fields.items() if d["psi"] is not None]
+        return sorted(scored, key=lambda t: -t[1])[:k]
+
+    @property
+    def max_band(self) -> str | None:
+        """The band of the largest PSI, or None when no field could be compared."""
+        top = self.top_fields(1)
+        return top[0][2] if top else None
+
+
+def compute_population_drift(
+    store: Store,
+    dataset_fp: str,
+    config_hash: str,
+    reference_label: str,
+    windows: list[int],
+    granularity: PeriodGranularity,
+    group_keys: list[str] | None = None,
+    *,
+    match_groups: bool = True,
+) -> list[DriftResult]:
+    """Return, per window size, how the input data moved between the prior and current window.
+
+    Uses the per-period statistics (migration 013), with the same windows and
+    group matching as :func:`compute_rolling_windows`. No model is involved,
+    so this is unaffected by each period's self-calibration.
+    """
+    from sorethumb_ml.history.period_stats import population_drift  # noqa: PLC0415
+
+    results: list[DriftResult] = []
+    for w in sorted(windows):
+        cur_start = step_back(reference_label, granularity, w - 1)
+        cur_labels = period_range(cur_start, reference_label, granularity)
+        pri_labels = period_range(
+            step_back(cur_start, granularity, w), step_back(cur_start, granularity, 1), granularity
+        )
+        cur = store.period_stats_for_periods(dataset_fp, cur_labels, config_hash, group_keys)
+        pri = store.period_stats_for_periods(dataset_fp, pri_labels, config_hash, group_keys)
+        cur_groups = {str(r["group_key"]) for r in cur}
+        pri_groups = {str(r["group_key"]) for r in pri}
+        matched = cur_groups & pri_groups
+        if match_groups and cur_groups and pri_groups:
+            cur = [r for r in cur if r["group_key"] in matched]
+            pri = [r for r in pri if r["group_key"] in matched]
+        cur_rows = sum(int(r["stats"]["n_rows"]) for r in cur)
+        pri_rows = sum(int(r["stats"]["n_rows"]) for r in pri)
+        results.append(
+            DriftResult(
+                window_size=w,
+                period_label=reference_label,
+                current_rows=cur_rows,
+                prior_rows=pri_rows,
+                volume_change=(cur_rows - pri_rows) / pri_rows if pri_rows else None,
+                fields=population_drift([r["stats"] for r in pri], [r["stats"] for r in cur])
+                if cur and pri
+                else {},
+                current_stats=len(cur),
+                prior_stats=len(pri),
+                groups_matched=len(matched),
+            )
+        )
+    return results

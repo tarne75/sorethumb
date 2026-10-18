@@ -950,8 +950,13 @@ class Store:
         run_id: str,
         totals: list[tuple[str, int, int, float | None]],
         failed_count: int,
+        period_stats: list[tuple[str, int, str]] | None = None,
     ) -> None:
         """Write the period row, every group's totals row, and this attempt's completion record atomically.
+
+        ``period_stats`` is ``(group_key, stats_version, stats_json)`` for every
+        group that has per-period statistics (migration 013), written in the
+        same transaction so they always describe the run the totals came from.
 
         ``totals`` is ``(group_key, anomaly_count, population, rate)`` for every
         group this run has a value for (success, too-few-records, *and* resumed
@@ -994,6 +999,30 @@ class Store:
                         population,
                         rate,
                         run_id,
+                        now,
+                    ),
+                )
+            for group_key, stats_version, stats_json in period_stats or []:
+                self._conn.execute(
+                    """
+                    INSERT INTO period_stats
+                        (dataset_fp, group_key, period_label, config_hash, run_id,
+                         stats_version, stats_json, computed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(dataset_fp, group_key, period_label, config_hash) DO UPDATE SET
+                        run_id        = excluded.run_id,
+                        stats_version = excluded.stats_version,
+                        stats_json    = excluded.stats_json,
+                        computed_at   = excluded.computed_at
+                    """,
+                    (
+                        dataset_fp,
+                        group_key,
+                        period_label,
+                        config_hash,
+                        run_id,
+                        stats_version,
+                        stats_json,
                         now,
                     ),
                 )
@@ -1099,6 +1128,33 @@ class Store:
             [dataset_fp, config_hash],
         ).fetchall()
         return [str(r["period_label"]) for r in rows]
+
+    def period_stats_for_periods(
+        self,
+        dataset_fp: str,
+        period_labels: list[str],
+        config_hash: str,
+        group_keys: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return period_stats rows (``stats`` parsed from JSON) for these periods under one configuration."""
+        if not period_labels:
+            return []
+        ph = ",".join("?" * len(period_labels))
+        params: list[Any] = [dataset_fp, config_hash, *period_labels]
+        gk_clause = ""
+        if group_keys is not None:
+            gk_clause = f"AND group_key IN ({','.join('?' * len(group_keys))})"
+            params.extend(group_keys)
+        rows = self._conn.execute(
+            f"SELECT * FROM period_stats WHERE dataset_fp=? AND config_hash=? AND period_label IN ({ph}) {gk_clause}",
+            params,
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["stats"] = json.loads(d.pop("stats_json"))
+            out.append(d)
+        return out
 
     def run_period_labels(self, run_id: str, group_key: str) -> list[str]:
         """Return the period labels whose totals for *group_key* were written by *run_id* (empty once superseded)."""

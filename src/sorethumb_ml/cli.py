@@ -1858,6 +1858,22 @@ def history(
         for line in _trend_notes(window_results, basis=basis, in_progress=in_progress):
             console.print(line, soft_wrap=False, highlight=False)
 
+        from sorethumb_ml.history.windows import compute_population_drift  # noqa: PLC0415
+
+        drift = compute_population_drift(
+            ws.store,
+            dataset_fp,
+            config_hash,
+            ref_label,
+            _windows,
+            cfg.history.period_granularity,
+            group_keys=group_keys,
+            match_groups=not all_groups,
+        )
+        console.print(_drift_table(drift))
+        for line in _drift_notes(drift):
+            console.print(line, soft_wrap=False, highlight=False)
+
 
 def _fmt_pct(v: float | None) -> str:
     return f"{v * 100:.2f}" if v is not None else "—"
@@ -1911,6 +1927,48 @@ def _trend_table(window_results: list[Any], *, ref_label: str, config_hash: str)
             ", ".join(caveats),
         )
     return table
+
+
+def _drift_table(drift: list[Any]) -> Table:
+    """Render population drift per window: volume change and the fields that moved most (PSI)."""
+    table = Table(title="Population drift (input data, current vs prior window)", show_header=True)
+    for name, justify in (
+        ("Window", "left"),
+        ("Rows cur / prior", "right"),
+        ("Δ rows %", "right"),
+        ("Summaries cur · prior", "right"),
+        ("Largest field drift (PSI)", "left"),
+        ("Band", "left"),
+    ):
+        table.add_column(name, justify=justify)  # type: ignore[arg-type]
+    for d in drift:
+        top = ", ".join(f"{_e(f)} {psi:.2f}" for f, psi, _ in d.top_fields(3))
+        _add_row(
+            table,
+            str(d.window_size),
+            f"{d.current_rows} / {d.prior_rows}",
+            f"{d.volume_change * 100:+.1f}" if d.volume_change is not None else "—",
+            f"{d.current_stats} · {d.prior_stats}",
+            top or "—",
+            d.max_band or "—",
+        )
+    return table
+
+
+def _drift_notes(drift: list[Any]) -> list[str]:
+    """Explain the drift table."""
+    notes = [
+        "  [dim]Population Stability Index per input field (original values, missing as its own bin), "
+        "comparing the prior window's data with the current window's; no model is involved. "
+        "Bands: below 0.1 stable, 0.1-0.25 moderate, above 0.25 large -- conventional heuristics, "
+        "not a significance test.[/dim]"
+    ]
+    if any(d.current_stats == 0 or d.prior_stats == 0 for d in drift):
+        notes.append(
+            "  [dim]A window without summaries has no drift figure: periods run before per-period "
+            "statistics existed have none.[/dim]"
+        )
+    return notes
 
 
 def _trend_notes(window_results: list[Any], *, basis: str, in_progress: bool) -> list[str]:

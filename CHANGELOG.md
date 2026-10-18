@@ -262,6 +262,15 @@ First public release.
     ensemble policies, incomplete coverage and a changed group mix.
   - The HTML report's trend table is now filled in for runs with a period; it
     was never populated before.
+  - **Per-period statistics** (migration 013, `period_stats`), recorded with each
+    period's totals:
+    - per original field: missing count, plus percentiles or top values;
+    - per detector: score percentiles and flag count;
+    - the composite threshold, contamination and flag count.
+  - `sorethumb history` adds a **population drift** table. Per window it shows
+    the change in row count and the fields that moved most by Population
+    Stability Index, with conventional heuristic bands. No model is involved,
+    so self-calibration cannot hide or invent a change.
 
 ### Security
 

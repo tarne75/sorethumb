@@ -29,6 +29,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 
+from sorethumb_ml._atomic import atomic_write_text
 from sorethumb_ml.config import Config, SourceConfig
 from sorethumb_ml.detectors import registry
 from sorethumb_ml.detectors._protocol import score_and_flag
@@ -697,6 +698,72 @@ def _resolve_and_filter_period(
     return filtered, label, (period_from, period_to)
 
 
+_PERIOD_STATS_FILENAME = "period_stats.json"
+
+
+def _save_period_stats(
+    ws: Workspace,
+    run_id: str,
+    group_key: str,
+    *,
+    config: Config,
+    plan: FeaturePlan,
+    df_group: pl.DataFrame,
+    group_space: FeatureSpace,
+    raw_scores_map: dict[str, np.ndarray],
+    natural_flags_map: dict[str, np.ndarray],
+    composite_score: np.ndarray,
+    result_dict: dict[str, Any],
+    n_flagged: int,
+) -> None:
+    """Write this group's per-period statistics next to its results, for the history ledger to record.
+
+    Never fails the group: statistics are for drift reporting, so a failure is
+    logged and the period simply has no statistics for this group. Written to
+    a file rather than straight to the store so a resumed run, which skips the
+    group, still records them with the period's totals.
+    """
+    from sorethumb_ml.history.period_stats import compute_period_stats  # noqa: PLC0415
+
+    path = ws.results_dir(run_id, group_key) / _PERIOD_STATS_FILENAME
+    try:
+        excluded = {config.columns.id_column, config.columns.time_column}
+        fields = [f for f in _reference_fields(plan, group_space) if f not in excluded]
+        threshold = result_dict.get("threshold")
+        contamination = result_dict.get("contamination_used")
+        stats = compute_period_stats(
+            df_group=df_group,
+            fields=fields,
+            raw_scores=raw_scores_map,
+            natural_flags=natural_flags_map,
+            composite_score=composite_score,
+            composite_threshold=float(threshold) if threshold is not None else None,
+            contamination_used=float(contamination) if contamination is not None else None,
+            n_flagged=n_flagged,
+            combination=config.scoring.combination,
+            ensemble_policy=_ensemble_policy_id(config),
+        )
+        atomic_write_text(path, json.dumps(stats, allow_nan=False))
+    except Exception:
+        logger.warning(
+            "Period statistics failed for group %s; it has none for this period.", group_key, exc_info=True
+        )
+        path.unlink(missing_ok=True)
+
+
+def _load_period_stats(ws: Workspace, run_id: str, group_key: str) -> tuple[int, str] | None:
+    """Read a group's saved per-period statistics as ``(stats_version, json)``, or None."""
+    path = ws.results_dir(run_id, group_key) / _PERIOD_STATS_FILENAME
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+        return int(json.loads(text)["stats_version"]), text
+    except (OSError, ValueError, KeyError, TypeError):
+        logger.warning("Unreadable period statistics for group %s; skipping them.", group_key, exc_info=True)
+        return None
+
+
 def _record_period_history(
     ws: Workspace,
     dataset_fp: str,
@@ -733,6 +800,12 @@ def _record_period_history(
         if g.status in ("success", "too_few_records", "skipped")
     ]
     failed_count = sum(1 for g in group_results if g.status == "failed")
+    period_stats: list[tuple[str, int, str]] = []
+    for g in group_results:
+        if g.status in ("success", "skipped"):
+            loaded = _load_period_stats(ws, run_id, g.group_key)
+            if loaded is not None:
+                period_stats.append((g.group_key, *loaded))
     ws.store.record_period_completion(
         dataset_fp=dataset_fp,
         period_label=period_label,
@@ -742,6 +815,7 @@ def _record_period_history(
         run_id=run_id,
         totals=totals,
         failed_count=failed_count,
+        period_stats=period_stats,
     )
 
 
@@ -2023,6 +2097,23 @@ def _finalize_group(
     # The flagged population and its order are now fixed: the explanation stage
     # gets a read-only view and writes only its own file.
     flagged_idx.setflags(write=False)
+
+    # Period runs only: score-forward writes no history, so its statistics would have no reader.
+    if period_label is not None and source_run_id is None:
+        _save_period_stats(
+            ws,
+            run_id,
+            group_key,
+            config=config,
+            plan=plan,
+            df_group=df_group,
+            group_space=group_space,
+            raw_scores_map=raw_scores_map,
+            natural_flags_map=natural_flags_map,
+            composite_score=composite_score,
+            result_dict=result_dict,
+            n_flagged=n_anomalies,
+        )
 
     # ── Stage B: explanation, isolated from the detection output ───────────
     outcome = _explain_group(

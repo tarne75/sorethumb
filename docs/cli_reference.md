@@ -156,7 +156,9 @@ models/<run>/…          fitted feature plan, and per group and detector the
                         per group, reference.json (the explanation reference summary)
 results/<run>/<group>/  per-group results (Parquet): anomalies.parquet (detection: scores,
                         flags, ranks; written and digested first), explanations.parquet
-                        and attributions.parquet (the record behind each reason)
+                        and attributions.parquet (the record behind each reason); for a
+                        period run, period_stats.json (per-period statistics, also
+                        recorded in the ledger)
 reports/<run>/          rendered HTML / CSV / JSON reports
 cache/  tmp/  logs/     downloaded-dataset and feature caches, scratch, rotating logs
 ```
@@ -631,6 +633,27 @@ the current *w* periods with the *w* before them:
 The trend ends at the most recent period with totals that has already ended, not
 at the period in progress. If the only totals are for the period in progress, it
 says so.
+
+**Population drift.** A second table compares the input data itself between the
+same two windows, with the same group matching. No model is involved, so
+per-period self-calibration can't hide or invent a change. Per window it shows:
+
+- the change in row count;
+- how many per-period summaries back each side;
+- the fields that moved most, by Population Stability Index (PSI);
+- the band of the largest.
+
+PSI is computed per original field. For numbers and dates it uses the earlier
+window's deciles; for other fields, the most common values plus "other".
+Missing values are a bin of their own. The bands (below 0.1 stable,
+0.1–0.25 moderate, above 0.25 large) are conventional heuristics, not a
+significance test.
+
+The figures come from per-period statistics that each period run records with
+its totals: per field, its missing count and percentiles or top values; per
+detector, its score percentiles and flag count. Periods run before these
+statistics existed have none, and a window without them shows no drift
+figure.
 
 **Options:**
 

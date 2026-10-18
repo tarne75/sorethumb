@@ -763,3 +763,23 @@ def test_write_results_rejects_an_unsafe_results_frame(tmp_path, df, match):
         with pytest.raises(StoreError, match=match):
             write_results(ws, "run1", "gk01", df)
         assert ws.store._conn.execute("SELECT * FROM artifact").fetchall() == []
+
+
+def test_migration_013_adds_period_stats(tmp_path):
+    with Store(tmp_path / "m.db") as store:
+        cols = {r[1] for r in store._conn.execute("PRAGMA table_info(period_stats)")}
+        pk = [
+            r[1]
+            for r in sorted(store._conn.execute("PRAGMA table_info(period_stats)"), key=lambda r: r[5])
+            if r[5]
+        ]
+    assert {
+        "dataset_fp",
+        "group_key",
+        "period_label",
+        "config_hash",
+        "run_id",
+        "stats_version",
+        "stats_json",
+    } <= cols
+    assert pk == ["dataset_fp", "group_key", "period_label", "config_hash"]
