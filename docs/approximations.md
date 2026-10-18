@@ -138,6 +138,19 @@ shift a detector's boundary enough to under-flag exactly the anomalies it is mea
 catch. This is a structural property of unsupervised anomaly detection in general, not
 a defect specific to `sorethumb`.
 
+## Trends compare independently calibrated snapshots
+
+Each period run fits its own detectors and self-calibrates, so a period's
+anomaly rate is measured against that period's own notion of normal. Under
+`composite` with a numeric contamination the rate is fixed by the review budget
+outright. A raw rate trend therefore mixes real change with how far each
+period's own threshold moved. `sorethumb history` reports population drift
+(model-free) separately. With `history.anchor_run` it scores every period
+against one fixed model and threshold as well, so it can split a change in
+count exactly into volume, score drift and threshold drift. The rate intervals
+treat rows as independent and cover sampling noise only, and the PSI bands are
+conventions. See [Trends](trends.md).
+
 ## Capped detectors train on a subsample, score the full group
 
 `_pipeline.py`'s per-group fitting loop (`train_row_cap` / `default_train_row_cap`,

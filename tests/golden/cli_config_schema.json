@@ -281,6 +281,20 @@
       "additionalProperties": false,
       "description": "Controls baseline comparison and trend detection.",
       "properties": {
+        "anchor_run": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Run id of a completed fitting run of this dataset whose models, calibrators and flag rule score every period run as well as that period's own fit. Gives a fixed scale, so sorethumb history can split a change in anomaly count into volume, score drift and threshold drift. Not part of the config hash, so setting it keeps the trend's history; periods already run are scored against it only when re-run.",
+          "title": "Anchor Run"
+        },
         "bootstrap_periods": {
           "default": 28,
           "description": "Minimum periods of history required before history scoring activates.",
@@ -297,7 +311,7 @@
         },
         "low_volume_threshold": {
           "default": 100,
-          "description": "The shortest rolling window is flagged low-volume (shown in the HTML report) when its current population is below this -- informational only; low-volume periods are still included in every aggregate.",
+          "description": "A rolling window is flagged low-volume (in sorethumb history and the HTML report) when its current or prior population is below this -- informational only; low-volume periods are still included in every aggregate.",
           "minimum": 1,
           "title": "Low Volume Threshold",
           "type": "integer"

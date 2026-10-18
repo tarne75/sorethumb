@@ -1755,20 +1755,43 @@ def history(
         list[int] | None, typer.Option("--window", help="Rolling window sizes (e.g. --window 7 --window 28).")
     ] = None,
     group_key: Annotated[str | None, typer.Option("--group", help="Limit to a specific group key.")] = None,
+    period: Annotated[
+        str | None,
+        typer.Option(
+            "--period",
+            help="Period label the trend ends at (default: the most recent period with totals that has ended).",
+        ),
+    ] = None,
+    all_groups: Annotated[
+        bool,
+        typer.Option(
+            "--all-groups",
+            help="Sum every group in each window, not only groups present in both (risks group-mix artefacts).",
+        ),
+    ] = False,
+    json_output: _JSON_OPT = False,
 ) -> None:
-    """Show rolling-window anomaly trends for the configured dataset.
+    """Show how the configured dataset is changing, as four separate signals.
+
+    1 Population (did the input data change?), 2 Scores (do the anchor run's
+    fixed models score it differently?), 3 Threshold (did each period's own
+    recalibrated threshold move?) and 4 Counts (the anomaly rate per window,
+    and with an anchor its change split into volume, score drift and threshold
+    drift). Each section has a verdict per window. Each period is fitted and
+    calibrated on its own rows, so without an anchor run (history.anchor_run)
+    scores and threshold cannot be told apart. See docs/trends.md.
 
     With no sorethumb.toml (and no --config), shows the dataset and
     configuration of the workspace's most recent run, using that run's own
     history and report settings.
     """
     _setup_logging(log_level or "INFO")
-    ws_path, loaded = _resolve_workdir(config, workdir, log_level)
+    ws_path, loaded = _resolve_workdir(config, workdir, log_level, json_output=json_output)
 
     try:
         ws_cm = Workspace.open(ws_path)
     except SorethumbError as exc:
-        _fail(False, str(exc), _classify_error(exc))
+        _fail(json_output, str(exc), _classify_error(exc))
     with ws_cm as ws:
         from sorethumb_ml.io.fingerprint import logical_dataset_id  # noqa: PLC0415
 
@@ -1783,13 +1806,13 @@ def history(
         else:
             latest = ws.store.list_runs(limit=1)
             if not latest:
-                _fail(False, "No runs found in workspace.", ExitCode.NOT_FOUND)
+                _fail(json_output, "No runs found in workspace.", ExitCode.NOT_FOUND)
             run_row = latest[0]
             try:
                 cfg = Config.model_validate_json(run_row["config_json"])
             except Exception as exc:  # noqa: BLE001 -- any unreadable stored config is the same failure
                 _fail(
-                    False,
+                    json_output,
                     f"The latest run's stored config could not be read ({exc}); pass --config.",
                     ExitCode.RUNTIME,
                 )
@@ -1800,55 +1823,399 @@ def history(
         from datetime import datetime  # noqa: PLC0415
 
         from sorethumb_ml.history.periods import resolve_period  # noqa: PLC0415
-        from sorethumb_ml.history.windows import compute_rolling_windows  # noqa: PLC0415
+        from sorethumb_ml.history.trend import build_trend_report  # noqa: PLC0415
+        from sorethumb_ml.history.windows import default_reference_label  # noqa: PLC0415
 
-        ref = datetime.now(UTC)
-        _, _, ref_label = resolve_period(ref, cfg.history.period_granularity, cfg.history.roll_non_business)
-
-        group_keys = [group_key] if group_key else None
-        window_results = compute_rolling_windows(
-            ws.store,
-            dataset_fp,
-            config_hash,
-            ref_label,
-            _windows,
-            cfg.history.period_granularity,
-            group_keys=group_keys,
+        _, _, now_label = resolve_period(
+            datetime.now(UTC), cfg.history.period_granularity, cfg.history.roll_non_business
         )
-
-        if not window_results:
+        in_progress = False
+        ref_label: str | None = period
+        if ref_label is None:
+            ref_label, in_progress = default_reference_label(ws.store, dataset_fp, config_hash, now_label)
+        if ref_label is None:
+            if json_output:
+                typer.echo(json.dumps({"reference_period": None, "config_hash": config_hash, "windows": []}))
+                raise typer.Exit(0)
             console.print(
                 f"[yellow]No history available yet for this dataset under config {_e(config_hash[:8])}.[/yellow]"
             )
             raise typer.Exit(0)
 
-        table = Table(
-            title=f"Rolling windows (ref={_e(ref_label)}, config={_e(config_hash[:8])})", show_header=True
+        report = build_trend_report(
+            ws.store,
+            dataset_fp=dataset_fp,
+            config_hash=config_hash,
+            config=cfg,
+            reference_label=ref_label,
+            windows=_windows,
+            in_progress=in_progress,
+            group_keys=[group_key] if group_key else None,
+            match_groups=not all_groups,
         )
-        table.add_column("Window", style="cyan")
-        table.add_column("Cur count", justify="right")
-        table.add_column("Cur pop", justify="right")
-        table.add_column("Cur rate %", justify="right")
-        table.add_column("Prior rate %", justify="right")
-        table.add_column("Δ %", justify="right")
-        table.add_column("Cal break", style="red")
 
-        for wr in window_results:
+    if json_output:
+        typer.echo(json.dumps(report.to_dict(), allow_nan=False))
+        return
+    _print_trend_report(report)
 
-            def _pct(v: float | None) -> str:
-                return f"{v * 100:.2f}" if v is not None else "—"
 
-            _add_row(
-                table,
-                str(wr.window_size),
-                str(wr.current_anomaly_count),
-                str(wr.current_population),
-                _pct(wr.current_rate),
-                _pct(wr.prior_rate),
-                _pct(wr.pct_change),
-                "⚡ yes" if wr.calibration_break else "",
+def _print_trend_report(report: Any) -> None:
+    """Print the verdict summary, then the four sections."""
+
+    def _lines(lines: list[str]) -> None:
+        for line in lines:
+            console.print(line, soft_wrap=False, highlight=False)
+
+    console.print(_verdict_table(report))
+    if report.in_progress:
+        console.print(
+            "[yellow]The only period with totals is still in progress; it may be incomplete.[/yellow]"
+        )
+    anchored = any(d.anchor_run_id for d in report.decomposition)
+
+    console.rule("[bold]1. Population[/bold]: did the input data change?")
+    console.print(_drift_table(report.drift))
+    _lines(_drift_notes(report.drift) + _verdict_lines(report, "population"))
+
+    console.rule("[bold]2. Scores[/bold]: do the anchor run's fixed models score it differently?")
+    if anchored:
+        console.print(_scores_table(report.decomposition))
+    _lines(
+        _decomposition_notes(report.decomposition, configured_anchor=report.anchor_configured, part="scores")
+    )
+    _lines(_verdict_lines(report, "scores"))
+
+    console.rule("[bold]3. Threshold[/bold]: did each period's own recalibrated threshold move?")
+    if anchored:
+        console.print(_threshold_table(report.windows, report.decomposition))
+        console.print(
+            "  [dim]Gap: own rate minus the anchor-scale rate on the same rows. Threshold drift is the change "
+            "in that gap, in rows.[/dim]",
+            soft_wrap=False,
+            highlight=False,
+        )
+    _lines(_verdict_lines(report, "threshold"))
+
+    console.rule("[bold]4. Counts[/bold]: the anomaly rate per window")
+    console.print(
+        _trend_table(report.windows, ref_label=report.reference_label, config_hash=report.config_hash)
+    )
+    _lines(_trend_notes(report.windows, basis=report.basis, in_progress=False))
+    if anchored:
+        console.print(_decomposition_table(report.decomposition))
+        _lines(
+            _decomposition_notes(
+                report.decomposition, configured_anchor=report.anchor_configured, part="counts"
             )
-        console.print(table)
+        )
+    _lines(_verdict_lines(report, "counts"))
+
+
+_VERDICT_STYLE = {
+    "ok": "[green]ok[/green]",
+    "caveats": "[yellow]caveats[/yellow]",
+    "not_available": "[dim]n/a[/dim]",
+}
+
+
+def _verdict_table(report: Any) -> Table:
+    """Render one row per window: each section's verdict."""
+    table = Table(
+        title=f"Trend ending {_e(report.reference_label)} (config {_e(report.config_hash[:8])})",
+        show_header=True,
+    )
+    table.add_column("Window", justify="left")
+    for name in ("1. Population", "2. Scores", "3. Threshold", "4. Counts"):
+        table.add_column(name, justify="left")
+    for size in report.window_sizes:
+        _add_row(
+            table,
+            str(size),
+            *(
+                _VERDICT_STYLE[report.verdict(s, size).status]
+                for s in ("population", "scores", "threshold", "counts")
+            ),
+        )
+    return table
+
+
+def _verdict_lines(report: Any, section: str) -> list[str]:
+    """List each window's verdict for *section* with its reasons."""
+    lines = []
+    for size in report.window_sizes:
+        v = report.verdict(section, size)
+        reasons = f": {_e('; '.join(v.reasons))}" if v.reasons else ""
+        lines.append(f"  Window {size}: {_VERDICT_STYLE[v.status]}{reasons}")
+    return lines
+
+
+def _scores_table(decomposition: list[Any]) -> Table:
+    """Render the anchor-scale rate and score drift per window."""
+    table = Table(show_header=True)
+    for name in (
+        "Window",
+        "Anchor rate cur % [95% CI]",
+        "Anchor rate prior % [95% CI]",
+        "Δ pp [95% CI]",
+        "Score PSI",
+        "Above anchor p95",
+        "Cells used (excl.)",
+    ):
+        table.add_column(name, justify="left" if name == "Window" else "right")
+    for d in decomposition:
+        change = "—"
+        if d.current_anchor_rate is not None and d.prior_anchor_rate is not None and d.volume is not None:
+            delta = d.current_anchor_rate - d.prior_anchor_rate
+            ci = d.anchor_change_ci
+            change = f"{delta * 100:+.2f}{_fmt_ci(ci)}" + (" *" if ci and not (ci[0] <= 0.0 <= ci[1]) else "")
+        _add_row(
+            table,
+            str(d.window_size),
+            _fmt_pct(d.current_anchor_rate) + _fmt_ci(d.anchor_rate_ci_current),
+            _fmt_pct(d.prior_anchor_rate) + _fmt_ci(d.anchor_rate_ci_prior),
+            change,
+            f"{d.score_psi:.2f}" if d.score_psi is not None else "—",
+            f"{d.tail_share * 100:.1f}%" if d.tail_share is not None else "—",
+            f"{d.cells_used} ({d.cells_excluded})",
+        )
+    return table
+
+
+def _threshold_table(windows: list[Any], decomposition: list[Any]) -> Table:
+    """Render own vs anchor-scale rates and the threshold-drift term per window."""
+    table = Table(show_header=True)
+    for name in (
+        "Window",
+        "Own rate cur %",
+        "Anchor rate cur %",
+        "Gap cur pp",
+        "Gap prior pp",
+        "Threshold drift (rows)",
+    ):
+        table.add_column(name, justify="left" if name == "Window" else "right")
+    for d in decomposition:
+        own_cur = d.current_count / d.current_rows if d.current_rows else None
+        own_pri = d.prior_count / d.prior_rows if d.prior_rows else None
+        gap_cur = (
+            own_cur - d.current_anchor_rate
+            if own_cur is not None and d.current_anchor_rate is not None
+            else None
+        )
+        gap_pri = (
+            own_pri - d.prior_anchor_rate if own_pri is not None and d.prior_anchor_rate is not None else None
+        )
+        _add_row(
+            table,
+            str(d.window_size),
+            _fmt_pct(own_cur),
+            _fmt_pct(d.current_anchor_rate),
+            f"{gap_cur * 100:+.2f}" if gap_cur is not None else "—",
+            f"{gap_pri * 100:+.2f}" if gap_pri is not None else "—",
+            f"{d.threshold_drift:+.1f}" if d.threshold_drift is not None else "—",
+        )
+    del windows  # the own rates come from the same anchored cells as the anchor rates
+    return table
+
+
+def _fmt_pct(v: float | None) -> str:
+    return f"{v * 100:.2f}" if v is not None else "—"
+
+
+def _fmt_ci(ci: tuple[float, float] | None) -> str:
+    return f" [{ci[0] * 100:.2f}, {ci[1] * 100:.2f}]" if ci is not None else ""
+
+
+def _trend_table(window_results: list[Any], *, ref_label: str, config_hash: str) -> Table:
+    """Render one row per window: counts, rates with 95% intervals, change, coverage and caveats."""
+    table = Table(
+        title=f"Rolling windows (ending {_e(ref_label)}, config={_e(config_hash[:8])})", show_header=True
+    )
+    for name, justify in (
+        ("Window", "left"),
+        ("Coverage", "right"),
+        ("Groups", "right"),
+        ("Cur count / pop", "right"),
+        ("Cur rate % [95% CI]", "right"),
+        ("Prior rate % [95% CI]", "right"),
+        ("Δ pp [95% CI]", "right"),
+        ("Δ %", "right"),
+        ("Caveats", "left"),
+    ):
+        table.add_column(name, justify=justify)  # type: ignore[arg-type]
+    for wr in window_results:
+        groups = str(wr.groups_matched)
+        if wr.groups_current_only or wr.groups_prior_only:
+            groups += f" (+{wr.groups_current_only}/-{wr.groups_prior_only})"
+        if wr.basis == "budget":
+            change = "set by budget"
+        elif wr.absolute_change is None:
+            change = "—"
+        else:
+            change = f"{wr.absolute_change * 100:+.2f}{_fmt_ci(wr.change_ci)}" + (
+                " *" if wr.change_significant else ""
+            )
+        caveats = [*wr.comparability, *(["low_volume"] if wr.low_volume else [])]
+        _add_row(
+            table,
+            str(wr.window_size),
+            f"{wr.current_periods_covered}/{wr.current_periods_expected} · "
+            f"{wr.prior_periods_covered}/{wr.prior_periods_expected}",
+            groups,
+            f"{wr.current_anomaly_count} / {wr.current_population}",
+            _fmt_pct(wr.current_rate) + _fmt_ci(wr.current_rate_ci),
+            _fmt_pct(wr.prior_rate) + _fmt_ci(wr.prior_rate_ci),
+            change,
+            _fmt_pct(wr.pct_change) if wr.basis != "budget" else "—",
+            ", ".join(caveats),
+        )
+    return table
+
+
+def _drift_table(drift: list[Any]) -> Table:
+    """Render population drift per window: volume change and the fields that moved most (PSI)."""
+    table = Table(title="Population drift (input data, current vs prior window)", show_header=True)
+    for name, justify in (
+        ("Window", "left"),
+        ("Rows cur / prior", "right"),
+        ("Δ rows %", "right"),
+        ("Summaries cur · prior", "right"),
+        ("Largest field drift (PSI)", "left"),
+        ("Band", "left"),
+    ):
+        table.add_column(name, justify=justify)  # type: ignore[arg-type]
+    for d in drift:
+        top = ", ".join(f"{_e(f)} {psi:.2f}" for f, psi, _ in d.top_fields(3))
+        _add_row(
+            table,
+            str(d.window_size),
+            f"{d.current_rows} / {d.prior_rows}",
+            f"{d.volume_change * 100:+.1f}" if d.volume_change is not None else "—",
+            f"{d.current_stats} · {d.prior_stats}",
+            top or "—",
+            d.max_band or "—",
+        )
+    return table
+
+
+def _drift_notes(drift: list[Any]) -> list[str]:
+    """Explain the drift table."""
+    notes = [
+        "  [dim]Population Stability Index per input field (original values, missing as its own bin), "
+        "comparing the prior window's data with the current window's; no model is involved. "
+        "Bands: below 0.1 stable, 0.1-0.25 moderate, above 0.25 large -- conventional heuristics, "
+        "not a significance test.[/dim]"
+    ]
+    if any(d.current_stats == 0 or d.prior_stats == 0 for d in drift):
+        notes.append(
+            "  [dim]A window without summaries has no drift figure: periods run before per-period "
+            "statistics existed have none.[/dim]"
+        )
+    return notes
+
+
+def _decomposition_table(decomposition: list[Any]) -> Table:
+    """Render the anchor-based split of each window's change in anomaly count."""
+    anchors = sorted({d.anchor_run_id for d in decomposition if d.anchor_run_id})
+    table = Table(title=f"Count change against anchor {_e(', '.join(anchors))}", show_header=True)
+    for name in (
+        "Window",
+        "Own count cur / prior",
+        "Δ count",
+        "= volume",
+        "+ score drift",
+        "+ threshold drift",
+        "Cells used (excl.)",
+    ):
+        table.add_column(name, justify="left" if name == "Window" else "right")
+
+    def _n(v: float | None) -> str:
+        return f"{v:+.1f}" if v is not None else "—"
+
+    for d in decomposition:
+        _add_row(
+            table,
+            str(d.window_size),
+            f"{d.current_count} / {d.prior_count}",
+            f"{d.count_change:+d}" if d.count_change is not None else "—",
+            _n(d.volume),
+            _n(d.score_drift),
+            _n(d.threshold_drift),
+            f"{d.cells_used} ({d.cells_excluded})",
+        )
+    return table
+
+
+def _decomposition_notes(
+    decomposition: list[Any], *, configured_anchor: str | None, part: str = "all"
+) -> list[str]:
+    """Explain the anchor figures (``part``: "scores", "counts" or "all"), or how to get them."""
+    if not any(d.anchor_run_id for d in decomposition):
+        if configured_anchor:
+            return [
+                f"  [dim]history.anchor_run is {_e(configured_anchor)}, but no period in these windows was "
+                "scored against it: periods run before it was set are scored only when re-run "
+                "(sorethumb backfill --force-period LABEL).[/dim]"
+            ]
+        return [
+            "  [dim]Score drift and threshold drift cannot be told apart without a fixed scale: set "
+            "history.anchor_run to a completed run and re-run periods to score them against it.[/dim]"
+        ]
+    counts = [
+        "  [dim]Each period is also scored with the anchor run's models and fixed threshold. Δ count (own "
+        "flags, current minus prior window, anchored cells only) = volume (more or fewer rows at the prior "
+        "rate) + score drift (the rate above the anchor's fixed threshold moved) + threshold drift (each "
+        "period's own recalibrated threshold moved relative to the anchor's). Computed per group, then "
+        "summed; the three add up exactly.[/dim]"
+    ]
+    scores = [
+        "  [dim]Anchor rate: share of rows above the anchor's fixed threshold. Score PSI compares the current "
+        "window's anchor-scale scores with the anchor's own; 'Above anchor p95' is 5% on the anchor's own "
+        "rows. Cells: (group, period) summaries used, and those left out (no anchor score, not comparable, "
+        "or no counterpart window).[/dim]"
+    ]
+    if any(d.anchor_run_id == "mixed" for d in decomposition):
+        scores.append(
+            "  [yellow]More than one anchor run in these windows: no decomposition is shown.[/yellow]"
+        )
+    reasons = sorted({r for d in decomposition for r in d.not_comparable_reasons})
+    scores.extend(f"  [dim]Not comparable: {_e(r)}.[/dim]" for r in reasons)
+    if part == "scores":
+        return scores
+    if part == "counts":
+        return counts
+    return counts + scores
+
+
+def _trend_notes(window_results: list[Any], *, basis: str, in_progress: bool) -> list[str]:
+    """Explain what the table's numbers mean, and every caveat it shows, in plain words."""
+    from sorethumb_ml.history.windows import COMPARABILITY  # noqa: PLC0415
+
+    notes: list[str] = []
+    if in_progress:
+        notes.append(
+            "[yellow]The only period with totals is still in progress; it may be incomplete.[/yellow]"
+        )
+    if basis == "budget":
+        notes.append(
+            "  [dim]Rates are set by the review budget (composite with a numeric contamination flags the "
+            "same fraction every period), so the change between windows is not shown.[/dim]"
+        )
+    else:
+        notes.append(
+            "  [dim]Each period is fitted and calibrated on its own rows: a change mixes real change with "
+            "how far each period's own boundary moved. Intervals cover sampling noise only. "
+            "* = the 95% interval for the change excludes 0.[/dim]"
+        )
+    notes.append(
+        "  [dim]Coverage: periods with totals / periods expected, current · prior. Groups: compared in "
+        "both windows (+ only in current / - only in prior; both left out).[/dim]"
+    )
+    if any(wr.low_volume for wr in window_results):
+        notes.append("  [dim]low_volume: a window's population is below history.low_volume_threshold.[/dim]")
+    used = sorted({c for wr in window_results for c in wr.comparability})
+    notes.extend(f"  [dim]{_e(code)}: {_e(COMPARABILITY[code])}.[/dim]" for code in used)
+    return notes
 
 
 # ---------------------------------------------------------------------------

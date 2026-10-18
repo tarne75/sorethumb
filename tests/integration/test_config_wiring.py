@@ -394,7 +394,7 @@ def test_report_open_after_launches_browser_only_when_set(
 
 
 def test_history_defaults_to_report_rolling_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import sorethumb_ml.history.windows as hw
+    import sorethumb_ml.history.trend as hw
 
     seen: dict[str, list[int]] = {}
 
@@ -418,7 +418,7 @@ def test_history_defaults_to_report_rolling_windows(tmp_path: Path, monkeypatch:
     )
     # --dry-run creates the workspace without a full run.
     runner.invoke(app, ["run", "--config", str(toml), "--dry-run"])
-    result = runner.invoke(app, ["history", "--config", str(toml)])
+    result = runner.invoke(app, ["history", "--config", str(toml), "--period", "2026-09-03"])
     assert result.exit_code == 0, result.stdout + (result.stderr or "")
     assert seen["windows"] == [3, 9]
 

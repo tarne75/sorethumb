@@ -29,6 +29,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 
+from sorethumb_ml._atomic import atomic_write_text
 from sorethumb_ml.config import Config, SourceConfig
 from sorethumb_ml.detectors import registry
 from sorethumb_ml.detectors._protocol import score_and_flag
@@ -697,6 +698,110 @@ def _resolve_and_filter_period(
     return filtered, label, (period_from, period_to)
 
 
+_PERIOD_STATS_FILENAME = "period_stats.json"
+
+
+def _save_anchor_rule(
+    ws: Workspace,
+    run_id: str,
+    group_key: str,
+    *,
+    config: Config,
+    calibrated_map: dict[str, np.ndarray],
+    composite_score: np.ndarray,
+    result_dict: dict[str, Any],
+    source_row: np.ndarray | None,
+) -> None:
+    """Save this fitting run's fixed flag rule for the group, so it can later serve as an anchor.
+
+    Never fails the group: without a rule the run simply cannot be an anchor
+    for this group, which a later anchored run reports as not comparable.
+    """
+    from sorethumb_ml.history.anchor import build_rule, save_rule  # noqa: PLC0415
+
+    try:
+        threshold = result_dict.get("threshold")
+        rule = build_rule(
+            combination=config.scoring.combination,
+            contamination=config.scoring.contamination,
+            weights=dict(result_dict.get("weights") or {}),
+            threshold=float(threshold) if threshold is not None else None,
+            calibrated=calibrated_map,
+            combined=np.asarray(composite_score, dtype=np.float64),
+            source_row=source_row,
+        )
+        save_rule(ws, run_id, group_key, rule)
+    except Exception:
+        logger.warning("Could not save the anchor rule for group %s.", group_key, exc_info=True)
+
+
+def _save_period_stats(
+    ws: Workspace,
+    run_id: str,
+    group_key: str,
+    *,
+    config: Config,
+    plan: FeaturePlan,
+    df_group: pl.DataFrame,
+    group_space: FeatureSpace,
+    raw_scores_map: dict[str, np.ndarray],
+    natural_flags_map: dict[str, np.ndarray],
+    composite_score: np.ndarray,
+    result_dict: dict[str, Any],
+    n_flagged: int,
+) -> None:
+    """Write this group's per-period statistics next to its results, for the history ledger to record.
+
+    Never fails the group: statistics are for drift reporting, so a failure is
+    logged and the period simply has no statistics for this group. Written to
+    a file rather than straight to the store so a resumed run, which skips the
+    group, still records them with the period's totals.
+    """
+    from sorethumb_ml.history.period_stats import compute_period_stats  # noqa: PLC0415
+
+    path = ws.results_dir(run_id, group_key) / _PERIOD_STATS_FILENAME
+    try:
+        excluded = {config.columns.id_column, config.columns.time_column}
+        fields = [f for f in _reference_fields(plan, group_space) if f not in excluded]
+        threshold = result_dict.get("threshold")
+        contamination = result_dict.get("contamination_used")
+        stats = compute_period_stats(
+            df_group=df_group,
+            fields=fields,
+            raw_scores=raw_scores_map,
+            natural_flags=natural_flags_map,
+            composite_score=composite_score,
+            composite_threshold=float(threshold) if threshold is not None else None,
+            contamination_used=float(contamination) if contamination is not None else None,
+            n_flagged=n_flagged,
+            combination=config.scoring.combination,
+            ensemble_policy=_ensemble_policy_id(config),
+        )
+        if config.history.anchor_run:
+            from sorethumb_ml.history.anchor import score_against_anchor  # noqa: PLC0415
+
+            stats["anchor"] = score_against_anchor(ws, config.history.anchor_run, group_key, df_group)
+        atomic_write_text(path, json.dumps(stats, allow_nan=False))
+    except Exception:
+        logger.warning(
+            "Period statistics failed for group %s; it has none for this period.", group_key, exc_info=True
+        )
+        path.unlink(missing_ok=True)
+
+
+def _load_period_stats(ws: Workspace, run_id: str, group_key: str) -> tuple[int, str] | None:
+    """Read a group's saved per-period statistics as ``(stats_version, json)``, or None."""
+    path = ws.results_dir(run_id, group_key) / _PERIOD_STATS_FILENAME
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+        return int(json.loads(text)["stats_version"]), text
+    except (OSError, ValueError, KeyError, TypeError):
+        logger.warning("Unreadable period statistics for group %s; skipping them.", group_key, exc_info=True)
+        return None
+
+
 def _record_period_history(
     ws: Workspace,
     dataset_fp: str,
@@ -733,6 +838,12 @@ def _record_period_history(
         if g.status in ("success", "too_few_records", "skipped")
     ]
     failed_count = sum(1 for g in group_results if g.status == "failed")
+    period_stats: list[tuple[str, int, str]] = []
+    for g in group_results:
+        if g.status in ("success", "skipped"):
+            loaded = _load_period_stats(ws, run_id, g.group_key)
+            if loaded is not None:
+                period_stats.append((g.group_key, *loaded))
     ws.store.record_period_completion(
         dataset_fp=dataset_fp,
         period_label=period_label,
@@ -742,6 +853,7 @@ def _record_period_history(
         run_id=run_id,
         totals=totals,
         failed_count=failed_count,
+        period_stats=period_stats,
     )
 
 
@@ -877,7 +989,10 @@ def run_detection(
         # run_id is derived deterministically so that a repeat call with identical
         # dataset + config + period finds the same ledger entries and can skip
         # already-complete groups (resume behaviour).
-        run_id = _make_run_id(dataset_fp, config.config_hash(), period_label, snapshot_fp)
+        _validate_anchor_run(ws, config, dataset_fp)
+        run_id = _make_run_id(
+            dataset_fp, config.config_hash(), period_label, snapshot_fp, config.history.anchor_run
+        )
         policy_evidence_id = _policy_evidence_gate(ws, config, dataset_fp, issued_warnings)
         config_json = _redacted_config_json(config)
         import sorethumb_ml as _st  # noqa: PLC0415
@@ -1410,18 +1525,48 @@ def score_forward(
 
 
 def _make_run_id(
-    dataset_fp: str, config_hash: str, period_label: str | None, snapshot_fp: str | None = None
+    dataset_fp: str,
+    config_hash: str,
+    period_label: str | None,
+    snapshot_fp: str | None = None,
+    anchor_run: str | None = None,
 ) -> str:
-    """Stable run identifier derived from dataset identity, snapshot, config, and period.
+    """Stable run identifier derived from dataset identity, snapshot, config, period and anchor.
 
     Same inputs always produce the same ID, so a repeat invocation can find
     prior ledger entries and skip already-complete groups (resume behaviour).
     ``snapshot_fp`` is part of the key so a changed source snapshot yields a
     fresh run rather than resuming against stale results -- while period /
     totals history stays keyed on the stable ``dataset_fp`` alone.
+    ``history.anchor_run`` is not in the config hash (it changes no flag or
+    total), but a run scored against an anchor records more than one without,
+    so setting or changing it yields a fresh run instead of resuming one that
+    never scored against it. Unset, the key is unchanged.
     """
     key = f"{dataset_fp}:{snapshot_fp or '__no_snapshot__'}:{config_hash}:{period_label or '__no_period__'}"
+    if anchor_run:
+        key += f":anchor={anchor_run}"
     return "run_" + hashlib.sha256(key.encode()).hexdigest()[:32]
+
+
+def _validate_anchor_run(ws: Workspace, config: Config, dataset_fp: str) -> None:
+    """Refuse a ``history.anchor_run`` that cannot serve as a fixed scale for this dataset."""
+    anchor = config.history.anchor_run
+    if not anchor:
+        return
+    row = ws.store.get_run(anchor)
+    problem = None
+    if row is None:
+        problem = "is not a run in this workspace"
+    elif row.get("status") != "complete":
+        problem = f"has status {row.get('status')!r}; only a complete run has the models to score with"
+    elif row.get("source_run_id"):
+        problem = "is a score-forward run; the anchor must be a run that fitted its own models"
+    elif str(row.get("dataset_fp")) != dataset_fp:
+        problem = "was run on a different dataset"
+    if problem:
+        msg = f"history.anchor_run {anchor!r} {problem}."
+        raise ConfigError(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -2023,6 +2168,34 @@ def _finalize_group(
     # The flagged population and its order are now fixed: the explanation stage
     # gets a read-only view and writes only its own file.
     flagged_idx.setflags(write=False)
+
+    if source_run_id is None:
+        _save_anchor_rule(
+            ws,
+            run_id,
+            group_key,
+            config=config,
+            calibrated_map=calibrated_map,
+            composite_score=composite_score,
+            result_dict=result_dict,
+            source_row=group_space.row_ids,
+        )
+    # Period runs only: score-forward writes no history, so its statistics would have no reader.
+    if period_label is not None and source_run_id is None:
+        _save_period_stats(
+            ws,
+            run_id,
+            group_key,
+            config=config,
+            plan=plan,
+            df_group=df_group,
+            group_space=group_space,
+            raw_scores_map=raw_scores_map,
+            natural_flags_map=natural_flags_map,
+            composite_score=composite_score,
+            result_dict=result_dict,
+            n_flagged=n_anomalies,
+        )
 
     # ── Stage B: explanation, isolated from the detection output ───────────
     outcome = _explain_group(
@@ -2822,6 +2995,30 @@ def render_report_for_run(
     return _render_report_or_reason(ws, run_id, formats=formats, csv_bom=csv_bom)[0]
 
 
+def _group_trend(ws: Workspace, run_row: dict[str, Any], config: Config, group_key: str) -> Any:
+    """Return the group's trend report, ending at the period this run computed; None without one.
+
+    The period is the one whose totals this run wrote for the group, so a run
+    with no time column has no trend, and neither has a run whose totals a
+    later run of the same period has superseded (that later run's report
+    carries the trend).
+    """
+    from sorethumb_ml.history.trend import build_trend_report  # noqa: PLC0415
+
+    labels = ws.store.run_period_labels(str(run_row["run_id"]), group_key)
+    if len(labels) != 1:
+        return None
+    return build_trend_report(
+        ws.store,
+        dataset_fp=str(run_row["dataset_fp"]),
+        config_hash=str(run_row["config_hash"]),
+        config=config,
+        reference_label=str(labels[0]),
+        windows=list(config.report.rolling_windows),
+        group_keys=[group_key],
+    )
+
+
 def _render_report_or_reason(
     ws: Workspace, run_id: str, *, formats: list[str] | None = None, csv_bom: bool | None = None
 ) -> tuple[Path | None, str | None]:
@@ -2878,6 +3075,7 @@ def _render_report_or_reason(
                     plan_dropped=dropped,
                     warnings=warns,
                     attributions=read_attributions(ws, run_id, gk),
+                    trend=_group_trend(ws, run_row, config, gk),
                 )
             )
 

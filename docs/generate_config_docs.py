@@ -235,6 +235,7 @@ _PROSE_DOCS = [
     "docs/example-runs.md",
     "docs/models.md",
     "docs/index.md",
+    "docs/trends.md",
 ]
 
 _SECTION_NAMES = {name for name, _model, _desc in _SECTIONS}

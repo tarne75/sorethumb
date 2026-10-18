@@ -10,8 +10,9 @@ run arbitrary Python chosen by whoever produced that file, not just the
 `sorethumb` code you installed.
 
 `sorethumb score --from-run RUN_ID` loads these files directly
-(`joblib.load`) with no sandboxing, and `run.reuse_models` does the same to
-reload a persisted model within the same run. Treat any workspace you did
+(`joblib.load`) with no sandboxing. `run.reuse_models` does the same to reload a
+persisted model within the same run. `history.anchor_run` does the same for the
+anchor run's models on every period run. Treat any workspace you did
 not create yourself as untrusted input, in the same category as running a
 downloaded script. Do not run these commands against a workspace copied from
 another machine, a shared drive, a CI artifact, or any other party unless you

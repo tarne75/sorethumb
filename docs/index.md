@@ -10,6 +10,7 @@
 - [Adapting to your data](adapting-to-your-data.md)
 - [Explanations: model-specific vs heuristic](explanations.md)
 - [Approximations and error characteristics](approximations.md)
+- [Trends: what `sorethumb history` can and cannot tell you](trends.md)
 - [Benchmark results](benchmarks.md)
 - [API and stability policy](stability.md)
 - [Contributing](../CONTRIBUTING.md)

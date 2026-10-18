@@ -248,6 +248,46 @@ First public release.
   `docs/ensemble-policy.md` gives a recommended setup for users with a review
   budget, and qualifies the default's precision-first rationale: it holds at the
   shipped `"auto"`, and the default's real weakness is unpredictable volume.
+- **Honest rolling-window trends** (`sorethumb history`, report):
+  - Each trend states its basis. Under `composite` with a numeric
+    contamination the rate is set by the review budget, so no change is shown.
+  - The trend ends at the latest *elapsed* period with totals (new
+    `--period`), and shows coverage per window.
+  - Only groups present in both windows are compared (new `--all-groups`
+    turns this off), and the composition is shown.
+  - Rates carry Wilson 95% intervals and the change a Newcombe interval;
+    `Δ %` is withheld below 10 prior anomalies. Low volume is flagged for every
+    window, not only the shortest.
+  - Comparability caveats now also cover mixed library versions, mixed
+    ensemble policies, incomplete coverage and a changed group mix.
+  - The HTML report's trend table is now filled in for runs with a period; it
+    was never populated before.
+  - **Per-period statistics** (migration 013, `period_stats`), recorded with each
+    period's totals:
+    - per original field: missing count, plus percentiles or top values;
+    - per detector: score percentiles and flag count;
+    - the composite threshold, contamination and flag count.
+  - `sorethumb history` adds a **population drift** table. Per window it shows
+    the change in row count and the fields that moved most by Population
+    Stability Index, with conventional heuristic bands. No model is involved,
+    so self-calibration cannot hide or invent a change.
+  - **Anchor run** (`history.anchor_run`). Each period run also scores its
+    rows with one fixed run's models, calibrators and flag rule. `sorethumb
+    history` then splits each window's change in anomaly count exactly into
+    volume, score drift (the rate above a fixed threshold moved) and threshold
+    drift (self-recalibration moved the bar). It also shows anchor-scale score
+    PSI and tail share.
+    - Every fitting run saves its rule (`anchor_rule.json`, plain JSON).
+    - Periods the anchor cannot score are left out, with the reason.
+    - The anchor is not part of the config hash but is part of the run id, so
+      setting it keeps one trend while giving re-run periods fresh runs.
+  - **Four-section `sorethumb history`**: a verdict summary, then
+    1 Population, 2 Scores, 3 Threshold and 4 Counts. Each section has a
+    verdict per window: ok, caveats with reasons, or n/a with why.
+    - `history --json` prints the whole report.
+    - Each period run's HTML report shows the same sections per group, and its
+      `index.json` carries them under `trend`.
+    - New guide: [docs/trends.md](docs/trends.md).
 
 ### Security
 

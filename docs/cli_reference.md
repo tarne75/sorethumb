@@ -156,7 +156,9 @@ models/<run>/…          fitted feature plan, and per group and detector the
                         per group, reference.json (the explanation reference summary)
 results/<run>/<group>/  per-group results (Parquet): anomalies.parquet (detection: scores,
                         flags, ranks; written and digested first), explanations.parquet
-                        and attributions.parquet (the record behind each reason)
+                        and attributions.parquet (the record behind each reason); for a
+                        period run, period_stats.json (per-period statistics, also
+                        recorded in the ledger)
 reports/<run>/          rendered HTML / CSV / JSON reports
 cache/  tmp/  logs/     downloaded-dataset and feature caches, scratch, rotating logs
 ```
@@ -584,15 +586,46 @@ sorethumb explain-plan abc12345 --json
 
 ## `sorethumb history`
 
-Show rolling-window anomaly-rate trends over time for the configured dataset.
-Requires a `time_column` in the config and at least `[history].bootstrap_periods`
-of completed runs.
+Show how the configured dataset is changing, as four separate signals, each
+with a verdict per window. Requires a `time_column` in the config and completed
+period runs. See [Trends](trends.md) for what each figure means and its limits.
 
 ```bash
 sorethumb history
 sorethumb history --window 7 --window 28   # two rolling windows
 sorethumb history --group store_42
+sorethumb history --period 2026-09-30      # end the trend at a given period
+sorethumb history --json                   # the whole report as JSON
 ```
+
+Each period is fitted and calibrated on its own rows, so a single anomaly rate
+per period can't say why it moved. The output is:
+
+- **Verdict summary.** One row per window: `ok`, `caveats` or `n/a` for each
+  section.
+- **1. Population.** Did the input data change? Change in rows, and the fields
+  that moved most by Population Stability Index (PSI). No model is involved.
+- **2. Scores.** Do the anchor run's fixed models score the data differently?
+  The share of rows above the anchor's fixed threshold, score PSI against the
+  anchor, and the share above the anchor's 95th percentile. Needs
+  `history.anchor_run`.
+- **3. Threshold.** Did each period's own recalibrated threshold move? Own rate
+  against anchor-scale rate on the same rows, and the threshold-drift term.
+  Needs `history.anchor_run`.
+- **4. Counts.** The own anomaly rate per window, with:
+  - coverage and the groups compared;
+  - Wilson and Newcombe 95% intervals;
+  - caveats.
+
+  With an anchor, the change in count splits exactly into volume + score drift
+  + threshold drift.
+
+Under `combination = "composite"` with a numeric `contamination`, every period
+flags the same fraction, so the rate is set by the review budget and no change
+is shown. Only groups present in both windows are compared (`--all-groups` sums
+every group). The trend ends at the most recent period with totals that has
+already ended. The HTML report of a period run shows the same four sections per
+group, and its `index.json` carries them under `trend`.
 
 **Options:**
 
@@ -601,6 +634,9 @@ sorethumb history --group store_42
 | `--config`, `--workdir`, `--log-level` | — | See [Common options](#common-options). |
 | `--window INT` | from config | Rolling window size(s) in periods. Repeatable. |
 | `--group STR` | — | Limit trend display to a specific group. |
+| `--period LABEL` | latest elapsed period | Period label the trend ends at. |
+| `--all-groups` | off | Sum every group in each window, not only groups present in both. |
+| `--json` | off | The whole report as one JSON document on stdout. |
 
 ---
 
@@ -618,9 +654,9 @@ sorethumb backfill --max-periods 14             # cap depth
 
 Each pending period is fitted and scored independently (a full `sorethumb run`
 for that period's window) and self-calibrated. The resulting `sorethumb history`
-trend therefore shows *relative* period-to-period movement, not an absolute
-anomaly level on a shared scale — for that, score every period against one fixed
-run with `sorethumb score --from-run RUN_ID`.
+trend therefore compares independently calibrated snapshots. Set
+`history.anchor_run` to also score every period against one fixed run, which
+separates score drift from threshold drift (see [Trends](trends.md)).
 
 A failing period never stops the others. Periods whose run finished with failed
 groups, and periods whose run raised a project error (for example an unreadable

@@ -596,9 +596,20 @@ class HistoryConfig(BaseModel):
         100,
         ge=1,
         description=(
-            "The shortest rolling window is flagged low-volume (shown in the HTML "
-            "report) when its current population is below this -- informational "
+            "A rolling window is flagged low-volume (in sorethumb history and the HTML "
+            "report) when its current or prior population is below this -- informational "
             "only; low-volume periods are still included in every aggregate."
+        ),
+    )
+    anchor_run: str | None = Field(
+        None,
+        min_length=1,
+        description=(
+            "Run id of a completed fitting run of this dataset whose models, calibrators and flag "
+            "rule score every period run as well as that period's own fit. Gives a fixed scale, so "
+            "sorethumb history can split a change in anomaly count into volume, score drift and "
+            "threshold drift. Not part of the config hash, so setting it keeps the trend's history; "
+            "periods already run are scored against it only when re-run."
         ),
     )
 
@@ -655,7 +666,7 @@ class Config(BaseModel):
         """32-char (128-bit) hex hash covering only result-affecting fields.
 
         Excludes run.workdir, run.log_level, run.slow_stage_seconds, run.reuse_models,
-        source.dataset_id, source.max_download_bytes, and the entire report section
+        source.dataset_id, source.max_download_bytes, history.anchor_run, and the entire report section
         so purely cosmetic or execution-only changes don't bust artefact caches.
         """
         d = self.model_dump()
@@ -671,6 +682,10 @@ class Config(BaseModel):
         # data itself -- exclude it for the same reason.
         for key in ("dataset_id", "max_download_bytes"):
             d.get("source", {}).pop(key, None)
+        # The anchor run adds a fixed-scale measurement alongside each period's
+        # own; it changes no flag, score or total, and history must stay one
+        # trend when it is set or changed.
+        d.get("history", {}).pop("anchor_run", None)
         # Every spelling of one Windows path is one source (NTFS is
         # case-insensitive and takes either separator); anything else is hashed
         # exactly as given -- see io/uri.py.
