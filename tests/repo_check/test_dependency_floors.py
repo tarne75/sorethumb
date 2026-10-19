@@ -1,8 +1,8 @@
 """The declared dependency floors are actually exercised by the release gate.
 
-Every other release-validation job installs from ``uv.lock`` (the newest resolvable
-versions), so a lower bound in ``pyproject.toml`` can be wrong without anything
-failing. These tests read the workflow and ``pyproject.toml`` (they do not run CI)
+Every other release-validation job installs from ``uv.lock`` (versions at or near the
+newest; ``test_newest_dependencies.py`` covers the newest themselves), so a lower bound
+in ``pyproject.toml`` can be wrong without anything failing. These tests read the workflow and ``pyproject.toml`` (they do not run CI)
 and pin that the ``lowest-direct`` job exists, is part of the gate, resolves every
 direct runtime dependency at its floor on the minimum supported Python, and runs the
 unit and contract lanes -- so the job cannot quietly turn into a no-op.

@@ -1,0 +1,89 @@
+name: Newest dependencies
+
+# Every other job installs from the committed uv.lock, which only moves when someone
+# re-locks. A dependency can publish a new release (polars 2.0 did) that a fresh
+# `pip install sorethumb-ml` resolves the same day, while CI keeps testing the older
+# locked version. This workflow re-resolves every dependency at its newest release
+# and runs the suite against that, daily, so a breaking release is caught the day
+# it ships rather than by a user.
+#
+# Not a required check: an upstream release can break it with no change here. A
+# failure means "re-lock and fix, or add an upper bound", not "this PR is wrong".
+# It also runs on a pull request that edits this file, so a change to it is seen
+# working before it lands.
+
+on:
+  schedule:
+    - cron: "30 5 * * *"
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - .github/workflows/newest-deps.yml
+
+concurrency:
+  group: newest-deps-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  newest:
+    name: newest (${{ matrix.os }}, ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest and newest supported Python on Linux, and the newest on the
+          # other two platforms.
+          - os: ubuntu-latest
+            python: "3.11"
+          - os: ubuntu-latest
+            python: "3.13"
+          - os: macos-latest
+            python: "3.13"
+          - os: windows-latest
+            python: "3.13"
+    env:
+      HYPOTHESIS_PROFILE: ci
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Re-resolve every dependency at its newest release
+        run: uv lock --upgrade
+      - name: List what moved past the committed lock
+        # In the log and the run summary, so a failure names the release behind it.
+        run: |
+          git show HEAD:uv.lock > committed-uv.lock
+          uv run --no-project python - <<'EOF' | tee -a "$GITHUB_STEP_SUMMARY"
+          import tomllib
+
+          def versions(path):
+              with open(path, "rb") as fh:
+                  return {p["name"]: p.get("version") for p in tomllib.load(fh)["package"]}
+
+          old, new = versions("committed-uv.lock"), versions("uv.lock")
+          moved = sorted(n for n in new if n in old and old[n] != new[n])
+          added = sorted(set(new) - set(old))
+          print(f"### Newer than the committed uv.lock: {len(moved)} moved, {len(added)} added\n")
+          for name in moved:
+              print(f"- {name}: {old[name]} -> {new[name]}")
+          for name in added:
+              print(f"- {name}: new, {new[name]}")
+          EOF
+      - name: Install the newest versions
+        run: uv sync --all-extras --locked
+      - name: Unit, contract, integration and property lanes
+        run: uv run --no-sync pytest -m "unit or contract or integration or property"
+      - name: Accuracy floors
+        # Numerical drift in a dependency shows up here, not in the lanes above. One
+        # leg is enough: the floors are platform-independent.
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.13'
+        run: uv run --no-sync pytest tests/benchmark/test_accuracy_floors.py tests/benchmark/test_pipeline_accuracy_floors.py -m benchmark
