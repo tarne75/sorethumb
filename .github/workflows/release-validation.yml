@@ -98,7 +98,7 @@ jobs:
             --extra explain --extra benchmark \
             --resolution lowest-direct --python-version 3.11 \
             -o lowest-direct.txt
-          grep -E '^(polars|pyarrow|numpy|scikit-learn|scipy|pydantic|pydantic-settings|typer|rich|httpx|joblib)==' lowest-direct.txt
+          grep -E '^(polars|pyarrow|numpy|scikit-learn|scipy|pydantic|typer|rich|httpx|joblib)==' lowest-direct.txt
       - name: Install the minimums, then the project and test tooling under them
         run: |
           uv venv --python 3.11 .lowest-venv
@@ -280,6 +280,11 @@ jobs:
           # them is lazy (function-level), not at module load time.
           import sorethumb_ml.explain.shap_tree
           import sorethumb_ml.explain.gradient
+          # Neither is a core dependency (tests/integration/test_optional_packages.py):
+          # a core install must not bring them in.
+          import importlib.util
+          extra = [n for n in ('pyarrow', 'pydantic_settings') if importlib.util.find_spec(n)]
+          assert not extra, f'core install brought in {extra}'
           print('import OK ($artifact_name)', sorethumb_ml.__version__)
           "
             echo "::endgroup::"
@@ -399,6 +404,13 @@ jobs:
           $code = $LASTEXITCODE
           Pop-Location
           if ($code -ne 0) { exit $code }
+      - name: A core install brings in neither pyarrow nor pydantic-settings
+        # Neither is a core dependency (tests/integration/test_optional_packages.py).
+        if: matrix.extra == ''
+        run: |
+          $ErrorActionPreference = "Stop"
+          & "$env:SMOKE_VENV\Scripts\python.exe" -c "import importlib.util as u; extra = [n for n in ('pyarrow', 'pydantic_settings') if u.find_spec(n)]; assert not extra, f'core install brought in {extra}'; print('no pyarrow, no pydantic-settings')"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Console script
         run: |
           $ErrorActionPreference = "Stop"
