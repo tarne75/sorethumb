@@ -161,7 +161,9 @@ territory" from "this is outside normal territory".
 **Where it struggles.**
 - Speed — it scales poorly with the number of rows (training cost grows
   quadratically). It is capped at 25,000 training rows by default; above that,
-  a random sample is used
+  a random sample is used. Scoring every row is still the slowest of the three
+  defaults: 67 s on 1,000,000 rows in the
+  [scale benchmark](benchmarks.md#end-to-end-scale)
 - Very high-dimensional data — the boundary becomes harder to draw reliably
 - Large datasets where you want all rows trained on
 

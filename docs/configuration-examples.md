@@ -294,10 +294,15 @@ The `[[detectors]]` block is a TOML array of tables — each entry is one detect
 Omitting the block entirely uses the built-in defaults
 (`isolation_forest`, `kmeans_distance`, `one_class_svm`).
 
-### Large dataset — disable SVM, cap the others
+### Large dataset — drop the SVM, set a review budget
 
-`one_class_svm` has quadratic complexity; drop it and reduce the row caps for
-faster training on 1 M+ row datasets.
+On 1,000,000 rows with the defaults ([scale benchmark](benchmarks.md#end-to-end-scale)),
+explanations take about three quarters of the run, and their cost follows the number of
+rows flagged; One-Class SVM scoring every row is most of the rest (67 s). Training is
+already bounded by each detector's row cap. So the levers are fewer flagged rows and
+no SVM: under the default `intersection` policy a numeric `contamination` flags at most
+that share of rows. Dropping a detector changes what the ensemble catches; check the
+result on your data.
 
 ```toml
 [source]
@@ -306,13 +311,14 @@ uri = "/data/large_events.parquet"
 [run]
 workdir = "./workspace"
 
-[[detectors]]
-name          = "isolation_forest"
-train_row_cap = 500_000
+[scoring]
+contamination = 0.01
 
 [[detectors]]
-name          = "kmeans_distance"
-train_row_cap = 300_000
+name = "isolation_forest"
+
+[[detectors]]
+name = "kmeans_distance"
 ```
 
 ### Tune Isolation Forest hyperparameters

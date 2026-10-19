@@ -46,3 +46,6 @@ PLAN.md
 
 # Delete-pending placeholders an SMB/CIFS share leaves while a deleted file is still open
 .smbdelete*
+
+# scripts/run_scale_benchmark.py default scratch directory
+scale_benchmark_scratch/

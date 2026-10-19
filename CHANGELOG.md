@@ -191,7 +191,7 @@ Versioning: [Semantic Versioning](https://semver.org/).
   `PYTHONIOENCODING` says otherwise, and every `--json` output is
   ASCII-escaped, so it is lossless under any output encoding.
 - **Extras**: `explain` (shap, numba) for TreeSHAP and KernelSHAP attributions;
-  `benchmark` (datasets, pandas) for the benchmark harnesses.
+  `benchmark` (datasets, pandas, pyarrow) for the benchmark harnesses.
 - **Docs**: `docs/stability.md` sets out the pre-1.0 API and stability policy;
   `docs/benchmarks.md` holds the benchmark results and their accuracy floors,
   and an ensemble policy matrix: every scenario under every policy, with
@@ -202,7 +202,11 @@ Versioning: [Semantic Versioning](https://semver.org/).
   must pass before it can be said to outperform the default (pre-registration,
   disjoint confirmation seeds, paired bootstrap with Holm correction, no budget
   or stability regressions, confirmation in rounds of fresh seeds) and
-  publishes each confirmation result. `docs/explanations.md` and
+  publishes each confirmation result. An end-to-end scale benchmark
+  (`scripts/run_scale_benchmark.py`) runs a zero-config `sorethumb run` and a
+  `score --from-run` at 10,000, 100,000 and 1,000,000 rows, and publishes time per
+  stage, peak memory, feature width, each detector's training sample, explanation
+  cost and output size. `docs/explanations.md` and
   `docs/trends.md` say what each explanation and trend figure means and where it
   stops.
 - **`sorethumb backtest`**: compares every registered ensemble policy with the
@@ -314,6 +318,11 @@ Versioning: [Semantic Versioning](https://semver.org/).
   the other way (mildly reduced sensitivity).
 - Real-dataset benchmark figures (KDDCup99, Covtype) are capped at 20,000 rows
   for CI runtime, as `docs/benchmarks.md` states where the tables appear.
+- **Dataset size**: measured end to end up to 1,000,000 rows (with the defaults, 6.9
+  minutes and 4.9 GB peak memory on an 8-core, 16 GB laptop); larger datasets are
+  untested. Explanations are most of the time and memory, and peak memory is set by
+  loading, profiling and explanations, not by the projected feature matrix that
+  `run.max_memory_mb` checks. See the README's Scale guide.
 - **Platforms**: native Windows on ARM is untested (the core installs from
   Windows ARM64 wheels, but no CI job runs there, and the `benchmark` extra's
   pyarrow has no such wheel; an x64 Python under emulation is the tested

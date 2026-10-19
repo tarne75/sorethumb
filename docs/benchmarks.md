@@ -19,6 +19,108 @@ required `--output-dir`; the document passed to `--readme` is the only file edit
 Average precision (AP) is the headline metric
 in both — it accounts for class imbalance in a way ROC-AUC does not.
 
+## End-to-end scale
+
+What a default run costs at practical sizes: the accuracy suites above fit small
+synthetic frames, so they say nothing about time or memory on a real-sized table.
+`scripts/run_scale_benchmark.py` generates a mixed transaction-like table (14 columns:
+an id, a timestamp, seven numerics including lognormal amounts, a zero-inflated
+discount and correlated readings, categoricals with 2, 3, 6 and 400 levels, and short
+free text; 0.5% planted anomalies whose labels stay outside the data) at each size,
+then:
+
+- runs a **zero-config `sorethumb run data.csv`**: the config is the one the CLI builds
+  from a bare data path, so default detectors, `scoring.contamination = "auto"`,
+  explanations on, HTML and CSV reports;
+- scores a **second file of the same size** with `sorethumb score --from-run`, the
+  recurring production step;
+- runs each in a **fresh process**, so peak memory (OS-tracked RSS) is that run's
+  alone, and records each stage's exclusive time and how much it raised the peak.
+
+```bash
+uv run python scripts/run_scale_benchmark.py            # 10k, 100k, 1M rows; about 16 minutes
+uv run python scripts/run_scale_benchmark.py --sizes 100000 --no-publish
+```
+
+One run per size on one machine: read the timings as an order of magnitude for
+similar hardware, not a guarantee. The flag precision and recall rows are a sanity
+check that the ranking does not degrade with size, not an accuracy result (the
+scenario benchmarks above are those).
+
+<!-- scale-results-start -->
+<!-- AUTO-GENERATED — do not edit manually; run `uv run python scripts/run_scale_benchmark.py` to regenerate. -->
+
+Generated 2026-10-19T14:14:03+00:00 at commit `29ccfc2398ec` on macOS-26.6.2-arm64-arm-64bit (8 CPUs), Python 3.12.12, sorethumb 0.1.0, numpy 2.5.2, scikit-learn 1.9.0, polars 2.0.0, shap 0.52.0. Seed 0; one run per size. Full results: [`benchmark-results/scale.json`](benchmark-results/scale.json).
+
+**`sorethumb run` (fit, score, explain, report)**
+
+| | 10,000 rows | 100,000 rows | 1,000,000 rows |
+| --- | --- | --- | --- |
+| Input CSV | 1.8 MB | 17.6 MB | 176.9 MB |
+| Elapsed | 12.9 s | 68.1 s | 6.9 min |
+| Peak memory (RSS) | 913 MB | 1,846 MB | 4,900 MB |
+| of which: Python with sorethumb imported | 91 MB | 90 MB | 90 MB |
+| Feature width | 27 | 27 | 27 |
+| `isolation_forest` trained on | 10,000 of 10,000 | 100,000 of 100,000 | 250,000 of 1,000,000 |
+| `kmeans_distance` trained on | 10,000 of 10,000 | 100,000 of 100,000 | 200,000 of 1,000,000 |
+| `one_class_svm` trained on | 10,000 of 10,000 | 25,000 of 100,000 | 25,000 of 1,000,000 |
+| Rows flagged | 655 | 5,463 | 50,420 |
+| Rows explained | 655 | 5,463 | 50,420 |
+| Workspace on disk | 7.3 MB | 22.2 MB | 160.1 MB |
+| Flags vs planted anomalies (precision / recall) | 0.04 / 0.52 | 0.04 / 0.49 | 0.06 / 0.56 |
+
+**Where the run's time and memory go** (exclusive seconds per stage, and how much the stage raised the process's peak memory)
+
+| | 10,000 rows | 100,000 rows | 1,000,000 rows |
+| --- | --- | --- | --- |
+| Load and parse | 0.0 s · +20 MB | 0.0 s · +73 MB | 0.1 s · +477 MB |
+| Profile and fit features | 0.0 s · +21 MB | 0.0 s · +117 MB | 0.3 s · +808 MB |
+| Build the feature matrix | 0.0 s · +2 MB | 0.0 s · +9 MB | 0.1 s · +100 MB |
+| Train `isolation_forest` | 1.7 s · +143 MB | 1.7 s · +128 MB | 2.0 s · +0 MB |
+| Train `kmeans_distance` | 5.1 s · +625 MB | 19.7 s · +843 MB | 21.0 s · +385 MB |
+| Train `one_class_svm` | 0.2 s · +0 MB | 2.1 s · +0 MB | 2.1 s · +0 MB |
+| Score every row: `isolation_forest` | 0.1 s · +0 MB | 0.6 s · +0 MB | 5.7 s · +0 MB |
+| Score every row: `kmeans_distance` | 0.0 s · +0 MB | 0.0 s · +0 MB | 0.0 s · +0 MB |
+| Score every row: `one_class_svm` | 0.3 s · +0 MB | 6.7 s · +0 MB | 67.4 s · +0 MB |
+| Explanations | 5.2 s · +0 MB | 36.5 s · +475 MB | 308.5 s · +2,775 MB |
+| Write results | 0.0 s · +0 MB | 0.0 s · +0 MB | 0.9 s · +64 MB |
+| Report | 0.1 s · +0 MB | 0.5 s · +109 MB | 5.2 s · +0 MB |
+| Other (bookkeeping, unattributed) | 0.2 s · +10 MB | 0.2 s · +3 MB | 1.2 s · +202 MB |
+
+**`sorethumb score --from-run` on a new file of the same size**
+
+| | 10,000 rows | 100,000 rows | 1,000,000 rows |
+| --- | --- | --- | --- |
+| Elapsed | 7.1 s | 47.1 s | 6.5 min |
+| Peak memory (RSS) | 473 MB | 1,442 MB | 5,069 MB |
+| Explanations | 5.0 s | 37.3 s | 5.2 min |
+| Flags vs planted anomalies (precision / recall) | 0.05 / 0.62 | 0.05 / 0.51 | 0.05 / 0.55 |
+<!-- scale-results-end -->
+
+### What the scale benchmark shows (2026-10-19)
+
+- **1,000,000 rows runs on the defaults** on an 8-core, 16 GB laptop: 6.9 minutes and
+  4.9 GB peak memory for the run, 6.5 minutes and 5.1 GB to score a new million-row
+  file. Nothing larger was measured; above 1,000,000 rows sorethumb is untested.
+- **Explanations dominate** at every size above 10,000 rows: 308 of the 412 seconds at
+  1,000,000 rows, and 2.8 GB of the peak. Their cost follows the number of rows
+  flagged (6 to 8 ms per row here), not the dataset: at `"auto"` the default policy
+  flagged about 5% of rows (50,420 at 1,000,000). A numeric review budget flags fewer
+  rows (see [ensemble-policy.md](ensemble-policy.md#where-things-stand-2026-10-15)), and
+  `explain.enabled = false` removes the stage.
+- **The feature matrix is not what uses the memory.** Building it raised the peak by
+  100 MB at 1,000,000 rows (27 float32 features); loading and profiling the data raised
+  it by 1.3 GB, explanations by 2.8 GB. `run.max_memory_mb` checks only the projected
+  matrix, so it is no guide to peak memory.
+- **Detector training is bounded by the row caps** and takes about 25 seconds at
+  100,000 and at 1,000,000 rows alike: Isolation Forest trains on at most 250,000
+  rows, KMeans on 200,000, One-Class SVM on 25,000. The slowest to train is
+  `kmeans_distance` (k selection, about 20 seconds). **Scoring every row** grows
+  linearly instead, and One-Class SVM dominates it: 6.7 seconds at 100,000 rows, 67
+  seconds at 1,000,000.
+- **Output** at 1,000,000 rows is a 160 MB workspace, 142 MB of it the HTML and CSV
+  reports of the flagged rows; scoring the second file brought it to 316 MB.
+
 ## Full-pipeline scenario benchmark
 
 `src/sorethumb_ml/evaluate/pipeline_benchmark.py` fits a named taxonomy of
