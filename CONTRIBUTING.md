@@ -50,6 +50,13 @@ If you changed `pyproject.toml`'s dependencies, run `uv lock` to update
 `uv.lock` and commit both together — CI runs `uv lock --check` and will fail
 a PR where they've drifted apart.
 
+`uv.lock` pins what CI tests, not what a fresh `pip install sorethumb-ml` gets: that
+resolves the newest release of every dependency. The `Newest dependencies` workflow
+(`.github/workflows/newest-deps.yml`) re-resolves everything at its newest release
+and runs the suite daily. When it fails, an upstream release broke something:
+re-lock (`uv lock --upgrade-package NAME`) and fix the code, or add an upper bound
+in `pyproject.toml` until you can.
+
 ## Optional extras
 
 The mandatory install (`pip install sorethumb-ml` / `uv sync`) is deliberately
@@ -58,7 +65,7 @@ minimal. Everything below is opt-in, matched to the feature it enables:
 | Extra | Adds | Enables |
 |---|---|---|
 | `explain` | shap, numba | TreeSHAP / KernelSHAP explanations. Without it, explanations fall back to the pure-numpy gradient method with a warning — the run itself never fails. |
-| `benchmark` | datasets, pandas | `scripts/run_benchmark.py` (both the real-dataset and full-pipeline-scenario suites) and `pytest -m benchmark`. |
+| `benchmark` | datasets, pandas, pyarrow | `scripts/run_benchmark.py` (both the real-dataset and full-pipeline-scenario suites) and `pytest -m benchmark`. |
 | `dev` | pytest, ruff, mypy, pre-commit, hypothesis, ... | Everything needed to run the test suite and quality checks in this repo. |
 
 `uv sync --all-extras --frozen` installs all three, which is what you want for
