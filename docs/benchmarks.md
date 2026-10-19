@@ -19,6 +19,11 @@ required `--output-dir`; the document passed to `--readme` is the only file edit
 Average precision (AP) is the headline metric
 in both — it accounts for class imbalance in a way ROC-AUC does not.
 
+## End-to-end scale
+
+<!-- scale-results-start -->
+<!-- scale-results-end -->
+
 ## Full-pipeline scenario benchmark
 
 `src/sorethumb_ml/evaluate/pipeline_benchmark.py` fits a named taxonomy of
