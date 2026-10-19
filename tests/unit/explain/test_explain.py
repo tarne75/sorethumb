@@ -212,6 +212,7 @@ def test_one_class_svm_rbf_saturates_linear_does_not():
 
 
 def test_kernel_shap_attributions_shape():
+    pytest.importorskip("shap")
     from sorethumb_ml.explain.gradient import kernel_shap_attributions
 
     det, X = _fit_if(n=30, d=4, seed=0)
@@ -221,6 +222,7 @@ def test_kernel_shap_attributions_shape():
 
 
 def test_kernel_shap_attributions_row_cap():
+    pytest.importorskip("shap")
     from sorethumb_ml.explain.gradient import kernel_shap_attributions
 
     det, X = _fit_if(n=30, d=3, seed=0)
@@ -290,6 +292,7 @@ def test_centroid_dtype():
 
 
 def test_tree_shap_shape():
+    pytest.importorskip("shap")
     det, X = _fit_if(n=200)
     attrs, tag = tree_shap_attributions(det, X[:20], reference=X)
     assert attrs.shape == (20, 4)
@@ -297,12 +300,14 @@ def test_tree_shap_shape():
 
 
 def test_tree_shap_dtype():
+    pytest.importorskip("shap")
     det, X = _fit_if()
     attrs, _ = tree_shap_attributions(det, X[:10], reference=X)
     assert attrs.dtype == np.float64
 
 
 def test_tree_shap_fallback_on_single_node(monkeypatch):
+    pytest.importorskip("shap")
     import sys
 
     det, X = _fit_if(n=100)
@@ -350,6 +355,7 @@ def test_tree_shap_falls_back_gracefully_when_shap_not_installed(monkeypatch):
 
 
 def test_tree_shap_outliers_get_higher_attributions():
+    pytest.importorskip("shap")
     det, X = _fit_if(n=200)
     X_out = X.copy()
     X_out[:5] += 20.0  # clear outliers in first 5 rows
