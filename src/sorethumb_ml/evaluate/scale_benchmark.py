@@ -333,6 +333,11 @@ def _measure_child(
         )
     except Exception as exc:  # noqa: BLE001 -- reported, never swallowed
         queue.put({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+    finally:
+        # _load_config attaches the workspace log file handler, as a CLI command does.
+        from sorethumb_ml import cli  # noqa: PLC0415
+
+        cli._detach_file_handlers()  # noqa: SLF001
 
 
 def _run_in_child(

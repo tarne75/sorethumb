@@ -32,8 +32,10 @@ What decides the count depends on two settings:
 See [docs/ensemble-policy.md](https://github.com/tarne75/sorethumb/blob/main/docs/ensemble-policy.md#where-things-stand-2026-10-15)
 for what each combination does and the evidence behind it.
 
-It is built to run on a single machine — a laptop, a CI runner, one VM — for
-datasets from roughly ten thousand to a few million rows. At that size a
+It is built to run on a single machine — a laptop, a CI runner, one VM. It is
+measured end to end from 10,000 to 1,000,000 rows: a default run on a million-row
+table takes about 7 minutes and 5 GB of memory on an 8-core, 16 GB laptop (see the
+[Scale guide](#scale-guide)). Larger datasets are untested. At that size a
 distributed engine adds cost, operational surface, and non-determinism without
 buying meaningful speed, so there is no Spark, Dask, or cloud-service dependency
 anywhere. The detectors whose training cost grows faster than linearly (LOF at
@@ -134,7 +136,7 @@ The short version; every point is expanded under [Honest limitations](#honest-li
   only a workspace you created or fully trust.
 - **One machine, local storage.** It runs on Linux, macOS and Windows, keeps its
   workspace on a local drive (not a network share or a synced folder), and is
-  built for roughly ten thousand to a few million rows.
+  measured up to 1,000,000 rows; larger datasets are untested.
 
 ---
 
@@ -469,7 +471,7 @@ that no single blind spot dominates the ensemble:
 
 | Detector | Key | Algorithm | Strength | Weakness |
 |----------|-----|-----------|----------|----------|
-| `isolation_forest` | ★ default | Random tree partitioning | Fast, scales to millions of rows, model-specific TreeSHAP attributions | Struggles with very high-dimensional sparse data |
+| `isolation_forest` | ★ default | Random tree partitioning | Fast (trains on at most 250 k rows, scores 1 M rows in about 6 s), model-specific TreeSHAP attributions | Struggles with very high-dimensional sparse data |
 | `kmeans_distance` | ★ default | CBLOF: negative distance to nearest *large*-cluster centroid | Interpretable; a tight anomaly cluster can't hide by capturing its own centroid | Assumes anomalies are ≲ 10 % of rows (tune `large_cluster_coverage`); spherical clusters; sensitive to `k` |
 | `one_class_svm` | ★ default | RBF kernel boundary | Genuinely different family, useful in ensemble | Quadratic training cost; capped at 25 k rows by default |
 
@@ -532,15 +534,36 @@ The exact output contract is in [Writing a detector plugin](https://github.com/t
 
 ## Scale guide
 
-| Dataset size | Recommended setup |
-| --- | --- |
-| < 100 k rows | All three detectors, default config |
-| 100 k – 1 M rows | Disable `one_class_svm`, or set its `train_row_cap = 10000` (default 25 000) |
-| > 1 M rows | Set `run.max_rows` to subsample; enable `features.pca` |
-| > 2000 features | Enable `features.pca`; raises `FeatureWidthWarning` by default |
+Measured with the defaults (`sorethumb run data.csv`) on a 14-column mixed table, on an
+8-core, 16 GB laptop; one run per size
+([docs/benchmarks.md](https://github.com/tarne75/sorethumb/blob/main/docs/benchmarks.md#end-to-end-scale)
+has the full breakdown and the command to reproduce it):
 
-Memory footprint is dominated by the feature matrix: `n_rows × n_features × 4 bytes`
-(float32). An 8 GB budget handles roughly 500 M cells.
+| Rows | Run | Peak memory | Score a new file of that size |
+| --- | --- | --- | --- |
+| 10,000 | 13 s | 0.9 GB | 7 s |
+| 100,000 | 68 s | 1.8 GB | 47 s |
+| 1,000,000 | 6.9 min | 4.9 GB | 6.5 min |
+
+Above 1,000,000 rows sorethumb is untested. What drives the cost:
+
+- **Explanations**, three quarters of the run at 1,000,000 rows. Their cost follows
+  the rows flagged (about 6 to 8 ms each), and `scoring.contamination = "auto"`
+  flagged about 5% of rows. A numeric review budget flags fewer rows; `explain.enabled
+  = false` drops the stage.
+- **Scoring every row**, which grows linearly. One-Class SVM is most of it (67 s at
+  1,000,000 rows); disabling it, or lowering its `train_row_cap` (default 25,000),
+  shortens it.
+- **Training is bounded** by each detector's row cap (Isolation Forest 250,000, KMeans
+  200,000, One-Class SVM 25,000): about 25 s at 100,000 and at 1,000,000 rows alike.
+- **`run.max_rows`** caps the rows read, if you would rather sample a larger table than
+  run all of it.
+- **More than 2000 features**: enable `features.pca`; a wider run raises
+  `FeatureWidthWarning` by default.
+
+Peak memory is not the feature matrix (27 float32 features on 1,000,000 rows is about
+100 MB): loading and profiling the data and the explanations dominate it.
+`run.max_memory_mb` checks only the projected matrix, so leave room above it.
 
 ---
 
