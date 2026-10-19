@@ -29,6 +29,12 @@ What decides the count depends on two settings:
 - **To get exactly the top N%** (a fixed review budget), set `contamination` to N/100
   *and* use a composite policy; the recommended one is `composite-agreement@1`.
 
+So **read the ranking first.** Every run ends with its top-ranked rows, flagged or
+not. A run that flags hundreds of rows has not found hundreds of anomalies, and a
+run that flags none has not found that there are none: the flag decision is a
+shortlist drawn from the ranking, and at `"auto"` nobody chose its size. A first run
+says so prominently.
+
 See [docs/ensemble-policy.md](https://github.com/tarne75/sorethumb/blob/main/docs/ensemble-policy.md#where-things-stand-2026-10-15)
 for what each combination does and the evidence behind it.
 
@@ -114,7 +120,16 @@ config = Config(
 )
 result = run_detection(config, no_report=True)
 print(f"Flagged {result.n_anomalies} rows for review across {result.n_succeeded} group(s)")
+
+# The ranking is the result; the flagged rows are a shortlist drawn from it.
+for row in result.groups[0].top_ranked[:5]:
+    flag = "flagged" if row["flagged"] else "not flagged"
+    print(row["score_rank"], f"{row['composite_score']:.4f}", flag, row["values"])
 ```
+
+It flags more rows than the 30 it planted (52 when this was written): at the default
+`scoring.contamination = "auto"` nobody chose that count. The planted rows are what
+lead the ranking, which is why the ranking, not the count, is the result to read.
 
 ---
 
@@ -259,8 +274,9 @@ format = "csv"
 
 ### Zero-config: point at a file and go
 
-No config file needed. Pass the data file directly and sorethumb runs with
-sensible defaults, writing every artefact under one dedicated
+No config file needed. Pass the data file directly and sorethumb runs with its
+defaults (the three default detectors, the unanimous `intersection` policy, and
+`scoring.contamination = "auto"`), writing every artefact under one dedicated
 `./sorethumb-workspace/` directory — relative to the directory you run the
 command from, not beside your data file, and not scattered loose in the current
 directory:
@@ -270,14 +286,21 @@ cd /path/to/my-analysis
 sorethumb run --log-level INFO /path/to/data.csv
 ```
 
-Then read the results from the same directory; no config file is needed for
-that either:
+The defaults do not choose how many rows get flagged: each detector uses its own
+boundary, and a row is flagged only when all of them flag it. The run says so, with
+the count it came to, and prints the top-ranked rows whether or not they were
+flagged. Then read the results from the same directory; no config file is needed
+for that either:
 
 ```bash
-sorethumb anomalies --top 10
+sorethumb anomalies --top 10      # the flagged rows, with reasons
+sorethumb anomalies --ranked      # the top of the ranking, flagged or not
 sorethumb runs
 sorethumb report
 ```
+
+To review a fixed number of rows instead, set a review budget; see
+[Recommended setup if you have a review budget](https://github.com/tarne75/sorethumb/blob/main/docs/ensemble-policy.md#recommended-setup-if-you-have-a-review-budget).
 
 On an interactive terminal, the first run offers to save a `sorethumb.toml` for
 future runs. Under cron, CI or a pipe it doesn't ask (it says how to save one on
@@ -364,11 +387,26 @@ Run run_5c720f703718c39e3c5b55b171083f30  succeeded=1  skipped=0  failed=0
   Flagged for review: 421 (0.50% of 84,231 rows) — a review shortlist, not an
 estimate of true prevalence
 
+╭───────────────────────── Shortlist size not chosen ──────────────────────────╮
+│ Nobody chose how many rows to flag. With scoring.contamination = "auto" and  │
+│ the intersection@1 policy, each detector flags the rows past its own         │
+│ boundary, and only rows every detector flags are kept: 421 of 84,231 rows    │
+│ (0.5%) here. …                                                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+  Top-ranked rows (highest combined score, flagged or not):
+    rank   score  flagged  row     amount  country  created_at
+       1  0.9998  yes      51200   9841.5  NZ       2025-03-02 03:14:07
+       2  0.9996  yes      7731    8120.0  US       2025-03-02 03:15:51
+       …
+    rank = position in its group's ranking (1 = most unusual). `sorethumb
+anomalies --ranked` lists the top 20 per group.
+
   Realised detector flag rates (own natural boundary):
     isolation_forest=1.83%, kmeans_distance=0.74%, one_class_svm=2.10%
 
   Group timings (slowest first):
-    __all__                           51.0s  anomalies=421
+    __all__                           51.0s  flagged=421
 
 Report: ./sorethumb-workspace/reports/run_5c720f703718c39e3c5b55b171083f30/index.html
 ```

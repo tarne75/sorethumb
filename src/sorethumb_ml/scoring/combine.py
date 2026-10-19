@@ -434,12 +434,14 @@ class ScoreEnsemble:
             if self._combination == "intersection" and n > 0 and not anomaly_flag.any():
                 rates_str = ", ".join(f"{d}={per_detector_rates[d] * 100:.2f}%" for d in names)
                 warnings.warn(
-                    f"Three-way intersection flagged zero rows: no row passed all "
+                    f"The intersection flagged zero rows: no row passed all "
                     f"{len(names)} configured detectors ({', '.join(names)}). Realised "
-                    f"per-detector natural flag rates: {rates_str}. This is a legitimate "
-                    "outcome, not a failure -- consider reviewing the data, using an "
-                    "explicit numeric contamination, or selecting combination='composite' "
-                    "or 'union' instead; the default is not changed automatically.",
+                    f"per-detector natural flag rates: {rates_str}. This is the flag "
+                    "policy's decision, not a failure and not a finding that the data "
+                    "holds no anomalies: every row is still ranked (sorethumb anomalies "
+                    "--ranked). To review a set number of rows, use an explicit numeric "
+                    "contamination, or combination='composite' or 'union'; the default "
+                    "is not changed automatically.",
                     ZeroAnomalyWarning,
                     stacklevel=2,
                 )

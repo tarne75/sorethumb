@@ -156,7 +156,8 @@ models/<run>/…          fitted feature plan, and per group and detector the
                         estimator and calibrator as joblib/pickle files, plus a manifest;
                         per group, reference.json (the explanation reference summary)
 results/<run>/<group>/  per-group results (Parquet): anomalies.parquet (detection: scores,
-                        flags, ranks; written and digested first), explanations.parquet
+                        flags, ranks; written and digested first), ranked.parquet (the
+                        top 20 rows by combined score, flagged or not), explanations.parquet
                         and attributions.parquet (the record behind each reason); for a
                         period run, period_stats.json (per-period statistics, also
                         recorded in the ledger)
@@ -216,6 +217,12 @@ level (all groups) and per group. It is the number of rows the ensemble policy f
 [ensemble-policy.md](ensemble-policy.md#where-things-stand-2026-10-15)), not an
 estimate of how many records are truly anomalous, which is why the field is not called
 `n_anomalies`. There is no alias under the old name.
+
+`shortlist_size_chosen` is `false` when `scoring.contamination = "auto"`: the
+detectors' own boundaries set how many rows were flagged, not you. Each group's
+`top_ranked` lists the top of its combined-score ranking, flagged or not (at most 20
+rows; `row_id`, `score_rank`, `composite_score`, `flagged` and the row's source
+`values`), so a group that flagged few rows or none still has a ranking to read.
 
 ---
 
@@ -295,6 +302,14 @@ sorethumb run --group-filter "^store_(1|2|3)$"
 sorethumb run --detectors if,km,oc,lof
 sorethumb run -d if,ecod,hbos
 ```
+
+The summary ends with the **top-ranked rows**, flagged or not: the ranking is the
+result, and the flag decision is a shortlist drawn from it. With
+`scoring.contamination = "auto"` (the default) nobody chose how many rows to flag,
+so every run says so; a workspace's first run, and any run without a
+`sorethumb.toml`, says it prominently, with the count it came to and how to set a
+review budget instead. A run that flags no rows reports that as the policy's
+decision, never as "no anomalies".
 
 Groups that are already marked complete in the ledger are skipped unless
 `--force` is passed. This makes repeated invocations cheap.
@@ -455,6 +470,11 @@ Plus `--config`, `--workdir`, `--log-level`.
 Print the flagged rows from a completed run, ordered by rank (1 = most
 anomalous), with their attribution-derived reason columns. `--detail` adds the
 record behind each reason (see [the explanation record](explanations.md#the-explanation-record)).
+`--ranked` shows the top of the combined-score ranking instead, flagged or not (the
+20 rows kept per group): what to read when the flag policy flagged few rows or none.
+When a run flagged nothing, the text output says so (as the policy's decision, not
+as "no anomalies") and shows that ranking; `--json` still prints `[]` for the flagged
+rows.
 
 ```bash
 sorethumb anomalies                      # latest run, top 3 reasons, all rows
@@ -463,6 +483,7 @@ sorethumb anomalies --top 20            # limit to 20 rows
 sorethumb anomalies --reasons 5 --top 50
 sorethumb anomalies --detail --top 5     # method, signed contribution, reference value, flags
 sorethumb anomalies --json | jq '.[] | {rank, score: .composite_score}'
+sorethumb anomalies --ranked --top 10    # top of the ranking, flagged or not
 ```
 
 **Arguments:**
@@ -476,7 +497,8 @@ sorethumb anomalies --json | jq '.[] | {rank, score: .composite_score}'
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--config`, `--workdir`, `--log-level` | — | See [Common options](#common-options). |
-| `--top INT` | 0 (all) | Show only the top-N anomalies. |
+| `--top INT` | 0 (all) | Show only the top-N rows. |
+| `--ranked` | off | Show the top of the combined-score ranking, flagged or not (up to 20 rows per group), instead of the flagged rows. With `--json`, each row has `group`, `row_id`, `score_rank`, `composite_score`, `flagged` and `values`. |
 | `--reasons INT` | 3 | Number of reason columns to display. |
 | `--detail` | off | Also show the record behind each displayed reason: method per detector, signed contribution, reference value and direction, approximation flags. With `--json`, each row gains `row_id` and `reason_detail` (a list of records, one per displayed reason; empty for an unexplained row). |
 | `--json` | off | Machine-readable JSON on stdout. |
@@ -895,6 +917,7 @@ sorethumb workspace reset --yes   # skip confirmation (CI / scripted teardown)
 # Zero-config path — sorethumb offers to save the config (on a terminal)
 sorethumb run --log-level INFO /data/transactions.parquet
 sorethumb anomalies --top 50         # no config needed to read the results
+sorethumb anomalies --ranked         # the top of the ranking, flagged or not
 
 # Config-based path — full control from the start
 sorethumb init ~/analysis/transactions
