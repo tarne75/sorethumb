@@ -181,6 +181,24 @@ unlike TreeSHAP. It uses shap's `nsamples="auto"` against a background of at mos
 k-means centres of the reference population; more samples would be more accurate and
 slower.
 
+## One-hot categorical distance — a prior, not a measurement
+
+Numeric features are robust-scaled (median and interquartile range), so a typical
+difference between two normal rows is about one unit. One-hot dummies are not scaled
+that way: each takes `features.categorical_distance / sqrt(2)` when set (default 0.5,
+so about 0.354), which puts two rows that differ only in one categorical column 0.5
+units apart. Scaled like numeric columns instead (`categorical_distance = null`), a
+handful of categorical columns of pure noise added as much distance variance as all the
+numeric columns together, and pushed the default ensemble's ranking below chance on two
+benchmark scenarios (`local` 0.31, `varying_density` 0.37 ROC-AUC). At 0.5 the same
+scenarios rank at about 0.93 and 0.63, and a rare categorical level still stands out
+(`categorical_rare` 0.84 ROC-AUC); on a 20,000-row sample of KDD Cup 1999 the ranking is
+unchanged (0.918). The value is a prior about how much a change of category should
+count, chosen on that evidence, not learned from your data: raise it if your categorical
+columns carry most of the signal. Isolation Forest is unaffected (its splits ignore
+scale); the distance-based detectors (KMeans, One-Class SVM, LOF) are. The benchmark's
+`categorical_unscaled` and `near_constant_3` rows keep the comparison measured.
+
 ## Zero-inflated columns — robust scaling can leave them effectively unscaled
 
 `features/scale.py::fit_scaler`'s robust mode (the default) centres on the median and

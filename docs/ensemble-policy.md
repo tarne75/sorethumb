@@ -95,8 +95,8 @@ review, see [Recommended setup if you have a review budget](#recommended-setup-i
 
 Unanimity is conservative. On some anomaly types it flags few or none of the true
 anomalies even when the combined ranking is reasonable. The full-pipeline benchmark
-([benchmarks.md](benchmarks.md)) shows flag recall of 0.0 on `local` and
-`varying_density` and about 0.02 on `contextual`; see
+([benchmarks.md](benchmarks.md)) shows flag recall of about 0.03 on `local`
+and `contextual` and 0.0 on `varying_density`; see
 [approximations.md](approximations.md). Those figures were measured with each detector
 at the scenario's review budget, not at the shipped `"auto"`. The ranking metrics
 there (ROC-AUC, average precision) do not depend on that setting; the flag metrics do.

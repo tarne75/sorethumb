@@ -40,11 +40,14 @@ column's class, its treatment and the reason. For example:
 | timestamp | temporal | derive_time | temporal dtype (Datetime(time_unit='us', time_zone=None)) |
 | amount | numeric | impute_median | numeric dtype (Float64) |
 | category | categorical | one_hot | String with cardinality_ratio=0.0004 |
-| region | near_constant | drop | only 3 distinct value(s) (threshold=3) |
+| region | categorical | one_hot | String with cardinality_ratio=0.0002 |
 | description | free_text | drop | mean length=87.4 > 20.0 |
 
-A column with exactly three distinct values (`region` above) is dropped by
-default; set `profiling.near_constant_distinct = 2` to keep such columns.
+A categorical column is one-hot encoded however few levels it has; only a
+constant column is dropped for lack of variety. A change of category counts as
+half a typical numeric spread (`features.categorical_distance`, see
+[Approximations](approximations.md)), so a column of noise categories does not
+drown out the numeric signal.
 
 Use this table to decide:
 
