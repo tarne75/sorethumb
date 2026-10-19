@@ -513,7 +513,7 @@ evidence record as `policy_evidence`.
 
 ```bash
 sorethumb show abc12345
-sorethumb show abc12345 --group 3fa9c2e1d0b74c55a8e6f2b1c9d04e17   # a group key, as listed by show
+sorethumb show abc12345 --group store_42      # one group, by label (or key)
 sorethumb show abc12345 --json
 ```
 
@@ -528,7 +528,7 @@ sorethumb show abc12345 --json
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--config`, `--workdir`, `--log-level` | — | See [Common options](#common-options). |
-| `--group KEY` | — | Show detail for one group, by its group key (the digest in the "Group key" column; not the label). |
+| `--group STR` | — | Show detail for one group: its label (as `run --only-group` takes) or its group key. An unknown group exits `3` and lists the known labels. |
 | `--json` | off | Machine-readable JSON. |
 
 ---
@@ -594,7 +594,7 @@ period runs. See [Trends](trends.md) for what each figure means and its limits.
 ```bash
 sorethumb history
 sorethumb history --window 7 --window 28   # two rolling windows
-sorethumb history --group 3fa9c2e1d0b74c55a8e6f2b1c9d04e17   # a group key, from sorethumb show
+sorethumb history --group store_42         # one group, by label (or key)
 sorethumb history --period 2026-09-30      # end the trend at a given period
 sorethumb history --json                   # the whole report as JSON
 ```
@@ -634,7 +634,7 @@ group, and its `index.json` carries them under `trend`.
 |--------|---------|-------------|
 | `--config`, `--workdir`, `--log-level` | — | See [Common options](#common-options). |
 | `--window INT` | from config | Rolling window size(s) in periods. Repeatable. |
-| `--group KEY` | — | Limit the trend to one group, by its group key (as `sorethumb show` lists it; not the label). |
+| `--group STR` | — | Limit the trend to one group: its label (as `run --only-group` takes) or its group key. An unknown group exits `3` and lists the known labels. |
 | `--period LABEL` | latest elapsed period | Period label the trend ends at. |
 | `--all-groups` | off | Sum every group in each window, not only groups present in both. |
 | `--json` | off | The whole report as one JSON document on stdout. |

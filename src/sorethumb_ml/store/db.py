@@ -711,6 +711,15 @@ class Store:
         ).fetchall()
         return [str(r["group_key"]) for r in rows]
 
+    def dataset_groups(self, dataset_fp: str) -> dict[str, str]:
+        """Return ``{group_key: group_label}`` for every group any run of this dataset has recorded."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT g.group_key, g.group_label FROM run_group g JOIN run r ON r.run_id = g.run_id "
+            "WHERE r.dataset_fp = ?",
+            [dataset_fp],
+        ).fetchall()
+        return {str(r["group_key"]): str(r["group_label"]) for r in rows}
+
     def all_run_groups(self, run_id: str) -> list[dict[str, Any]]:
         """Return all run_group rows for a run."""
         rows = self._conn.execute("SELECT * FROM run_group WHERE run_id=?", (run_id,)).fetchall()

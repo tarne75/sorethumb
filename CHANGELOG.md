@@ -132,7 +132,8 @@ Versioning: [Semantic Versioning](https://semver.org/).
   idempotent, tracked in a SQLite workspace. Exit codes are stable (`0` ok,
   `1` runtime failure, `2` pre-flight rejection, `3` not found, `4` partial
   success) and every `--json` command emits one document per outcome; see
-  `docs/cli_reference.md`.
+  `docs/cli_reference.md`. A group is selected by its label (`run --only-group`,
+  `show --group`, `history --group`; the last two also take its key).
 - **Score-forward**: `sorethumb score --from-run RUN_ID` scores new data with a
   fitted run's persisted models and calibrators, without refitting, so scores
   stay on one scale across calls. A config whose fit-time settings differ from
