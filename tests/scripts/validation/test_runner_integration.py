@@ -150,3 +150,26 @@ def test_run_case_too_few_records_status_when_split_is_below_min_records(tmp_pat
     assert result.n_train + result.n_holdout == 50
     assert result.n_holdout_flagged == 0
     assert result.roc_auc is None
+
+
+def test_run_explain_check_runs_on_the_full_unsplit_data(tmp_path):
+    # The config names the split's row-id column as columns.id_column; the explain
+    # check reads the unsplit file, which must be given that column too.
+    from scripts.validation.runner import run_explain_check
+
+    data_dir = _make_labelled_dataset(tmp_path)
+    dataset = DatasetSpec(
+        name="tiny_labelled",
+        file="tiny_labelled.parquet",
+        ignore=["label"],
+        source="synthetic",
+        description="explain check on the full data",
+        rows=400,
+        cols=5,
+    )
+    combo = ComboSpec(name="baseline", detectors=("isolation_forest",))
+
+    result = run_explain_check(dataset, combo, 0, tmp_path / "runs", data_dir)
+
+    assert result["status"] == "success", result["error"]
+    assert result["n_anomalies"] > 0
