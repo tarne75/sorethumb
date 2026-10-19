@@ -53,8 +53,9 @@ varying_density
     methods (OneClassSVM, KMeans-distance) are not.
 categorical_rare
     The anomaly is a rare level of a 3-value category and nothing numeric
-    differs -- exactly the column ``profiling.near_constant_distinct``
-    decides whether to drop, so it is the evidence for that default.
+    differs: the evidence that low-cardinality categorical columns must be kept
+    (``profiling.near_constant_distinct``) and must still register at the
+    shipped ``features.categorical_distance``.
 text_timestamp
     Unusual-hour activity recorded only in an ISO text timestamp column:
     reachable only through date parsing and the derived hour.
@@ -65,7 +66,7 @@ all_categorical
     The one scenario with no numeric column at all (the mixed-data rule
     above does not apply): five categorical columns, and anomalies that are
     unseen combinations of individually common levels. Every column has
-    five levels, so ``profiling.near_constant_distinct`` drops none of them.
+    five levels.
 """
 
 from __future__ import annotations
@@ -321,8 +322,7 @@ def categorical_rare_anomalies(
     """Make the anomaly a rare level of a 3-value category; numeric columns are normal for everyone.
 
     Normal rows use "web" or "store" for ``channel``; anomalous rows, and only
-    those, use "fax". The column therefore has exactly three distinct values --
-    the case ``profiling.near_constant_distinct`` decides whether to drop -- and
+    those, use "fax". The column therefore has exactly three distinct values, and
     the only signal in the dataset is which level a row has.
     """
     rng = np.random.default_rng(seed)

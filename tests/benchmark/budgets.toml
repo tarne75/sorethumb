@@ -28,9 +28,13 @@
 # budget, a fraction of *all* rows -- a policy flagging exactly its budget,
 # rounded to whole rows, could breach it with no extra flags at all (13 of 252
 # rows flagged, all wrong: 13/240 = 0.054 > 0.05). v3 states the documented
-# principle in rows.
+# principle in rows. v3 -> v4: no bound changed. The shipped categorical
+# handling changed (3-value columns are kept; one-hot dummies sit at the fixed
+# features.categorical_distance), so the accepted limitations were re-derived
+# from the regenerated matrix: three no longer apply, four new flag-level
+# trade-offs are accepted with reasons below.
 
-version = 3
+version = 4
 
 [defaults]
 min_average_precision = 0.15
@@ -101,18 +105,6 @@ reason = "unanimity flags ~11% of the review budget on a self-masking block; ran
 [[accepted_limitations]]
 policy = "intersection@1"
 scenario = "local"
-bound = "min_average_precision"
-reason = "global-method weakness on locally sparse points (docs/approximations.md)"
-
-[[accepted_limitations]]
-policy = "intersection@1"
-scenario = "local"
-bound = "min_flag_precision"
-reason = "flags none of the local anomalies; only union@1 does, at ~2x the review budget"
-
-[[accepted_limitations]]
-policy = "intersection@1"
-scenario = "local"
 bound = "min_flag_recall"
 reason = "flags none of the local anomalies; only union@1 does, at ~2x the review budget"
 
@@ -154,29 +146,50 @@ scenario = "contextual"
 bound = "min_flag_recall"
 reason = "every policy is near chance; encoding alone does not learn the conditional structure"
 
-# A rare level of a 3-value category: profiling.near_constant_distinct = 3 drops
-# the column, so the signal never reaches a detector. Setting it to 2 recovers the
-# ranking (AP 0.05 -> 0.20) but pushes local and varying_density below chance
-# (ROC-AUC 0.65 -> 0.31 / 0.37) when such a column is noise. 3 stays the default:
-# its failure is visible (`inspect` shows the column dropped and why); 2's is a
-# silent below-chance ranking. Remedy: near_constant_distinct = 2 where measured.
+# A rare level of a 3-value category, nothing numeric differing. The column is
+# kept and the ranking is far above chance (ROC-AUC ~0.84), but at the fixed
+# categorical distance a single rare level moves a row only half a typical numeric
+# spread, so average precision and unanimous flags stay low.
 [[accepted_limitations]]
 policy = "intersection@1"
 scenario = "categorical_rare"
 bound = "min_average_precision"
-reason = "near_constant_distinct=3 drops the 3-value signal column; set it to 2 where measured to help"
-
-[[accepted_limitations]]
-policy = "intersection@1"
-scenario = "categorical_rare"
-bound = "min_flag_precision"
-reason = "near_constant_distinct=3 drops the 3-value signal column; set it to 2 where measured to help"
+reason = "a rare level alone moves a row 0.5 IQR (features.categorical_distance); ranked well, AP just under the bound"
 
 [[accepted_limitations]]
 policy = "intersection@1"
 scenario = "categorical_rare"
 bound = "min_flag_recall"
-reason = "near_constant_distinct=3 drops the 3-value signal column; set it to 2 where measured to help"
+reason = "unanimity: the three detectors rarely all flag a row that differs only in one category"
+
+# Accepted with the categorical change (v4). Keeping 3-value columns at the fixed
+# categorical distance lifted local from below chance to ROC-AUC ~0.93,
+# varying_density from ~0.37 to ~0.63 and rare categories from ~0.51 to ~0.84; in
+# exchange these flag-level figures fell just under their bounds. Trading a
+# below-chance ranking for a near-miss flag figure is the right way round.
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "local"
+bound = "min_flag_jaccard_stability"
+reason = "0.49 vs 0.50: few, marginal unanimous flags on locally sparse points move between refits"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "categorical_rare"
+bound = "min_flag_jaccard_stability"
+reason = "0.47 vs 0.50: unanimous flags on a single rare level are few and move between refits"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "masking"
+bound = "min_flag_precision"
+reason = "0.19 vs 0.25 (was 0.28): kept noise categories shift the unanimous flag onto borderline normal rows"
+
+[[accepted_limitations]]
+policy = "intersection@1"
+scenario = "text_timestamp"
+bound = "min_flag_recall"
+reason = "0.23 vs 0.25 (was 0.30): kept noise categories dilute the derived-hour signal at the flag boundary"
 
 [[accepted_limitations]]
 policy = "intersection@1"

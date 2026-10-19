@@ -29,13 +29,20 @@ Versioning: [Semantic Versioning](https://semver.org/).
   re-scanned (up to 1,000,000 rows) and refused, naming
   `source.read_options['infer_schema_length']`, if a numeric column was hidden
   by blank leading rows. A source path that is a directory is rejected with a
-  clear message. Binary columns are always kept;
-  `profiling.near_constant_distinct` (default 3) drops a column with exactly
-  3 distinct values, and setting it to 2 keeps those too (for a rare level
-  of a 3-value category that is itself the anomaly). `columns.include_only` restricts
+  clear message. A column is never dropped for having few distinct values
+  (only a constant one is), since a rare level of a low-cardinality column can
+  be exactly the anomaly; `profiling.near_constant_distinct` can opt in to
+  dropping them. `columns.include_only` restricts
   the features to the listed columns plus `time_column`, `group_by`,
   `id_column` and `reference_column`; a listed name not in the dataset is a
   `ConfigError`.
+- **Categorical columns**: up to `features.one_hot_max_cardinality` levels are
+  one-hot encoded, more are frequency-encoded. One-hot dummies are not scaled
+  like numeric columns: two rows that differ only in one category are
+  `features.categorical_distance` apart (default 0.5, in the interquartile-range
+  units numeric features use), so a categorical column of noise cannot dominate
+  the distance-based detectors (KMeans, One-Class SVM, LOF) while a rare level
+  still stands out. Isolation Forest is unaffected.
 - **Dates and times stored as text**: a text column holding ISO dates or
   datetimes, a time of day, or a day/month/year date is parsed into a real
   date/time before profiling, so it gets derived features (`hour`,
@@ -291,9 +298,11 @@ Versioning: [Semantic Versioning](https://semver.org/).
   and HBOS; TreeSHAP decomposes Isolation Forest's path length, not its score.
 - **`run.max_memory_mb` is a projection, not a limit**: it refuses a run whose
   estimated feature-matrix size exceeds it, but cannot cap actual memory use.
-- **A column with exactly three distinct values is dropped** by default
-  (`profiling.near_constant_distinct = 3`, chosen on the benchmark); set it to 2
-  to keep such columns.
+- **How much a categorical column counts is a prior.** One-hot dummies sit at
+  a fixed scale (`features.categorical_distance`, 0.5 interquartile ranges per
+  change of category), chosen so uninformative categories cannot swamp the
+  distance-based detectors; it is not learned from your data. See
+  `docs/approximations.md`.
 - Every detector fits on the same unlabelled data it scores; there is no
   held-out "known normal" reference. Independent runs are not on a common score
   scale: `sorethumb history` separates score drift from threshold drift only

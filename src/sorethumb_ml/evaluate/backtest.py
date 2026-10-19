@@ -378,6 +378,7 @@ def ablation_for(policy_id: str, *, contamination_auto: bool = False) -> Any:
             and ablation.scaler == defaults.scaler
             and ablation.detector_names == defaults.detector_names
             and ablation.near_constant_distinct == defaults.near_constant_distinct
+            and ablation.categorical_unscaled == defaults.categorical_unscaled
             and ablation.contamination_auto == contamination_auto
         )
         if same_knobs and ablation.policy_id == policy_id:

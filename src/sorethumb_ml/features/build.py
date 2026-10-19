@@ -19,6 +19,7 @@ Two public entry points:
 from __future__ import annotations
 
 import logging
+import math
 
 import numpy as np
 import polars as pl
@@ -177,8 +178,13 @@ def fit_features(df: pl.DataFrame, plan: FeaturePlan, config: Config) -> Feature
 
     feature_cols = enc_df.columns
 
-    # Fit scaler
-    scaler_params = fit_scaler(enc_df, feature_cols, config.features.scaler)
+    # Fit scaler; one-hot dummies get the fixed scale features.categorical_distance sets.
+    dummies = _one_hot_dummy_names(plan, demoted)
+    scaler_params = _with_categorical_distance(
+        fit_scaler(enc_df, feature_cols, config.features.scaler),
+        dummies,
+        config.features.categorical_distance,
+    )
     plan.scaler_params = scaler_params
 
     # Apply scaler
@@ -192,7 +198,11 @@ def fit_features(df: pl.DataFrame, plan: FeaturePlan, config: Config) -> Feature
         if drop_list:
             # Re-fit scaler on the trimmed set
             feature_cols = scaled_df.columns
-            scaler_params = fit_scaler(enc_df.select(feature_cols), feature_cols, config.features.scaler)
+            scaler_params = _with_categorical_distance(
+                fit_scaler(enc_df.select(feature_cols), feature_cols, config.features.scaler),
+                dummies,
+                config.features.categorical_distance,
+            )
             plan.scaler_params = scaler_params
             scaled_df = apply_scaler(enc_df.select(feature_cols), scaler_params, feature_cols)
 
@@ -479,3 +489,34 @@ def _to_matrix(df: pl.DataFrame, dtype_str: str) -> np.ndarray:
             f"after casting to {dtype_str} (value overflows the dtype; set features.dtype = 'float64' or fix the extreme value)",
         )
     return matrix
+
+
+def _one_hot_dummy_names(plan: FeaturePlan, demoted: list[str] | set[str]) -> set[str]:
+    """Names of the one-hot dummy features (each category plus "other"), not missing indicators."""
+    from sorethumb_ml.profiling.classify import Treatment  # noqa: PLC0415
+    from sorethumb_ml.profiling.plan import resolve_one_hot_reserved_names  # noqa: PLC0415
+
+    names: set[str] = set()
+    for dec in plan.decisions or []:
+        if dec.treatment != Treatment.one_hot or dec.column in demoted:
+            continue
+        cats = plan.one_hot_categories.get(dec.column, [])
+        other_name, _ = resolve_one_hot_reserved_names(dec.column, cats, dec.emit_missing_indicator)
+        names.update(f"{dec.column}__{cat}" for cat in cats)
+        names.add(other_name)
+    return names
+
+
+def _with_categorical_distance(
+    params: dict[str, dict[str, float]], dummies: set[str], distance: float | None
+) -> dict[str, dict[str, float]]:
+    """Give one-hot dummies a fixed scale: two rows differing in one category are *distance* apart.
+
+    A change of category moves two dummies (one off, one on), so each takes the
+    value ``distance / sqrt(2)`` when set: centre 0, scale ``sqrt(2) / distance``.
+    ``None`` leaves the scaler's own fit (dummies scaled like numeric columns).
+    """
+    if distance is None:
+        return params
+    scale = math.sqrt(2.0) / distance
+    return {col: ({"center": 0.0, "scale": scale} if col in dummies else p) for col, p in params.items()}

@@ -62,7 +62,7 @@ def test_a_time_sorted_cell_scores_against_the_right_labels() -> None:
 
 def test_a_cell_without_refits_reports_stability_as_nan() -> None:
     out = _fit_score_one_seed_pipeline(
-        "categorical_rare", None, _ABLATION["near_constant_2"], seed=0, n_bootstrap=0
+        "categorical_rare", None, _ABLATION["combination_composite"], seed=0, n_bootstrap=0
     )
     assert math.isnan(out["flag_jaccard_stability"])
     assert math.isnan(out["rank_stability"])

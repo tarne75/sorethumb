@@ -326,14 +326,11 @@ This profiles every column and prints the feature plan (abridged):
 │ country    │ categorical     │ one_hot       │ String with cardinality_ratio=0.0004   │
 │ session_id │ identifier_like │ drop          │ UUID pattern detected in sample (n=1000)│
 │ created_at │ temporal        │ derive_time   │ temporal dtype (Datetime(...))         │
-│ region     │ near_constant   │ drop          │ only 3 distinct value(s) (threshold=3) │
+│ region     │ categorical     │ one_hot       │ String with cardinality_ratio=0.0002   │
 └────────────┴─────────────────┴───────────────┴────────────────────────────────────────┘
 
 Projected feature width: 38 columns
 ```
-
-A column with exactly three distinct values is dropped by default (as `region`
-is here); set `profiling.near_constant_distinct = 2` to keep such columns.
 
 Edit `sorethumb.toml` to override any column treatment before running:
 
@@ -423,26 +420,26 @@ sorethumb anomalies --top 100 --json | jq '.[] | {rank, score: .composite_score,
 Two suites, both reproducible from a clone. Full matrices, method and every
 metric are in the
 [benchmark results page](https://github.com/tarne75/sorethumb/blob/main/docs/benchmarks.md).
-These are the headline cells from the committed run (regenerated 2026-10-14, 3 seeds,
+These are the headline cells from the committed run (regenerated 2026-10-19, 3 seeds,
 mean ± spread across seeds):
 
 | Setting | ROC-AUC | Average precision |
 | --- | --- | --- |
-| Synthetic, point anomalies, default pipeline | 1.0000 ± 0.0000 | 1.0000 ± 0.0000 |
-| Synthetic, clustered anomalies, default pipeline | 1.0000 ± 0.0001 | 0.9988 ± 0.0024 |
-| Synthetic, masking, default pipeline | 0.8813 ± 0.0328 | 0.4686 ± 0.1070 |
-| Synthetic, local anomalies, default pipeline | 0.7085 ± 0.0335 | 0.1075 ± 0.0460 |
-| Synthetic, varying density, default pipeline | 0.6824 ± 0.0341 | 0.0844 ± 0.0552 |
-| Synthetic, contextual anomalies, default pipeline | 0.4965 ± 0.0842 | 0.0579 ± 0.0091 |
-| Synthetic, rare categorical value, default pipeline | 0.4649 ± 0.0920 | 0.0381 ± 0.0168 |
-| Synthetic, off-hours text timestamps, default pipeline | 0.9110 ± 0.0035 | 0.3268 ± 0.0626 |
-| Synthetic, 20 irrelevant columns, default pipeline | 0.9557 ± 0.0132 | 0.6758 ± 0.0770 |
-| Synthetic, all-categorical combinations, default pipeline | 0.8740 ± 0.0491 | 0.1872 ± 0.0569 |
+| Synthetic, point anomalies, default pipeline | 0.9999 ± 0.0001 | 0.9970 ± 0.0059 |
+| Synthetic, clustered anomalies, default pipeline | 0.9998 ± 0.0003 | 0.9958 ± 0.0082 |
+| Synthetic, masking, default pipeline | 0.8784 ± 0.0340 | 0.4524 ± 0.1061 |
+| Synthetic, local anomalies, default pipeline | 0.9446 ± 0.0104 | 0.3823 ± 0.1325 |
+| Synthetic, varying density, default pipeline | 0.6894 ± 0.0320 | 0.0822 ± 0.0301 |
+| Synthetic, contextual anomalies, default pipeline | 0.6451 ± 0.0800 | 0.0863 ± 0.0080 |
+| Synthetic, rare categorical value, default pipeline | 0.8240 ± 0.0188 | 0.1088 ± 0.0437 |
+| Synthetic, off-hours text timestamps, default pipeline | 0.9117 ± 0.0442 | 0.3799 ± 0.0834 |
+| Synthetic, 20 irrelevant columns, default pipeline | 0.9430 ± 0.0153 | 0.6234 ± 0.0174 |
+| Synthetic, all-categorical combinations, default pipeline | 0.8744 ± 0.0486 | 0.1882 ± 0.0555 |
 | KDDCup99 (SA), bare Isolation Forest, 20,000-row sample | 0.9386 ± 0.0061 | 0.4443 ± 0.0143 |
 | Covtype, bare Isolation Forest, 20,000-row sample | 0.9837 ± 0.0030 | 0.3486 ± 0.0320 |
 
-Read the weak rows as seriously as the strong ones: the default ensemble is close to
-chance on contextual and rare-categorical anomalies and weak on local and varying-density ones, and average
+Read the weak rows as seriously as the strong ones: the default ensemble is weak on
+contextual and varying-density anomalies, and average
 precision is the more telling column when anomalies are rare. These two columns
 measure the ranking, which is the same whatever `scoring.contamination` is. The page
 above also shows the bare-detector baselines and the flag-level precision and recall.
