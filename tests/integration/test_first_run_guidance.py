@@ -18,7 +18,7 @@ from typer.testing import CliRunner
 
 from sorethumb_ml._pipeline import run_detection
 from sorethumb_ml.cli import app
-from sorethumb_ml.config import DetectorConfig
+from sorethumb_ml.scoring.combine import ScoreEnsemble
 from sorethumb_ml.store.results import RANKED_PREVIEW_ROWS, read_ranked_preview, read_results
 from sorethumb_ml.store.workspace import Workspace
 from tests.factories.configs import make_config
@@ -34,14 +34,22 @@ def _flat(text: str) -> str:
     return " ".join(text.split())
 
 
-def _write_categorical_csv(path: Path) -> Path:
-    # Two uniform categoricals: the detectors' own boundaries do not overlap, so the
-    # default intersection flags nothing while every row is still ranked.
-    rng = np.random.default_rng(1)
-    pl.DataFrame(
-        {"colour": rng.choice(["red", "green", "blue"], 400), "size": rng.choice(["s", "m", "l", "xl"], 400)}
-    ).write_csv(path)
-    return path
+@pytest.fixture
+def no_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the flag policy flag nothing, while every row is still scored and ranked.
+
+    Which real datasets flag nothing at "auto" differs across platforms (the same
+    seeded categorical frame flagged 0 rows on macOS and 26 on Linux), so the
+    zero-flag presentation is pinned with the flags emptied directly.
+    """
+    combine = ScoreEnsemble.combine
+
+    def flag_nothing(self: ScoreEnsemble, *args: object, **kwargs: object) -> dict:
+        result = combine(self, *args, **kwargs)
+        result["anomaly_flag"] = np.zeros_like(result["anomaly_flag"], dtype=bool)
+        return result
+
+    monkeypatch.setattr(ScoreEnsemble, "combine", flag_nothing)
 
 
 def _run_zero_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data: Path, *extra: str):
@@ -80,16 +88,15 @@ def test_the_ranked_preview_keeps_the_top_of_the_ranking_flagged_or_not(tmp_path
     assert group.top_ranked[0]["values"]["num_a"] == 999.0
 
 
+@pytest.mark.usefixtures("no_flags")
 def test_a_group_with_no_flagged_rows_still_has_a_ranking(tmp_path: Path) -> None:
-    csv = _write_categorical_csv(tmp_path / "cats.csv")
-    # The default detectors (make_config's default is Isolation Forest alone).
-    detectors = [DetectorConfig(name=n) for n in ("isolation_forest", "kmeans_distance", "one_class_svm")]
-    result = run_detection(
-        make_config(csv, tmp_path / "ws", id_column=None, detectors=detectors), no_report=True
-    )
+    csv = tmp_path / "d.csv"
+    planted = write_planted_csv(csv, n_normal=280, n_anomaly=5)
+    result = run_detection(make_config(csv, tmp_path / "ws"), no_report=True)
     (group,) = result.groups
-    assert group.n_anomalies == 0, "test precondition: this data should flag nothing at the default"
+    assert group.n_anomalies == 0
     assert len(group.top_ranked) == RANKED_PREVIEW_ROWS
+    assert {r["row_id"] for r in group.top_ranked[: len(planted)]} == set(planted)
     assert not any(r["flagged"] for r in group.top_ranked)
 
 
@@ -143,15 +150,17 @@ def test_a_numeric_review_budget_gets_no_shortlist_warning(
     assert "Top-ranked rows" in out
 
 
+@pytest.mark.usefixtures("no_flags")
 def test_no_flagged_rows_is_never_presented_as_no_anomalies(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    csv = _write_categorical_csv(tmp_path / "cats.csv")
+    csv = tmp_path / "data.csv"
+    write_planted_csv(csv, n_normal=280, n_anomaly=5)
     result = _run_zero_config(tmp_path, monkeypatch, csv)
     out = _flat(result.output)
 
     assert result.exit_code == 0, out
-    assert "Flagged for review: 0 of 400 rows" in out
+    assert "Flagged for review: 0 of 285 rows" in out
     assert "not a finding that the data holds no anomalies" in out
     assert "Top-ranked rows" in out
     assert "Shortlist size not chosen" in out
