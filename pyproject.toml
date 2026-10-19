@@ -46,12 +46,10 @@ classifiers = [
 ]
 dependencies = [
     "polars>=1.3.0",
-    "pyarrow>=14.0.0",
     "numpy>=1.26.0",
     "scikit-learn>=1.4.0",
     "scipy>=1.12.0",
     "pydantic>=2.11.0",
-    "pydantic-settings>=2.2.0",
     "typer>=0.16.0",
     "rich>=13.0.0",
     "httpx>=0.27.0",
@@ -75,6 +73,10 @@ explain = [
 benchmark = [
     "datasets>=2.0.0",
     "pandas>=2.0.0",
+    # polars' DataFrame.to_pandas() needs pyarrow, and the sklearn-baseline rows
+    # convert through it. The core never does, so pyarrow is not a core
+    # dependency: tests/integration/test_optional_packages.py shows both.
+    "pyarrow>=14.0.0",
 ]
 dev = [
     "pytest>=9.0.0",

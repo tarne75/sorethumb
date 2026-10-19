@@ -314,9 +314,10 @@ Versioning: [Semantic Versioning](https://semver.org/).
   the other way (mildly reduced sensitivity).
 - Real-dataset benchmark figures (KDDCup99, Covtype) are capped at 20,000 rows
   for CI runtime, as `docs/benchmarks.md` states where the tables appear.
-- **Platforms**: native Windows on ARM is not supported (pyarrow publishes no
-  Windows ARM64 wheel; an x64 Python under emulation works), and on any OS a
-  workspace needs a local drive, not a network share or synced folder. See
-  the README's Supported platforms section.
+- **Platforms**: native Windows on ARM is untested (the core installs from
+  Windows ARM64 wheels, but no CI job runs there, and the `benchmark` extra's
+  pyarrow has no such wheel; an x64 Python under emulation is the tested
+  route), and on any OS a workspace needs a local drive, not a network share or
+  synced folder. See the README's Supported platforms section.
 
 [Unreleased]: https://github.com/tarne75/sorethumb/commits/main

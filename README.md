@@ -65,7 +65,8 @@ the CSV/HTML reports need. Optional extras add to it:
 - `pip install ".[explain]"` adds the SHAP package for TreeSHAP and KernelSHAP
   attributions. Without it those explanations fall back to a finite-difference
   method and say so with a warning.
-- `pip install ".[benchmark]"` adds what the benchmark harness needs.
+- `pip install ".[benchmark]"` adds what the benchmark harness needs (pandas,
+  pyarrow and Hugging Face `datasets`).
 
 ---
 
@@ -211,10 +212,13 @@ Not supported:
   drive, OneDrive, Dropbox, Google Drive, iCloud) on any OS. Its SQLite
   database and atomic file replacement need a local drive; sorethumb warns
   when it detects one. Your data can be anywhere.
-- **Native Windows on ARM.** pyarrow publishes no Windows ARM64 wheel; an x64
-  Python under emulation works.
 - **Very deep workspace paths on Windows** without long-path support enabled:
   sorethumb stops before running and says how much shorter the path must be.
+
+Untested: **native Windows on ARM.** Every core dependency publishes a Windows
+ARM64 wheel, but no CI job runs there; an x64 Python under emulation is the
+tested route. The `benchmark` extra needs pyarrow, which publishes no Windows
+ARM64 wheel.
 
 ---
 
