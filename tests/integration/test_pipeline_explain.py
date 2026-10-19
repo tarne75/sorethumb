@@ -331,6 +331,7 @@ def test_mixed_source_attribution_kind_and_reasons_ignore_the_dropped_detector(
     skip). Post-fix, attribution_kind must reflect only the two active
     members: the weakest of {model_specific, exact} is "model_specific".
     """
+    pytest.importorskip("shap")  # isolation_forest's "model_specific" tag is TreeSHAP's
     _invert_one_class_svm_scores(monkeypatch)
 
     csv = tmp_path / "data.csv"

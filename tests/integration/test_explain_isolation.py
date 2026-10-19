@@ -57,6 +57,7 @@ def _break_explanation_stage(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_detection_output_is_byte_identical_whatever_the_explanation_stage_does(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    pytest.importorskip("shap")  # TreeSHAP decides the explain outcome checked here
     explained = run_detection(_cfg(tmp_path, "a"), no_report=True)
     disabled = run_detection(_cfg(tmp_path, "b", explain=False), no_report=True)
     _break_explanation_stage(monkeypatch)
@@ -122,6 +123,7 @@ def test_explanations_disabled_writes_no_explanation_file_and_exits_ok(tmp_path:
 
 
 def test_explained_results_join_on_and_a_resumed_run_keeps_the_explain_outcome(tmp_path: Path) -> None:
+    pytest.importorskip("shap")  # TreeSHAP decides the explain outcome checked here
     cfg = _cfg(tmp_path, "ws")
     first = run_detection(cfg, no_report=True)
     (group,) = first.groups
