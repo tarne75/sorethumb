@@ -40,6 +40,10 @@ logger = logging.getLogger(__name__)
 _RESULT_FILENAME = "anomalies.parquet"
 _EXPLANATION_FILENAME = "explanations.parquet"
 _ATTRIBUTION_FILENAME = "attributions.parquet"
+_RANKED_FILENAME = "ranked.parquet"
+# Rows kept per group in ranked.parquet: the top of the combined-score ranking,
+# flagged or not, so a run that flags few or no rows still has a ranking to show.
+RANKED_PREVIEW_ROWS = 20
 
 
 def write_results(
@@ -114,6 +118,48 @@ def _validate_results_frame(df: pl.DataFrame) -> None:
         raise StoreError("write_results: 'row_id' contains null values.")
     if df["row_id"].n_unique() != len(df):
         raise StoreError("write_results: 'row_id' contains duplicate values.")
+
+
+def ranked_preview_path(workspace: Workspace, run_id: str, group_key: str) -> Path:
+    """Return the ranked-preview Parquet path for a (run_id, group_key), existing or not."""
+    return workspace.results_dir(run_id, group_key) / _RANKED_FILENAME
+
+
+def write_ranked_preview(workspace: Workspace, run_id: str, group_key: str, df: pl.DataFrame) -> Path:
+    """Write a group's top-ranked rows (flagged or not) and register the artifact.
+
+    ``df`` holds at most ``RANKED_PREVIEW_ROWS`` rows: ``row_id``, ``score_rank``
+    (1 = highest combined score in the group), ``composite_score``, ``flagged``, and
+    the row's source columns. Independent of the flag decision: it is what a reader
+    sees when the policy flagged few rows or none.
+
+    Raises
+    ------
+    StoreError
+        If ``row_id`` is missing, null or duplicated.
+
+    """
+    _validate_results_frame(df)
+    out_path = ranked_preview_path(workspace, run_id, group_key)
+    with atomic_write(out_path) as tmp:
+        df.write_parquet(str(tmp))
+    workspace.store.register_artifact(
+        artifact_id=f"{run_id}_{group_key}_ranked",
+        path=str(out_path),
+        kind="ranked",
+        byte_size=out_path.stat().st_size,
+        regenerable=False,
+        run_id=run_id,
+    )
+    return out_path
+
+
+def read_ranked_preview(workspace: Workspace, run_id: str, group_key: str) -> pl.DataFrame | None:
+    """Load a group's top-ranked rows, or None if absent (a run from before they were kept)."""
+    path = ranked_preview_path(workspace, run_id, group_key)
+    if not path.exists():
+        return None
+    return pl.read_parquet(str(path))
 
 
 def results_path(workspace: Workspace, run_id: str, group_key: str) -> Path:

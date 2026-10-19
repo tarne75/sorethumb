@@ -64,6 +64,10 @@ class RunMeta:
     # _pipeline._resolve_id_identity_scope) -- None if no id_column is
     # configured.
     id_identity_scope: str | None = None
+    # How rows were flagged: the ensemble policy id and scoring.contamination
+    # ("auto", or a number as text). Empty when unknown.
+    flag_policy: str = ""
+    contamination: str = ""
 
 
 @dataclass
@@ -83,6 +87,12 @@ class GroupSection:
     # history.trend.TrendReport for this group, ending at the run's period
     # (None for a run without a period). Supersedes window_results.
     trend: Any = None
+    # ranked.parquet: the top of the group's combined-score ranking, flagged or
+    # not (None for a run from before it was kept).
+    ranked: pl.DataFrame | None = None
+    # True when the group's results file is missing from the workspace: its flagged
+    # rows cannot be shown, which is not the same as "none were flagged".
+    records_missing: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +134,9 @@ def render_report(
         logger.info("Report written (formats=%s): %s.", sorted(fmts), out_dir)
         return json_path or out_dir
 
-    body_parts: list[str] = [_provenance_block(run_meta)]
+    body_parts: list[str] = [
+        part for part in (_provenance_block(run_meta), _shortlist_note(run_meta)) if part
+    ]
 
     # Tab nav
     body_parts.append(_tab_nav(groups))
@@ -153,6 +165,8 @@ def _write_json_report(run_meta: RunMeta, groups: list[GroupSection], out_dir: P
         "started_at": run_meta.started_at,
         "source_run_id": run_meta.source_run_id,
         "id_identity_scope": run_meta.id_identity_scope,
+        "flag_policy": run_meta.flag_policy,
+        "contamination": run_meta.contamination,
         "groups": [
             {
                 "group_key": g.group_key,
@@ -162,6 +176,7 @@ def _write_json_report(run_meta: RunMeta, groups: list[GroupSection], out_dir: P
                 "warnings": g.warnings,
                 **({"attributions": g.attributions.to_dicts()} if g.attributions is not None else {}),
                 **({"trend": g.trend.to_dict()} if g.trend is not None else {}),
+                **({"top_ranked": g.ranked.to_dicts()} if g.ranked is not None else {}),
             }
             for g in groups
         ],
@@ -258,6 +273,45 @@ def _provenance_block(meta: RunMeta) -> str:
     )
 
 
+def _shortlist_note(meta: RunMeta) -> str:
+    """Say how the flagged rows were chosen, and that they are a shortlist, not a count of anomalies."""
+    if not meta.flag_policy:
+        return ""
+    policy = html.escape(meta.flag_policy)
+    if meta.contamination == "auto":
+        body = (
+            "<strong>Shortlist size not chosen.</strong> "
+            f'With <code>scoring.contamination = "auto"</code> and the {policy} policy, each '
+            "detector flags the rows past its own boundary, so nobody set how many rows are "
+            "flagged. The flagged rows are a review shortlist, not a count of the anomalies the "
+            "data holds, and a group with no flagged rows is not a group with no anomalies. "
+            "Each group's top-ranked rows, flagged or not, are listed with it. To review a fixed "
+            "number of rows, set a review budget (docs/ensemble-policy.md)."
+        )
+    else:
+        body = (
+            f"<strong>Flagged rows:</strong> {policy} at <code>scoring.contamination = "
+            f"{html.escape(meta.contamination)}</code>. A review shortlist, not a count of the "
+            "anomalies the data holds."
+        )
+    return (
+        '<div class="shortlist-note" '
+        'style="border-left:4px solid #c77c00;background:#fff8ec;padding:0.5rem 1rem;margin:0.5rem 0;">'
+        f"{body}</div>"
+    )
+
+
+def _ranked_html(grp: GroupSection) -> str:
+    if grp.ranked is None or len(grp.ranked) == 0:
+        return ""
+    return (
+        "<h3>Top-ranked rows (highest combined score, flagged or not)</h3>"
+        + _df_to_table(grp.ranked)
+        + "<p>score_rank = position in this group's ranking (1 = most unusual); "
+        "flagged = passed the flag policy.</p>"
+    )
+
+
 def _warnings_callout(warnings: list[str]) -> str:
     """Render a group's persisted warnings as a visible callout above its tabs.
 
@@ -311,8 +365,21 @@ def _group_section(grp: GroupSection, idx: int, *, csv_written: bool) -> str:
         if csv_written
         else ""
     )
-    records_html = _df_to_table(grp.records) if len(grp.records) > 0 else "<p>No anomalies flagged.</p>"
-    records_html += _reason_detail(grp)
+    if grp.records_missing:
+        records_html = (
+            "<p><strong>This group's results file is missing from the workspace</strong>, so its "
+            "flagged rows cannot be shown. Re-run the group to regenerate it.</p>" + _ranked_html(grp)
+        )
+    elif len(grp.records) > 0:
+        records_html = _df_to_table(grp.records) + _reason_detail(grp)
+        ranked = _ranked_html(grp)
+        if ranked:
+            records_html += f"<details><summary>Top-ranked rows, flagged or not</summary>{ranked}</details>"
+    else:
+        records_html = (
+            "<p><strong>No rows were flagged in this group.</strong> That is the flag policy's "
+            "decision, not a finding that the group holds no anomalies.</p>" + _ranked_html(grp)
+        )
     parts.append(
         f'<div class="tab-panel active" data-group="{idx}" data-tab="records">{csv_link}{records_html}</div>'
     )

@@ -134,6 +134,18 @@ Versioning: [Semantic Versioning](https://semver.org/).
   success) and every `--json` command emits one document per outcome; see
   `docs/cli_reference.md`. A group is selected by its label (`run --only-group`,
   `show --group`, `history --group`; the last two also take its key).
+- **Reading a run: the ranking first**: every `run` and `score` summary ends with
+  the top-ranked rows, flagged or not, and each group keeps its top 20 by combined
+  score in `ranked.parquet` (`GroupSummary.top_ranked`, `groups[].top_ranked` in
+  `--json`, `sorethumb anomalies --ranked`, and in the report). At the default
+  `scoring.contamination = "auto"` the detectors' own boundaries set how many rows
+  are flagged, so every run says the size was not chosen (`shortlist_size_chosen:
+  false` in `--json`), and a workspace's first run, or any run without a
+  `sorethumb.toml`, says it prominently with the count it came to and how to set a
+  review budget. The default policy is unchanged. A run, `anomalies` or a report
+  with no flagged rows says that is the policy's decision, not a finding that the
+  data holds no anomalies, and shows the ranking; a missing results file is
+  reported as missing.
 - **Score-forward**: `sorethumb score --from-run RUN_ID` scores new data with a
   fitted run's persisted models and calibrators, without refitting, so scores
   stay on one scale across calls. A config whose fit-time settings differ from

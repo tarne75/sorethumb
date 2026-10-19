@@ -280,7 +280,10 @@ class TestRenderReport:
         )
         path = render_report(_RUN_META, [grp], tmp_path)
         content = path.read_text(encoding="utf-8")
-        assert "No anomalies flagged" in content
+        # Zero flagged rows is the policy's decision, never presented as "no anomalies".
+        assert "No rows were flagged in this group" in content
+        assert "not a finding that the group holds no anomalies" in content
+        assert "No anomalies flagged" not in content
 
     def test_config_json_in_provenance(self, tmp_path: Path):
         path = render_report(_RUN_META, [], tmp_path)
@@ -544,7 +547,9 @@ def test_render_report_for_run_tolerates_a_missing_group_results_file(tmp_path: 
     assert out is not None
     content = out.read_text(encoding="utf-8")
     assert group_key in content
-    assert "No anomalies flagged" in content
+    # A missing results file is reported as missing, not as "nothing flagged".
+    assert "results file is missing from the workspace" in content
+    assert "No rows were flagged" not in content
 
 
 def test_report_surfaces_planted_row_ids_and_reasons(tmp_path: Path) -> None:

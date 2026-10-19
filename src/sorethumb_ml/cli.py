@@ -27,6 +27,8 @@ from typing import Annotated, Any, NoReturn
 import typer
 from rich.console import Console
 from rich.markup import escape
+from rich.padding import Padding
+from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
@@ -1137,11 +1139,17 @@ def run(
     except SorethumbError as exc:
         _fail(json_output, f"run failed: {exc}", _classify_error(exc))
 
+    contamination = cfg.scoring.contamination
     if json_output:
-        typer.echo(json.dumps(_run_result_to_dict(result), default=str))
+        typer.echo(json.dumps(_run_result_to_dict(result, contamination=contamination), default=str))
         raise typer.Exit(int(_exit_code_for(result)))
 
-    _print_run_summary(result)
+    zero_config = not config_existed and data_file is not None
+    _print_run_summary(
+        result,
+        contamination=contamination,
+        explain_shortlist=contamination == "auto" and (zero_config or _is_first_run(result)),
+    )
 
     raise typer.Exit(int(_exit_code_for(result)))
 
@@ -1224,10 +1232,12 @@ def score(
         _fail(json_output, f"score --from-run failed: {exc}", _classify_error(exc))
 
     if json_output:
-        typer.echo(json.dumps(_run_result_to_dict(result), default=str))
+        typer.echo(
+            json.dumps(_run_result_to_dict(result, contamination=cfg.scoring.contamination), default=str)
+        )
         raise typer.Exit(int(_exit_code_for(result)))
 
-    _print_run_summary(result)
+    _print_run_summary(result, contamination=cfg.scoring.contamination)
     if any(g.drifted for g in result.groups):
         console.print("[yellow]note:[/yellow] one or more groups showed schema/version drift.")
     raise typer.Exit(int(_exit_code_for(result)))
@@ -2365,8 +2375,8 @@ def show(
     table.add_column("Label")
     table.add_column("Status")
     table.add_column("Records", justify="right")
-    table.add_column("Anomalies", justify="right")
-    table.add_column("Rate %", justify="right")
+    table.add_column("Flagged", justify="right")
+    table.add_column("Flagged %", justify="right")
     table.add_column("Explanations")
 
     for g in groups:
@@ -2412,8 +2422,18 @@ def anomalies(
     config: _CONFIG_OPT = None,
     workdir: _WORKDIR_OPT = None,
     log_level: _LOG_LEVEL_OPT = None,
-    top: Annotated[int, typer.Option("--top", help="Show only the top-N anomalies by rank.")] = 0,
+    top: Annotated[int, typer.Option("--top", help="Show only the top-N rows by rank.")] = 0,
     reasons: Annotated[int, typer.Option("--reasons", help="Number of reason columns to display.")] = 3,
+    ranked: Annotated[
+        bool,
+        typer.Option(
+            "--ranked",
+            help=(
+                "Show the top of the ranking by combined score, flagged or not (the top "
+                "20 rows kept per group), instead of the flagged rows."
+            ),
+        ),
+    ] = False,
     detail: Annotated[
         bool,
         typer.Option(
@@ -2432,6 +2452,9 @@ def anomalies(
     Rows are ordered by rank (1 = most anomalous). Use --top to limit output and
     --reasons to control how many contributing features are shown per row;
     --detail adds the record behind each reason (``attributions.parquet``).
+    --ranked shows the top of the combined-score ranking instead, flagged or not:
+    the rows to look at when the flag policy flagged few or none. With no flagged
+    rows, the text output shows that ranking too.
     """
     import polars as pl  # noqa: PLC0415
 
@@ -2450,12 +2473,20 @@ def anomalies(
             if not groups:
                 _fail(json_output, f"Run not found or has no groups: {run_id}", ExitCode.NOT_FOUND)
 
-            from sorethumb_ml.store.results import read_attributions, read_results  # noqa: PLC0415
+            from sorethumb_ml.store.results import (  # noqa: PLC0415
+                read_attributions,
+                read_ranked_preview,
+                read_results,
+            )
 
             frames: list[pl.DataFrame] = []
             detail_frames: list[pl.DataFrame] = []
+            previews: list[pl.DataFrame] = []
             for g in groups:
                 label = str(g.get("group_label", ""))
+                preview = read_ranked_preview(ws, run_id, g["group_key"])
+                if preview is not None and len(preview) > 0:
+                    previews.append(preview.with_columns(pl.lit(label).alias("_group")))
                 # Detection rows with their explanations joined on (see store/results.py).
                 df = read_results(ws, run_id, g["group_key"])
                 if df is not None and len(df) > 0:
@@ -2466,11 +2497,21 @@ def anomalies(
     except SorethumbError as exc:
         _fail(json_output, str(exc), _classify_error(exc))
 
+    if ranked:
+        _print_ranked(previews, run_id, top, json_output=json_output)
+        return
+
     if not frames:
         if json_output:
             typer.echo("[]")
             raise typer.Exit(0)
-        console.print(f"[yellow]No anomaly rows found for run {_e(run_id)}.[/yellow]")
+        console.print(
+            f"[yellow]No rows were flagged in run {_e(run_id)}.[/yellow] That is the flag policy's "
+            "decision, not a finding that the data holds no anomalies."
+        )
+        if previews:
+            console.print("The top of the ranking, none of it flagged:")
+            _print_ranked(previews, run_id, top, json_output=False)
         raise typer.Exit(0)
 
     all_rows = pl.concat(frames, how="diagonal").sort("rank")
@@ -2505,12 +2546,13 @@ def anomalies(
         return
 
     table = Table(
-        title=f"Anomalies — run {_e(run_id[:12])}",
+        title=f"Flagged rows — run {_e(run_id[:12])}",
         show_header=True,
         show_lines=True,
         header_style="bold",
     )
     table.add_column("#", justify="right", style="bold cyan", no_wrap=True)
+    table.add_column("row", no_wrap=True)
     table.add_column("score", justify="right")
     table.add_column("kind", style="dim", no_wrap=True)
     if multi_group:
@@ -2522,6 +2564,7 @@ def anomalies(
         score_val = row.get("composite_score") or 0.0
         cells: list[str] = [
             str(row.get("rank", "")),
+            _preview_value(row.get("row_id")),
             f"{score_val:.4f}",
             _explain_kind_cell(row),
         ]
@@ -2535,7 +2578,74 @@ def anomalies(
     if detail:
         console.print(_reason_detail_table(all_rows, details, multi_group=multi_group))
     console.print(
-        f"  [dim]{_e(len(all_rows))} anomaly row(s)   run={_e(run_id)}   workspace={_e(ws_path)}[/dim]"
+        f"  [dim]{_e(len(all_rows))} flagged row(s)   run={_e(run_id)}   workspace={_e(ws_path)}[/dim]"
+    )
+
+
+def _print_ranked(previews: list[Any], run_id: str, top: int, *, json_output: bool) -> None:
+    """Print the top of each group's combined-score ranking (``ranked.parquet``), flagged or not."""
+    import polars as pl  # noqa: PLC0415
+
+    if not previews:
+        if json_output:
+            typer.echo("[]")
+            return
+        console.print(
+            f"[yellow]Run {_e(run_id)} has no ranked preview[/yellow] (it was written before "
+            "sorethumb kept one); re-run it to get one."
+        )
+        return
+    ranked = pl.concat(previews, how="diagonal").sort(
+        ["composite_score", "score_rank"], descending=[True, False]
+    )
+    if top:
+        ranked = ranked.head(top)
+    fixed = ["_group", "row_id", "score_rank", "composite_score", "flagged"]
+    value_cols = [c for c in ranked.columns if c not in fixed]
+    if json_output:
+        payload = [
+            {
+                "group": row["_group"],
+                "row_id": row["row_id"],
+                "score_rank": row["score_rank"],
+                "composite_score": row["composite_score"],
+                "flagged": row["flagged"],
+                "values": {c: row[c] for c in value_cols},
+            }
+            for row in ranked.iter_rows(named=True)
+        ]
+        typer.echo(json.dumps(payload, default=str))
+        return
+    multi_group = ranked["_group"].n_unique() > 1 or ranked["_group"][0] != "__all__"
+    table = Table(
+        title=f"Top-ranked rows — run {_e(run_id[:12])}",
+        show_header=True,
+        header_style="bold",
+    )
+    table.add_column("rank", justify="right", style="bold cyan", no_wrap=True)
+    table.add_column("score", justify="right")
+    table.add_column("flagged")
+    if multi_group:
+        table.add_column("group")
+    table.add_column("row", no_wrap=True)
+    shown = [c for c in value_cols if c != "id"][:6]
+    for c in shown:
+        table.add_column(_e(c), overflow="fold")
+    for row in ranked.iter_rows(named=True):
+        cells = [
+            str(row["score_rank"]),
+            f"{float(row['composite_score']):.4f}",
+            "[bold]yes[/bold]" if row["flagged"] else "[dim]no[/dim]",
+        ]
+        if multi_group:
+            cells.append(_e(row["_group"]))
+        cells.append(_e(_preview_value(row["row_id"])))
+        cells.extend(_e(_preview_value(row[c])) for c in shown)
+        table.add_row(*cells)
+    console.print(table)
+    console.print(
+        f"  [dim]{_e(len(ranked))} row(s) by combined score; rank = position in its group "
+        "(1 = most unusual); flagged = passed the flag policy.[/dim]"
     )
 
 
@@ -3205,7 +3315,132 @@ def _exit_code_for(result: RunResult) -> ExitCode:
     return ExitCode.OK
 
 
-def _print_run_summary(result: RunResult) -> None:
+def _is_first_run(result: RunResult) -> bool:
+    """Return True when *result* is the only run its workspace holds (a first run)."""
+    try:
+        with Workspace.open(result.workspace_path) as ws:
+            return len(ws.store.list_runs(limit=2)) <= 1
+    except (SorethumbError, OSError):
+        return False
+
+
+_PREVIEW_IN_SUMMARY = 5
+_PREVIEW_VALUE_COLUMNS = 4
+
+
+def _preview_value(value: Any) -> str:
+    if isinstance(value, float):
+        return f"{value:.4g}"
+    text = "—" if value is None else str(value)
+    return text if len(text) <= 24 else text[:23] + "…"
+
+
+def _top_ranked_rows(result: RunResult, n: int) -> list[tuple[str, dict[str, Any]]]:
+    """Return the *n* highest-scoring preview rows across the run's groups, best first, with group labels."""
+    rows = [(g.group_label, row) for g in result.groups for row in g.top_ranked]
+    rows.sort(key=lambda item: (-float(item[1]["composite_score"]), item[1]["score_rank"]))
+    return rows[:n]
+
+
+def _print_top_ranked(result: RunResult) -> None:
+    from sorethumb_ml.store.results import RANKED_PREVIEW_ROWS  # noqa: PLC0415
+
+    rows = _top_ranked_rows(result, _PREVIEW_IN_SUMMARY)
+    if not rows:
+        return
+    multi_group = len({label for label, _ in rows}) > 1 or rows[0][0] != "__all__"
+    value_cols = [c for c in rows[0][1]["values"] if c != "id"][:_PREVIEW_VALUE_COLUMNS]
+    table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
+    table.add_column("rank", justify="right")
+    table.add_column("score", justify="right")
+    table.add_column("flagged")
+    if multi_group:
+        table.add_column("group")
+    table.add_column("row")
+    for c in value_cols:
+        table.add_column(_e(c), overflow="fold")
+    for label, row in rows:
+        cells = [
+            str(row["score_rank"]),
+            f"{float(row['composite_score']):.4f}",
+            "[bold]yes[/bold]" if row["flagged"] else "[dim]no[/dim]",
+        ]
+        if multi_group:
+            cells.append(_e(label))
+        cells.append(_e(_preview_value(row["row_id"])))
+        cells.extend(_e(_preview_value(row["values"].get(c))) for c in value_cols)
+        table.add_row(*cells)
+    console.print("\n  [bold]Top-ranked rows[/bold] (highest combined score, flagged or not):")
+    console.print(Padding(table, (0, 0, 0, 4)))
+    console.print(
+        "    [dim]rank = position in its group's ranking (1 = most unusual). "
+        "`sorethumb anomalies --ranked` lists the top "
+        f"{RANKED_PREVIEW_ROWS} per group.[/dim]"
+    )
+
+
+def _print_shortlist_explainer(result: RunResult, total_rows: int) -> None:
+    """Print the first-run warning: at contamination="auto" nobody chose the shortlist size."""
+    n = result.n_anomalies
+    share = f" ({100.0 * n / total_rows:.1f}%)" if total_rows else ""
+    policy = result.ensemble_policy or "intersection@1"
+    if policy.startswith("intersection"):
+        kept = "only rows every detector flags are kept"
+    elif policy.startswith("union"):
+        kept = "rows any detector flags are kept"
+    else:
+        kept = "the combined score is cut at the median of the detectors' own flag rates"
+    console.print(
+        Panel(
+            f'Nobody chose how many rows to flag. With [bold]scoring.contamination = "auto"[/bold] '
+            f"and the {_e(policy)} policy, each detector flags the rows past its own boundary, and "
+            f"{kept}: "
+            f"[bold]{n:,} of {total_rows:,} rows{share}[/bold] here. On the real datasets tested, that "
+            "came to anywhere from 0.18x to 8.4x a 5% review budget. The count says how many rows "
+            "passed the detectors' boundaries, not how many anomalies the data holds.\n\n"
+            "[bold]Treat the ranking as the result:[/bold] start from the top-ranked rows below, "
+            "flagged or not.\n\n"
+            "To review a fixed number of rows, set a review budget instead: see "
+            '"Recommended setup if you have a review budget" in docs/ensemble-policy.md.\n'
+            "[dim]Shown on a workspace's first run and on any run without a sorethumb.toml.[/dim]",
+            title="Shortlist size not chosen",
+            border_style="yellow",
+            expand=False,
+        )
+    )
+
+
+def _print_shortlist(result: RunResult, *, contamination: str | float, explain_shortlist: bool) -> None:
+    """Print the flagged count, what set its size, and the top of the ranking."""
+    total_rows = sum(g.n_records for g in result.groups if g.status in ("success", "skipped"))
+    if result.n_anomalies:
+        pct = (
+            f" ({100.0 * result.n_anomalies / total_rows:.2f}% of {total_rows:,} rows)" if total_rows else ""
+        )
+        console.print(
+            f"  Flagged for review: {result.n_anomalies:,}{_e(pct)} — "
+            "a review shortlist, [dim]not an estimate of true prevalence[/dim]"
+        )
+    elif total_rows:
+        console.print(
+            f"  Flagged for review: 0 of {total_rows:,} rows — no row passed the flag policy. That is the "
+            "policy's decision, [bold]not a finding that the data holds no anomalies[/bold]: the "
+            "top-ranked rows are below."
+        )
+    if total_rows and contamination == "auto" and not explain_shortlist:
+        console.print(
+            '  [dim]Shortlist size: not chosen (scoring.contamination = "auto": each detector\'s own '
+            "boundary decides); set a review budget to control it (docs/ensemble-policy.md).[/dim]"
+        )
+    if explain_shortlist and total_rows:
+        console.print()
+        _print_shortlist_explainer(result, total_rows)
+    _print_top_ranked(result)
+
+
+def _print_run_summary(
+    result: RunResult, *, contamination: str | float = "auto", explain_shortlist: bool = False
+) -> None:
     status_color = "red" if (result.n_failed or result.group_selection_error) else "green"
     console.print(
         f"\n[{status_color}]Run {_e(result.run_id)}[/{status_color}]  "
@@ -3242,15 +3477,7 @@ def _print_run_summary(result: RunResult) -> None:
             f"{unexplained} flagged row(s) unexplained, or an explainer warned (see warnings).[/yellow]"
         )
 
-    total_rows = sum(g.n_records for g in result.groups if g.status in ("success", "skipped"))
-    if result.n_anomalies or total_rows:
-        pct = (
-            f" ({100.0 * result.n_anomalies / total_rows:.2f}% of {total_rows:,} rows)" if total_rows else ""
-        )
-        console.print(
-            f"  Flagged for review: {result.n_anomalies:,}{_e(pct)} — "
-            "a review shortlist, [dim]not an estimate of true prevalence[/dim]"
-        )
+    _print_shortlist(result, contamination=contamination, explain_shortlist=explain_shortlist)
 
     # Realised per-detector rates: what each detector's own heuristic boundary
     # flagged (a composite at contamination='auto' cuts at their median) — surfaced so it is
@@ -3281,7 +3508,7 @@ def _print_run_summary(result: RunResult) -> None:
         for g in timed[:10]:
             flag = " [red]SLOW[/red]" if g.elapsed_seconds > 60 else ""
             console.print(
-                f"    {_e(g.group_label):30s}  {g.elapsed_seconds:6.1f}s  anomalies={_e(g.n_anomalies)}{flag}"
+                f"    {_e(g.group_label):30s}  {g.elapsed_seconds:6.1f}s  flagged={_e(g.n_anomalies)}{flag}"
             )
 
     if result.warning_records:
@@ -3308,7 +3535,7 @@ def _print_run_summary(result: RunResult) -> None:
         )
 
 
-def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
+def _run_result_to_dict(result: RunResult, *, contamination: str | float | None = None) -> dict[str, Any]:
     code = _exit_code_for(result)
     return {
         "exit_code": int(code),
@@ -3328,6 +3555,8 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
         "n_skipped": result.n_skipped,
         "n_failed": result.n_failed,
         "n_flagged": result.n_anomalies,  # review shortlist size, not a prevalence estimate
+        # False at contamination="auto": the detectors' own boundaries set the shortlist size.
+        "shortlist_size_chosen": None if contamination is None else contamination != "auto",
         "report_path": str(result.report_path) if result.report_path else None,
         "report_status": result.report_status,
         "started_at": result.started_at,
@@ -3351,6 +3580,8 @@ def _run_result_to_dict(result: RunResult) -> dict[str, Any]:
                 "n_explained": g.n_explained,
                 "n_explain_unavailable": g.n_explain_unavailable,
                 "detection_digest": g.detection_digest,
+                # The top of the ranking, flagged or not (see GroupSummary.top_ranked).
+                "top_ranked": g.top_ranked,
             }
             for g in result.groups
         ],

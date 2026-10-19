@@ -95,13 +95,16 @@ from sorethumb_ml.store.models import (
     score_with_existing,
 )
 from sorethumb_ml.store.results import (
+    RANKED_PREVIEW_ROWS,
     file_digest,
     read_attributions,
+    read_ranked_preview,
     read_results,
     remove_explanation_outputs,
     results_path,
     write_attributions,
     write_explanations,
+    write_ranked_preview,
     write_results,
 )
 from sorethumb_ml.store.workspace import (
@@ -411,6 +414,11 @@ class GroupSummary:
     # Structured form of warnings_issued (errors.warning_record): code, stage,
     # message, group, detector, rows_affected. warnings_issued keeps the messages.
     warning_records: list[dict[str, Any]] = field(default_factory=list)
+    # The top of the group's combined-score ranking, flagged or not (at most
+    # store.results.RANKED_PREVIEW_ROWS rows, best first): row_id, score_rank,
+    # composite_score, flagged, and the row's source values under "values". The
+    # ranking a reader can use when the flag policy flagged few rows or none.
+    top_ranked: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -1629,6 +1637,7 @@ def _group_summary(
     explain_warnings: list[str] | None = None,
     detection_digest: str | None = None,
     warning_records: list[dict[str, Any]] | None = None,
+    top_ranked: list[dict[str, Any]] | None = None,
 ) -> GroupSummary:
     return GroupSummary(
         group_key=group_key,
@@ -1651,6 +1660,7 @@ def _group_summary(
         explain_warnings=explain_warnings or [],
         detection_digest=detection_digest,
         warning_records=warning_records or [],
+        top_ranked=top_ranked or [],
     )
 
 
@@ -1685,7 +1695,52 @@ def _completed_group_summary(
         n_explained=int(row.get("n_explained") or 0) if row else 0,
         n_explain_unavailable=int(row.get("n_explain_unavailable") or 0) if row else 0,
         detection_digest=row.get("detection_digest") if row else None,
+        top_ranked=_top_ranked_records(read_ranked_preview(ws, run_id, group_key)),
     )
+
+
+_PREVIEW_COLUMNS = ("row_id", "score_rank", "composite_score", "flagged")
+
+
+def _ranked_preview_frame(
+    df_group: pl.DataFrame,
+    row_ids: np.ndarray,
+    composite_score: np.ndarray,
+    anomaly_flag: np.ndarray,
+    source_row: np.ndarray,
+) -> pl.DataFrame:
+    """Return the group's top ``RANKED_PREVIEW_ROWS`` rows by combined score, flagged or not.
+
+    Ordered exactly as the flagged rows are (score descending, earliest source row on
+    a tie), with the row's source columns after the ranking columns. A source column
+    whose name clashes with a ranking column gets a " (source)" suffix.
+    """
+    everything = np.ones(len(composite_score), dtype=bool)
+    order = _flagged_idx_by_score_desc(everything, composite_score, source_row)[:RANKED_PREVIEW_ROWS]
+    ranking = pl.DataFrame(
+        {
+            "row_id": np.asarray(row_ids)[order],
+            "score_rank": np.arange(1, len(order) + 1),
+            "composite_score": composite_score[order],
+            "flagged": np.asarray(anomaly_flag, dtype=bool)[order],
+        }
+    )
+    source: pl.DataFrame = df_group[order.tolist()]
+    source = source.drop([c for c in source.columns if c == INTERNAL_ROW_ID_COLUMN])
+    source = source.rename({c: f"{c} (source)" for c in source.columns if c in _PREVIEW_COLUMNS})
+    return pl.concat([ranking, source], how="horizontal")
+
+
+def _top_ranked_records(preview: pl.DataFrame | None) -> list[dict[str, Any]]:
+    """``ranked.parquet`` as ``GroupSummary.top_ranked``: the ranking fields plus ``values``."""
+    if preview is None:
+        return []
+    records = []
+    for row in preview.iter_rows(named=True):
+        item = {k: row[k] for k in _PREVIEW_COLUMNS}
+        item["values"] = {k: v for k, v in row.items() if k not in _PREVIEW_COLUMNS}
+        records.append(item)
+    return records
 
 
 def _execute_group(
@@ -2168,6 +2223,10 @@ def _finalize_group(
     # The flagged population and its order are now fixed: the explanation stage
     # gets a read-only view and writes only its own file.
     flagged_idx.setflags(write=False)
+    # The top of the ranking, flagged or not: what to look at when the policy flags
+    # few rows or none (only flagged rows are written to anomalies.parquet).
+    preview = _ranked_preview_frame(df_group, row_ids, composite_score, anomaly_flag, group_space.row_ids)
+    write_ranked_preview(ws, run_id, group_key, preview)
 
     if source_run_id is None:
         _save_anchor_rule(
@@ -2234,6 +2293,7 @@ def _finalize_group(
         explain_warnings=[str(r["message"]) for r in outcome.warnings],
         warning_records=outcome.warnings,
         detection_digest=detection_digest,
+        top_ranked=_top_ranked_records(preview),
     )
 
 
@@ -3045,6 +3105,8 @@ def _render_report_or_reason(
             started_at=run_row.get("started_at") or "",
             source_run_id=run_row.get("source_run_id"),
             id_identity_scope=_resolve_id_identity_scope(config),
+            flag_policy=_ensemble_policy_id(config),
+            contamination=str(config.scoring.contamination),
         )
 
         try:
@@ -3076,6 +3138,8 @@ def _render_report_or_reason(
                     warnings=warns,
                     attributions=read_attributions(ws, run_id, gk),
                     trend=_group_trend(ws, run_row, config, gk),
+                    ranked=read_ranked_preview(ws, run_id, gk),
+                    records_missing=rdf is None and int(grow.get("anomaly_count") or 0) > 0,
                 )
             )
 
