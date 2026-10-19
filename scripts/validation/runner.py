@@ -425,9 +425,14 @@ def run_explain_check(
     t0 = time.time()
     source_path = data_dir / dataset.file
     workdir = workdir_base / "_explain_check" / dataset.name
-    cfg = build_config(dataset, False, combo, seed, source_path, workdir, explain=True)
     try:
-        result = run_detection(cfg, no_report=True)
+        # build_config names the stamped row-id column as columns.id_column, so
+        # the full data needs it too, exactly as run_case's splits do.
+        with tempfile.TemporaryDirectory(prefix="sorethumb-explain-check-") as tmp_dir:
+            stamped_path = Path(tmp_dir) / "full.parquet"
+            stamp_row_id(pl.read_parquet(source_path)).write_parquet(stamped_path)
+            cfg = build_config(dataset, False, combo, seed, stamped_path, workdir, explain=True)
+            result = run_detection(cfg, no_report=True)
         status = "error" if result.n_failed else "success"
         return {
             "dataset": dataset.name,

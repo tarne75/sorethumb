@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -169,6 +170,27 @@ def render_table(results: list[dict[str, Any]], pca: bool) -> str:
     return "\n".join(lines) + "\n"
 
 
+def provenance(results: list[dict[str, Any]]) -> str:
+    """Say which code and dependencies produced *results*, and when the page was generated.
+
+    A mixed or uncommitted ("+dirty") code revision is printed as-is rather than
+    hidden: the page must name exactly what it describes.
+    """
+    revisions = sorted({r["code_revision"] for r in results})
+    deps: dict[str, set[str]] = {}
+    for r in results:
+        for name, version in r["dependency_versions"].items():
+            deps.setdefault(name, set()).add(version)
+    dep_text = ", ".join(f"{name} {'/'.join(sorted(v))}" for name, v in sorted(deps.items()))
+    date = datetime.now(UTC).date().isoformat()
+    commits = ", ".join(f"`{rev}`" for rev in revisions)
+    return (
+        f"Generated {date} from {len(results)} cases at commit {commits} ({dep_text}). "
+        "Regenerate with `uv run python scripts/run_validation.py` then "
+        "`uv run python scripts/gen_example_runs.py`.\n"
+    )
+
+
 def main() -> None:
     """Render validation/results.json into docs/example-runs.md."""
     if not RESULTS_PATH.exists():
@@ -195,6 +217,7 @@ def main() -> None:
         "truth (kddcup99_sa) -- every other dataset shown here has no anomaly label, so "
         "only operational metrics (rows flagged, elapsed time) are reported for it; "
         "inventing an accuracy number without ground truth would be dishonest.\n",
+        provenance(all_results),
         "---\n",
     ]
 
