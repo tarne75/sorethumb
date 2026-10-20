@@ -9,7 +9,7 @@ paths instead of guessing them.
 * ``--output-dir`` is required: the ``*.md`` / ``*.csv`` result files are
   written there, and nowhere else.
 * ``--readme`` is optional: the Markdown document that holds the result markers
-  (``docs/benchmarks.md`` in this repository; the README carries only a summary)
+  (``docs/benchmarks.md`` in this repository, which also carries the headline summary)
   is edited only when you pass it. There is no default, and no path is derived
   from where the package is installed. A path inside the ``sorethumb_ml``
   package directory is refused.

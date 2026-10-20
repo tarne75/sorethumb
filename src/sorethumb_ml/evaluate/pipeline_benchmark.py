@@ -953,7 +953,7 @@ def assert_complete_and_error_free(rows: list[PipelineBenchmarkRow], expected: s
     """Raise if *rows* doesn't cover exactly *expected* (scenario, ablation) pairs error-free.
 
     Intended for the publication path (``scripts/run_benchmark.py``,
-    before injecting results into the README) -- a benchmark run
+    before injecting results into docs/benchmarks.md) -- a benchmark run
     that silently drops a cell, gains an unrequested one (a config/harness
     drift bug), or reports an errored cell must never ship as if it were
     complete, working evidence.

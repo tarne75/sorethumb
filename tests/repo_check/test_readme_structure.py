@@ -1,9 +1,12 @@
-"""The README is the PyPI long description and the first thing a reader sees.
+"""The README is the entry page: the PyPI long description and the first thing a reader sees.
 
-It leads with how to install, a core-only example and the short list of limitations;
-the full benchmark matrices live in ``docs/benchmarks.md``, with only a compact summary
-(and a link) in the README. These checks keep that shape, and keep the summary honest:
-every figure quoted in the README has to appear in the full results page.
+It leads with how to install, a core-only example and the short list of limitations, then
+the decision guidance (is it the right tool, which setup), a short command-line start,
+the platform table and a map of the documentation. Everything else lives behind the
+documentation index: the full limitations in ``docs/limitations.md``, the walkthrough in
+``docs/getting-started.md``, the benchmark summary and matrices in ``docs/benchmarks.md``.
+These checks keep that shape, keep the README short, and keep the benchmark summary
+honest: every figure it quotes has to appear in the generated results.
 """
 
 from __future__ import annotations
@@ -18,6 +21,10 @@ pytestmark = pytest.mark.repo_check
 _ROOT = Path(__file__).resolve().parents[2]
 _README = (_ROOT / "README.md").read_text(encoding="utf-8")
 _BENCH_DOC = _ROOT / "docs" / "benchmarks.md"
+_LIMITATIONS = _ROOT / "docs" / "limitations.md"
+_DOCS = "https://github.com/tarne75/sorethumb/blob/main/docs/"
+# An entry page, not the manual: room for what a newcomer needs and no more.
+_MAX_README_LINES = 300
 
 _MARKER_PAIRS = (
     ("<!-- pipeline-benchmark-results-start -->", "<!-- pipeline-benchmark-results-end -->"),
@@ -36,21 +43,42 @@ def _h2_titles(text: str) -> list[str]:
     return titles
 
 
+def _section(text: str, title: str) -> str:
+    return text.split(f"## {title}", 1)[1].split("\n## ", 1)[0]
+
+
 def test_readme_leads_with_install_a_core_only_example_and_the_limitations_summary() -> None:
     assert _h2_titles(_README)[:3] == ["Installation", "60-second quickstart", "What it does not do"]
 
 
+def test_the_decision_guidance_follows_the_limitations() -> None:
+    titles = _h2_titles(_README)
+    assert titles[3] == "Is it the right tool?"
+    assert "### Which setup?" in _section(_README, "Is it the right tool?")
+
+
+def test_the_readme_stays_an_entry_page() -> None:
+    lines = len(_README.splitlines())
+    assert lines <= _MAX_README_LINES, (
+        f"README is {lines} lines; keep it an entry page and move detail behind docs/index.md"
+    )
+    assert f"{_DOCS}index.md" in _section(_README, "Documentation")
+
+
 def test_the_core_only_example_needs_no_extras_and_no_network() -> None:
-    section = _README.split("## 60-second quickstart", 1)[1].split("\n## ", 1)[0]
+    section = _section(_README, "60-second quickstart")
     assert "core dependencies" in section
     assert "No network access" in section
     assert "pip install" not in section  # nothing beyond the core install
 
 
-def test_the_limitations_summary_links_to_the_full_section() -> None:
-    summary = _README.split("## What it does not do", 1)[1].split("\n## ", 1)[0]
-    assert "(#honest-limitations)" in summary
-    assert "## Honest limitations" in _README  # and that section still exists
+def test_the_limitations_summary_links_to_the_full_list() -> None:
+    summary = _section(_README, "What it does not do")
+    assert f"{_DOCS}limitations.md" in summary
+    full = _LIMITATIONS.read_text(encoding="utf-8")
+    # The full list expands the summary's points.
+    for topic in ("max_memory_mb", "review budget", "executable", "exact", "anchor_run", "Correlation"):
+        assert topic in full, f"docs/limitations.md lost its {topic!r} point"
 
 
 def test_the_full_benchmark_matrices_are_not_in_the_readme() -> None:
@@ -70,13 +98,16 @@ def test_the_full_matrices_live_in_the_benchmark_page_with_their_injection_marke
     assert "--readme docs/benchmarks.md" in text  # the regeneration command targets this file
 
 
-def test_every_figure_in_the_readme_summary_appears_in_the_full_results() -> None:
-    summary = _README.split("## Benchmark results (summary)", 1)[1].split("\n## ", 1)[0]
+def test_every_figure_in_the_headline_summary_appears_in_the_generated_results() -> None:
+    text = _BENCH_DOC.read_text(encoding="utf-8")
+    summary = _section(text, "Headline results")
     figures = re.findall(r"\d\.\d{4} ± \d\.\d{4}", summary)
-    assert len(figures) >= 10, "the summary table lost its figures"
-    full = _BENCH_DOC.read_text(encoding="utf-8")
-    missing = sorted({f for f in figures if f not in full})
-    assert not missing, f"quoted in the README but absent from docs/benchmarks.md (stale?): {missing}"
+    assert len(figures) >= 10, "the headline summary lost its figures"
+    generated = "".join(text[text.index(start) : text.index(end)] for start, end in _MARKER_PAIRS)
+    missing = sorted({f for f in figures if f not in generated})
+    assert not missing, (
+        f"quoted in the headline summary but absent from the generated results (stale?): {missing}"
+    )
 
 
 def test_the_readme_links_to_the_full_results() -> None:
