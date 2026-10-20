@@ -153,8 +153,8 @@ section.
 
 ## Supported Versions
 
-`sorethumb` is pre-1.0 (currently `0.x`, alpha) and has not yet had its first
-tagged release. Only the latest released version on PyPI is supported;
+`sorethumb` is pre-1.0 (currently `0.x`, alpha). Only the latest released
+version on PyPI is supported;
 security fixes are not backported to older `0.x` releases. Once the project
 reaches 1.0, this section will be updated with an explicit support window.
 

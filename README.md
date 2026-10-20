@@ -4,12 +4,13 @@
 
 <div align="center">
 
+[![PyPI](https://img.shields.io/pypi/v/sorethumb-ml?color=123A66)](https://pypi.org/project/sorethumb-ml/)
 [![CI](https://github.com/tarne75/sorethumb/actions/workflows/ci.yml/badge.svg)](https://github.com/tarne75/sorethumb/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/github/tarne75/sorethumb/graph/badge.svg?token=UJLJS8GHDV)](https://codecov.io/github/tarne75/sorethumb)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue?color=123A66)](https://github.com/tarne75/sorethumb)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?color=2F80ED)](https://github.com/tarne75/sorethumb/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?color=2F80ED)](https://github.com/tarne75/sorethumb/blob/v0.1.0/LICENSE)
 
 </div>
 
@@ -27,32 +28,33 @@ ranking first.** Every run ends with its top-ranked rows, flagged or not, and a 
 run says all this prominently.
 
 It runs on one machine (Linux, macOS or Windows) and is measured up to 1,000,000 rows
-([scale guide](https://github.com/tarne75/sorethumb/blob/main/docs/scale.md)).
+([scale guide](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/scale.md)).
 
-> **Status: pre-release (0.1.0).** The API and on-disk formats may still change
-> between minor versions, and the package is not yet published to PyPI — install
-> from source (see below). See [Limitations](https://github.com/tarne75/sorethumb/blob/main/docs/limitations.md) for what
+> **Status: alpha (0.1.0).** The API and on-disk formats may still change
+> between minor versions. See [Limitations](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/limitations.md) for what
 > it does not do.
 
 ---
 
 ## Installation
 
-Not yet on PyPI. Install from a clone:
-
 ```bash
-git clone https://github.com/tarne75/sorethumb
-cd sorethumb
-pip install .
+pip install sorethumb-ml
 ```
+
+That installs the `sorethumb` command and the `sorethumb_ml` Python package. (The
+`sorethumb` package on PyPI is unrelated.)
+
+To install from a clone instead (to run the benchmarks or contribute), see
+[CONTRIBUTING.md](https://github.com/tarne75/sorethumb/blob/v0.1.0/CONTRIBUTING.md).
 
 The core install is everything the quickstart below, the `sorethumb` command, and
 the CSV/HTML reports need. Optional extras add to it:
 
-- `pip install ".[explain]"` adds the SHAP package for TreeSHAP and KernelSHAP
+- `pip install "sorethumb-ml[explain]"` adds the SHAP package for TreeSHAP and KernelSHAP
   attributions. Without it those explanations fall back to a finite-difference
   method and say so with a warning.
-- `pip install ".[benchmark]"` adds what the benchmark harness needs (pandas,
+- `pip install "sorethumb-ml[benchmark]"` adds what the benchmark harness needs (pandas,
   pyarrow and Hugging Face `datasets`).
 
 ---
@@ -92,9 +94,9 @@ sorethumb run
 > **The workspace is executable, not just data.** Its `models/` directory holds
 > fitted estimators as `joblib`/pickle files, which run arbitrary code when loaded.
 > Only open a workspace you created or fully trust. See
-> [SECURITY.md](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md).
+> [SECURITY.md](https://github.com/tarne75/sorethumb/blob/v0.1.0/SECURITY.md).
 
-[Getting started](https://github.com/tarne75/sorethumb/blob/main/docs/getting-started.md) walks through the command line step by step, with the
+[Getting started](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/getting-started.md) walks through the command line step by step, with the
 output you will see and every file format it reads.
 
 ### From Python
@@ -155,7 +157,7 @@ lead the ranking, which is why the ranking, not the count, is the result to read
 ## What it does not do
 
 The short version; every point is expanded, with where it is measured, in
-[Limitations](https://github.com/tarne75/sorethumb/blob/main/docs/limitations.md).
+[Limitations](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/limitations.md).
 
 - **It ranks; it does not count.** The flagged number is a review shortlist, not an
   estimate of how many anomalies your data holds. By default its size is set by the
@@ -179,7 +181,7 @@ The short version; every point is expanded, with where it is measured, in
 
 Use it where a ranked shortlist for a person to review is the goal: on a
 single machine (Linux, macOS or Windows, see [Supported platforms](#supported-platforms)),
-over data that fits [the scale guide](https://github.com/tarne75/sorethumb/blob/main/docs/scale.md), with someone able to judge
+over data that fits [the scale guide](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/scale.md), with someone able to judge
 whether a flagged record is actually interesting.
 
 - **Do not use it as the only control where a missed anomaly is unacceptable.**
@@ -200,17 +202,17 @@ whether a flagged record is actually interesting.
   `backfill` and independent-run history as relative diagnostics only.
 - **Only reuse models from a workspace you made or fully trust.** A workspace is
   executable, not just data: do not accept a downloaded, shared or externally
-  supplied workspace. See [SECURITY.md](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md#trust-boundary-workspaces-are-executable-not-just-data).
+  supplied workspace. See [SECURITY.md](https://github.com/tarne75/sorethumb/blob/v0.1.0/SECURITY.md#trust-boundary-workspaces-are-executable-not-just-data).
 
 ### Which setup?
 
 | You want to | Do this |
 | --- | --- |
 | Look at a new dataset | Run it with the defaults and read the top-ranked rows; the flagged rows are where the detectors agree. |
-| Review a fixed number of rows | Set a review budget: `scoring.contamination` to that share, with the `composite-agreement` policy. See [Recommended setup if you have a review budget](https://github.com/tarne75/sorethumb/blob/main/docs/ensemble-policy.md#recommended-setup-if-you-have-a-review-budget). |
+| Review a fixed number of rows | Set a review budget: `scoring.contamination` to that share, with the `composite-agreement` policy. See [Recommended setup if you have a review budget](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/ensemble-policy.md#recommended-setup-if-you-have-a-review-budget). |
 | Know which policy works on your data | Run `sorethumb backtest` against labelled rows of your own data. |
-| Compare periods on one scale | Fit one accepted run, then `sorethumb score --from-run RUN_ID`, or set it as `history.anchor_run`. See [trends](https://github.com/tarne75/sorethumb/blob/main/docs/trends.md). |
-| Change how a column is treated | `sorethumb inspect` first, then the settings in [Adapting to your data](https://github.com/tarne75/sorethumb/blob/main/docs/adapting-to-your-data.md). |
+| Compare periods on one scale | Fit one accepted run, then `sorethumb score --from-run RUN_ID`, or set it as `history.anchor_run`. See [trends](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/trends.md). |
+| Change how a column is treated | `sorethumb inspect` first, then the settings in [Adapting to your data](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/adapting-to-your-data.md). |
 
 ---
 
@@ -224,20 +226,20 @@ whether a flagged record is actually interesting.
 
 Unit and contract tests run on every listed Python version; the integration suite runs
 on 3.12 in the release gate and on 3.11 and 3.14 daily.
-[Supported platforms](https://github.com/tarne75/sorethumb/blob/main/docs/platforms.md) has the detail, and what is not
+[Supported platforms](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/platforms.md) has the detail, and what is not
 supported (a workspace on a network share or synced folder, among others).
 
 ---
 
 ## Documentation
 
-The [documentation index](https://github.com/tarne75/sorethumb/blob/main/docs/index.md) is the map. The pages a new user needs first:
+The [documentation index](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/index.md) is the map. The pages a new user needs first:
 
-- [Getting started](https://github.com/tarne75/sorethumb/blob/main/docs/getting-started.md): the command line, step by step.
-- [Adapting to your data](https://github.com/tarne75/sorethumb/blob/main/docs/adapting-to-your-data.md): what to change when the defaults do not fit.
-- [Limitations](https://github.com/tarne75/sorethumb/blob/main/docs/limitations.md): the full list.
-- [Ensemble policy](https://github.com/tarne75/sorethumb/blob/main/docs/ensemble-policy.md): what decides which rows are flagged, and the evidence.
-- [Explanations](https://github.com/tarne75/sorethumb/blob/main/docs/explanations.md): what each reason means.
-- [Benchmark results](https://github.com/tarne75/sorethumb/blob/main/docs/benchmarks.md) and the [scale guide](https://github.com/tarne75/sorethumb/blob/main/docs/scale.md): how well it works, and what it costs.
-- [CLI reference](https://github.com/tarne75/sorethumb/blob/main/docs/cli_reference.md) and [configuration reference](https://github.com/tarne75/sorethumb/blob/main/docs/configuration.md).
-- [Security policy](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md) and [contributing](https://github.com/tarne75/sorethumb/blob/main/CONTRIBUTING.md).
+- [Getting started](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/getting-started.md): the command line, step by step.
+- [Adapting to your data](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/adapting-to-your-data.md): what to change when the defaults do not fit.
+- [Limitations](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/limitations.md): the full list.
+- [Ensemble policy](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/ensemble-policy.md): what decides which rows are flagged, and the evidence.
+- [Explanations](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/explanations.md): what each reason means.
+- [Benchmark results](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/benchmarks.md) and the [scale guide](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/scale.md): how well it works, and what it costs.
+- [CLI reference](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/cli_reference.md) and [configuration reference](https://github.com/tarne75/sorethumb/blob/v0.1.0/docs/configuration.md).
+- [Security policy](https://github.com/tarne75/sorethumb/blob/v0.1.0/SECURITY.md) and [contributing](https://github.com/tarne75/sorethumb/blob/v0.1.0/CONTRIBUTING.md).
