@@ -1,0 +1,33 @@
+# Pre-registered 2026-10-20, after the round-5 development run and before any round-5
+# confirmation run.
+candidate = "composite-agreement@1"
+baseline = "intersection@1"
+confirmation_round = 5
+contamination = "auto"
+hypothesis = """
+Repeats composite-agreement-auto-v1 (round 4) on the current code. Since round 4: a
+detector whose own boundary flagged more than half its fit rows no longer votes at
+"auto" (UninformativeBoundaryWarning; Isolation Forest's did on half the synthetic
+scenarios, which moves the composite's median-of-rates cut), 3-value columns are kept
+with a fixed categorical distance, KMeans fits are reproducible, and the budgets are v4.
+Does composite-agreement@1 at scoring.contamination = "auto" outperform intersection@1
+at "auto": flag F1 on point, clustered, masking and irrelevant_columns, judged against
+budgets v4?
+"""
+primary_metric = "flag_f1"
+scenarios = ["point", "clustered", "masking", "irrelevant_columns"]
+require = "all"
+alpha = 0.05
+stability_metric = "flag_jaccard_stability"
+stability_tolerance = 0.05
+n_resamples = 10000
+expected_outcome = """
+Does not outperform. On the development seeds under the guard the composite's flag F1
+was lower on point (-0.17) and clustered (-0.14), higher on masking (+0.28) and flat on
+irrelevant_columns (-0.02, not significant). It still flagged 1.5-3.1x the review budget
+on most scenarios and breached the false-positive budget on point, clustered,
+contextual, categorical_rare, text_timestamp, varying_density, all_categorical and
+swamping where intersection@1 met it; it also lost average precision on point and
+clustered and flag stability on all_categorical. Round 4's conclusion should hold: a
+composite policy belongs with a numeric review budget, not "auto".
+"""

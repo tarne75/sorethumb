@@ -49,9 +49,10 @@ CONFIRMATION_ROUNDS: dict[int, tuple[int, ...]] = {
     1: tuple(range(10_000, 10_020)),  # closed 2026-10-14: composite-agreement-v1, discrete-composite-v1
     2: tuple(range(20_000, 20_020)),  # closed 2026-10-14: composite-agreement-v2, discrete-budget-v1
     3: tuple(range(30_000, 30_020)),  # closed 2026-10-15: discrete-budget-v2
-    4: tuple(range(40_000, 40_020)),
+    4: tuple(range(40_000, 40_020)),  # closed 2026-10-20: composite-agreement-auto-v1
+    5: tuple(range(50_000, 50_020)),
 }
-OPEN_ROUND = 4
+OPEN_ROUND = 5
 STABILITY_REFITS = 3
 
 # Primary metrics: per-seed values where higher is better.
