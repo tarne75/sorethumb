@@ -402,8 +402,10 @@ densities — for example, transaction data where enterprise customers behave
 very differently from individual consumers, and you want to catch outliers
 *within* each population rather than just globally.
 
-**Drop `one_class_svm`** if your dataset is large (> 100k rows) and training
-time matters. Replace it with `ecod` for a faster, parameter-free alternative
+**Drop `one_class_svm`** if your dataset is large and run time matters. Its
+training is capped (25,000 rows, about 2 s), but scoring every row is the slowest
+of the three defaults: 67 s of a 6.9-minute run on 1,000,000 rows ([scale
+guide](scale.md)). Replace it with `ecod` for a faster, parameter-free alternative
 that still provides a different view from Isolation Forest.
 
 ```toml

@@ -168,7 +168,7 @@ sensitivity to a specific rare pattern is not guaranteed to be as strong as if i
 been fit on the complete group. Raising the relevant detector's `train_row_cap` in
 config (or setting it above the group's row count) removes the asymmetry entirely, at
 the runtime cost the cap exists to bound in the first place — see the
-[Scale guide](../README.md#scale-guide).
+[Scale guide](scale.md).
 
 ## KernelSHAP — Monte Carlo approximation
 

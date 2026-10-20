@@ -100,7 +100,7 @@ def collect_frame(lf: pl.LazyFrame, path: Path) -> pl.DataFrame:
         msg = (
             f"'{path}' is not valid UTF-8 ({exc}). sorethumb reads text files as UTF-8; "
             "a file saved by Excel as plain 'CSV' on Windows is usually cp1252. Re-save it as "
-            "'CSV UTF-8', convert it once (see the README's 'Supported file formats'), or set "
+            "'CSV UTF-8', convert it once (see 'Supported file formats' in docs/getting-started.md), or set "
             'source.read_options = { encoding = "utf8-lossy" } to read it with undecodable '
             "characters replaced."
         )

@@ -227,7 +227,13 @@ Versioning: [Semantic Versioning](https://semver.org/).
   ASCII-escaped, so it is lossless under any output encoding.
 - **Extras**: `explain` (shap, numba) for TreeSHAP and KernelSHAP attributions;
   `benchmark` (datasets, pandas, pyarrow) for the benchmark harnesses.
-- **Docs**: `docs/stability.md` sets out the pre-1.0 API and stability policy;
+- **Docs**: the README is an entry page: install, the quickstart, what it does not
+  do, whether it is the right tool and which setup to use, a short command-line
+  start and the platform table. The rest is behind `docs/index.md`:
+  `docs/getting-started.md` (the command line step by step, and file formats),
+  `docs/limitations.md`, `docs/scale.md` and `docs/platforms.md`, with the benchmark
+  headline summary in `docs/benchmarks.md`. `docs/stability.md` sets out the pre-1.0
+  API and stability policy;
   `docs/benchmarks.md` holds the benchmark results and their accuracy floors,
   and an ensemble policy matrix: every scenario under every policy, with
   precision, recall, ranking, stability and false-positive figures checked
@@ -357,11 +363,11 @@ Versioning: [Semantic Versioning](https://semver.org/).
   minutes and 4.9 GB peak memory on an 8-core, 16 GB laptop); larger datasets are
   untested. Explanations are most of the time and memory, and peak memory is set by
   loading, profiling and explanations, not by the projected feature matrix that
-  `run.max_memory_mb` checks. See the README's Scale guide.
+  `run.max_memory_mb` checks. See `docs/scale.md`.
 - **Platforms**: native Windows on ARM is untested (the core installs from
   Windows ARM64 wheels, but no CI job runs there, and the `benchmark` extra's
   pyarrow has no such wheel; an x64 Python under emulation is the tested
   route), and on any OS a workspace needs a local drive, not a network share or
-  synced folder. See the README's Supported platforms section.
+  synced folder. See `docs/platforms.md`.
 
 [Unreleased]: https://github.com/tarne75/sorethumb/commits/main

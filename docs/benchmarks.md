@@ -1,7 +1,44 @@
 # Benchmark results
 
-This page holds the full benchmark matrices. The [README](../README.md#benchmark-results-summary)
-carries a short summary of the same run.
+This page holds the full benchmark matrices, after a summary of the headline cells.
+
+## Headline results
+
+Two suites, both reproducible from a clone; the full matrices, method and every
+metric follow below. These are the headline cells from the committed run (regenerated 2026-10-19, 3 seeds,
+mean ± spread across seeds):
+
+| Setting | ROC-AUC | Average precision |
+| --- | --- | --- |
+| Synthetic, point anomalies, default pipeline | 0.9999 ± 0.0001 | 0.9970 ± 0.0059 |
+| Synthetic, clustered anomalies, default pipeline | 0.9998 ± 0.0003 | 0.9958 ± 0.0082 |
+| Synthetic, masking, default pipeline | 0.8784 ± 0.0340 | 0.4524 ± 0.1061 |
+| Synthetic, local anomalies, default pipeline | 0.9446 ± 0.0104 | 0.3823 ± 0.1325 |
+| Synthetic, varying density, default pipeline | 0.6894 ± 0.0320 | 0.0822 ± 0.0301 |
+| Synthetic, contextual anomalies, default pipeline | 0.6451 ± 0.0800 | 0.0863 ± 0.0080 |
+| Synthetic, rare categorical value, default pipeline | 0.8240 ± 0.0188 | 0.1088 ± 0.0437 |
+| Synthetic, off-hours text timestamps, default pipeline | 0.9117 ± 0.0442 | 0.3799 ± 0.0834 |
+| Synthetic, 20 irrelevant columns, default pipeline | 0.9430 ± 0.0153 | 0.6234 ± 0.0174 |
+| Synthetic, all-categorical combinations, default pipeline | 0.8744 ± 0.0486 | 0.1882 ± 0.0555 |
+| KDDCup99 (SA), bare Isolation Forest, 20,000-row sample | 0.9386 ± 0.0061 | 0.4443 ± 0.0143 |
+| Covtype, bare Isolation Forest, 20,000-row sample | 0.9837 ± 0.0030 | 0.3486 ± 0.0320 |
+
+Read the weak rows as seriously as the strong ones: the default ensemble is weak on
+contextual and varying-density anomalies, and average
+precision is the more telling column when anomalies are rare. These two columns
+measure the ranking, which is the same whatever `scoring.contamination` is. The matrices
+below also show the bare-detector baselines and the flag-level precision and recall.
+Those were measured with each detector at the scenario's review budget, not at the
+shipped `"auto"`.
+
+The page also has the ensemble-policy matrix: every scenario under every built-in
+policy over 10 seeds, with flag precision/recall, false-positive rate, over-flag
+ratio and refit stability checked against versioned budgets. Every policy there runs
+at the scenario's review budget. The default policy (`intersection@1`) misses some of
+those budgets by design; each accepted miss is
+listed with its reason in [`tests/benchmark/budgets.toml`](../tests/benchmark/budgets.toml)
+(rationale: [`docs/ensemble-policy.md`](ensemble-policy.md)).
+
 
 One maintainer script regenerates both tables below and, when you point it at
 this file, injects them (from a clone, see [Installation](../README.md#installation)).
