@@ -70,7 +70,7 @@ def _make_config(**feature_kwargs) -> Config:
 
 def _make_cat_df() -> pl.DataFrame:
     """DataFrame with a mix of categorical, numeric, boolean, and temporal columns."""
-    import datetime
+    import datetime as dt
 
     n = 100
     return pl.DataFrame(
@@ -79,7 +79,7 @@ def _make_cat_df() -> pl.DataFrame:
             "cat_high": [f"val_{i}" for i in range(n)],  # 100 categories → frequency
             "num": [float(i) for i in range(n)],
             "flag": [i % 2 == 0 for i in range(n)],
-            "ts": [datetime.datetime(2024, 1, 1) + datetime.timedelta(hours=i) for i in range(n)],
+            "ts": [dt.datetime(2024, 1, 1) + dt.timedelta(hours=i) for i in range(n)],
             "with_nulls": [float(i) if i % 5 != 0 else None for i in range(n)],
         }
     )
@@ -180,9 +180,9 @@ def test_missing_indicator_expr():
 
 
 def test_time_derivative_exprs_datetime():
-    import datetime
+    import datetime as dt
 
-    df = pl.DataFrame({"ts": [datetime.datetime(2024, 3, 15, 10, 0, 0)]})
+    df = pl.DataFrame({"ts": [dt.datetime(2024, 3, 15, 10, 0, 0)]})
     exprs = _time_derivative_exprs(
         "ts", ["hour", "day", "month", "dayofweek", "year", "quarter"], "Datetime[μs]"
     )
@@ -194,9 +194,9 @@ def test_time_derivative_exprs_datetime():
 
 
 def test_time_derivative_exprs_date_skips_hour():
-    import datetime
+    import datetime as dt
 
-    df = pl.DataFrame({"d": [datetime.date(2024, 6, 1)]})
+    df = pl.DataFrame({"d": [dt.date(2024, 6, 1)]})
     exprs = _time_derivative_exprs("d", ["hour", "day", "month"], "Date")
     names = [e.meta.output_name() for e in exprs]
     assert "d__hour" not in names
@@ -247,9 +247,9 @@ def test_valid_time_derivatives_for_dtype():
 
 def test_time_derivative_exprs_time_dtype_only_hour():
     """Time has no calendar fields; only 'hour' is a legal accessor."""
-    import datetime
+    import datetime as dt
 
-    df = pl.DataFrame({"t": [datetime.time(14, 30, 0)]})
+    df = pl.DataFrame({"t": [dt.time(14, 30, 0)]})
     exprs = _time_derivative_exprs("t", ["hour", "day", "month", "year"], "Time")
     names = [e.meta.output_name() for e in exprs]
     assert names == ["t__hour"]
@@ -259,9 +259,9 @@ def test_time_derivative_exprs_time_dtype_only_hour():
 
 def test_time_derivative_exprs_duration_dtype_produces_nothing():
     """Duration supports none of the configured calendar derivatives."""
-    import datetime
+    import datetime as dt
 
-    df = pl.DataFrame({"dur": [datetime.timedelta(seconds=3600)]})
+    df = pl.DataFrame({"dur": [dt.timedelta(seconds=3600)]})
     exprs = _time_derivative_exprs("dur", ["hour", "day", "month", "year"], "Duration[μs]")
     assert exprs == []
     # Must not raise selecting zero expressions either.
@@ -272,9 +272,9 @@ def test_derive_time_full_pipeline_time_dtype():
     """A Time-typed sole temporal column must not crash fit_features and
     must only emit its one legal derivative (hour).
     """
-    import datetime
+    import datetime as dt
 
-    df = pl.DataFrame({"t": [datetime.time(h, 0, 0) for h in range(24)] * 3})
+    df = pl.DataFrame({"t": [dt.time(h, 0, 0) for h in range(24)] * 3})
     config = _make_config()
     plan = build_feature_plan(df, config)
     space = fit_features(df, plan, config)
@@ -286,9 +286,9 @@ def test_derive_time_full_pipeline_duration_dtype():
     """A Duration-typed sole temporal column has no legal calendar
     derivatives at all; the column contributes nothing but its indicator.
     """
-    import datetime
+    import datetime as dt
 
-    values = [datetime.timedelta(seconds=i * 100) for i in range(29)] + [None]
+    values = [dt.timedelta(seconds=i * 100) for i in range(29)] + [None]
     df = pl.DataFrame({"dur": values})
     config = _make_config()
     plan = build_feature_plan(df, config)
