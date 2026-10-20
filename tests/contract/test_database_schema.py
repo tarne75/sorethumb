@@ -419,8 +419,7 @@ def test_execute_ddl_rejects_alter_table_identifier_starting_with_digit(tmp_path
     validate_identifier's stricter ^[A-Za-z_][A-Za-z0-9_]*$ does not --
     exercising that extra check requires a statement bypassing the regex
     only at the character-class boundary, not a full injection payload."""
-    store = Store(tmp_path / "test.db")
-    with pytest.raises(StoreError, match="Invalid SQL table name"):
+    with Store(tmp_path / "test.db") as store, pytest.raises(StoreError, match="Invalid SQL table name"):
         store._execute_ddl("ALTER TABLE 1bad ADD COLUMN x TEXT")
 
 

@@ -11,8 +11,10 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - **Names**: install the `sorethumb-ml` distribution (`pip install sorethumb-ml`;
   `sorethumb` on PyPI is an unrelated package), import `sorethumb_ml`, and run
   the `sorethumb` command. Third-party detectors register through the
-  `sorethumb_ml.detectors` entry-point group. Python 3.11–3.13 on Linux,
-  macOS and Windows (x64); the package ships `py.typed`.
+  `sorethumb_ml.detectors` entry-point group. Python 3.11–3.14 on Linux,
+  macOS and Windows (x64), each tested in CI; `requires-python` is `>=3.11,<3.15`,
+  so pip will not install on a CPython that has not been tested. The package ships
+  `py.typed`.
 - **Pipeline**: profile every column, encode, impute and derive features, fit
   an ensemble of detectors, percentile-calibrate their scores, combine them into
   a ranking and a flag decision, and explain each flagged row in terms of the

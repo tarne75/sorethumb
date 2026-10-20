@@ -33,5 +33,6 @@ def test_run_uses_only_the_included_columns(tmp_path: Path) -> None:
 
     result = run_detection(cfg, no_report=True)
     assert result.groups[0].status == "success"
-    plan = load_plan(Workspace.open(tmp_path / "ws"), result.run_id)
+    with Workspace.open(tmp_path / "ws") as ws:
+        plan = load_plan(ws, result.run_id)
     assert plan.output_features == ["amount"]

@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/tarne75/sorethumb/actions/workflows/ci.yml/badge.svg)](https://github.com/tarne75/sorethumb/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/github/tarne75/sorethumb/graph/badge.svg?token=UJLJS8GHDV)](https://codecov.io/github/tarne75/sorethumb)
-[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue?color=123A66)](https://github.com/tarne75/sorethumb)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue?color=123A66)](https://github.com/tarne75/sorethumb)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?color=2F80ED)](https://github.com/tarne75/sorethumb/blob/main/LICENSE)
@@ -214,13 +214,16 @@ whether a flagged record is actually interesting.
 
 | OS | Python | Tested in CI on every change |
 | --- | --- | --- |
-| Linux (x86-64) | 3.11–3.13 | unit, contract, integration, property, packaging (`ubuntu-latest`) |
-| macOS (Apple silicon) | 3.11–3.13 | unit, contract, integration (`macos-latest`) |
-| Windows 10/11 (x64) | 3.11–3.13 | unit, contract, integration, and installing the built wheel and sdist and running them from PowerShell (`windows-latest`) |
+| Linux (x86-64) | 3.11–3.14 | unit, contract, integration, property, packaging (`ubuntu-latest`) |
+| macOS (Apple silicon) | 3.11–3.14 | unit, contract, integration (`macos-latest`) |
+| Windows 10/11 (x64) | 3.11–3.14 | unit, contract, integration, and installing the built wheel and sdist and running them from PowerShell (`windows-latest`) |
 
-The integration suite exercises a real workspace, SQLite, the CLI as a
-subprocess and report rendering on all three
-(`.github/workflows/release-validation.yml`). On Windows, the CLI works the
+Unit and contract tests run on every listed Python version on all three. The
+integration suite, which exercises a real workspace, SQLite, the CLI as a subprocess
+and report rendering, runs on Python 3.12 on all three
+(`.github/workflows/release-validation.yml`), and the daily newest-dependencies job runs
+it on 3.11 (Linux) and 3.14 (all three). `requires-python` stops below 3.15: a runtime
+is added when it is tested, not before. On Windows, the CLI works the
 same in PowerShell, Windows PowerShell 5.1 and cmd.exe.
 
 Not supported:

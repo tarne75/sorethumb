@@ -13,7 +13,7 @@ description = "Unsupervised anomaly detection for tabular data"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.15"
 authors = [{ name = "Tarne Westcott", email = "tarne.westcott@gmail.com" }]
 keywords = [
     "anomaly-detection",
@@ -39,6 +39,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: Information Analysis",
