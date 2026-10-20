@@ -18,6 +18,13 @@ name: Release validation
 
 on:
   workflow_call:
+    inputs:
+      version:
+        description: >-
+          Build and install this version instead of pyproject.toml's: a TestPyPI
+          rehearsal's pre-release, e.g. 0.1.0rc1. Empty (the default) for a release.
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -228,6 +235,13 @@ jobs:
         run: uv lock --check
       - name: Sync dev dependencies (for the dist-artifact pytest checks below)
         run: uv sync --all-extras --frozen
+      - name: Set the rehearsal version
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python scripts/rehearsal_version.py "$VERSION"
+          uv version "$VERSION" --no-sync
       - name: Build sdist and wheel
         run: uv build
       - name: Check distribution metadata
@@ -370,6 +384,11 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ matrix.python }}
+      - name: Set the rehearsal version
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+        run: python scripts/rehearsal_version.py $env:VERSION --apply
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: dist

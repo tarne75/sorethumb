@@ -167,7 +167,7 @@ If a released version needs to be pulled for a security issue, it is yanked
 on PyPI (never deleted — PyPI doesn't allow that), which stops new,
 unpinned installs from picking it up while leaving existing pinned installs
 unaffected. See
-[docs/releasing.md](https://github.com/tarne75/sorethumb/blob/main/docs/releasing.md#rolling-back-a-bad-release)
+[docs/releasing.md](https://github.com/tarne75/sorethumb/blob/main/docs/releasing.md#roll-back)
 for the exact procedure.
 
 ## Reporting a Vulnerability
