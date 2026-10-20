@@ -59,6 +59,46 @@ the CSV/HTML reports need. Optional extras add to it:
 
 ## 60-second quickstart
 
+Two ways in: the `sorethumb` command on a file you already have, or the Python API.
+Both work with the core install alone.
+
+### From the command line
+
+No config file is needed. Pass a data file and sorethumb runs with its defaults,
+writing everything under one `./sorethumb-workspace/` directory in the directory you
+run it from:
+
+```bash
+cd /path/to/my-analysis
+sorethumb run /path/to/data.csv
+sorethumb anomalies --top 10      # the flagged rows, with reasons
+sorethumb anomalies --ranked      # the top of the ranking, flagged or not
+sorethumb report                  # the HTML report
+```
+
+For full control, `sorethumb init` writes a commented `sorethumb.toml`; set its
+source and check the column plan before running:
+
+```toml
+[source]
+uri = "/absolute/path/to/your/data.csv"    # also .parquet, .json, and http(s):// URLs
+```
+
+```bash
+sorethumb inspect                 # how each column will be treated; no models trained
+sorethumb run
+```
+
+> **The workspace is executable, not just data.** Its `models/` directory holds
+> fitted estimators as `joblib`/pickle files, which run arbitrary code when loaded.
+> Only open a workspace you created or fully trust. See
+> [SECURITY.md](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md).
+
+[Getting started](https://github.com/tarne75/sorethumb/blob/main/docs/getting-started.md) walks through the command line step by step, with the
+output you will see and every file format it reads.
+
+### From Python
+
 No network access and nothing beyond sorethumb's own core dependencies — the
 dataset is a small synthetic table generated in-process, with 30 of its 2,000
 rows nudged far outside the normal range so there's something for the
@@ -171,43 +211,6 @@ whether a flagged record is actually interesting.
 | Know which policy works on your data | Run `sorethumb backtest` against labelled rows of your own data. |
 | Compare periods on one scale | Fit one accepted run, then `sorethumb score --from-run RUN_ID`, or set it as `history.anchor_run`. See [trends](https://github.com/tarne75/sorethumb/blob/main/docs/trends.md). |
 | Change how a column is treated | `sorethumb inspect` first, then the settings in [Adapting to your data](https://github.com/tarne75/sorethumb/blob/main/docs/adapting-to-your-data.md). |
-
----
-
-## From the command line
-
-No config file is needed. Pass a data file and sorethumb runs with its defaults,
-writing everything under one `./sorethumb-workspace/` directory in the directory you
-run it from:
-
-```bash
-cd /path/to/my-analysis
-sorethumb run /path/to/data.csv
-sorethumb anomalies --top 10      # the flagged rows, with reasons
-sorethumb anomalies --ranked      # the top of the ranking, flagged or not
-sorethumb report                  # the HTML report
-```
-
-For full control, `sorethumb init` writes a commented `sorethumb.toml`; set its
-source and check the column plan before running:
-
-```toml
-[source]
-uri = "/absolute/path/to/your/data.csv"    # also .parquet, .json, and http(s):// URLs
-```
-
-```bash
-sorethumb inspect                 # how each column will be treated; no models trained
-sorethumb run
-```
-
-> **The workspace is executable, not just data.** Its `models/` directory holds
-> fitted estimators as `joblib`/pickle files, which run arbitrary code when loaded.
-> Only open a workspace you created or fully trust. See
-> [SECURITY.md](https://github.com/tarne75/sorethumb/blob/main/SECURITY.md).
-
-[Getting started](https://github.com/tarne75/sorethumb/blob/main/docs/getting-started.md) walks through both, with the output you will
-see and every file format it reads.
 
 ---
 

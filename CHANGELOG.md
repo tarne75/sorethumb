@@ -227,9 +227,9 @@ Versioning: [Semantic Versioning](https://semver.org/).
   ASCII-escaped, so it is lossless under any output encoding.
 - **Extras**: `explain` (shap, numba) for TreeSHAP and KernelSHAP attributions;
   `benchmark` (datasets, pandas, pyarrow) for the benchmark harnesses.
-- **Docs**: the README is an entry page: install, the quickstart, what it does not
-  do, whether it is the right tool and which setup to use, a short command-line
-  start and the platform table. The rest is behind `docs/index.md`:
+- **Docs**: the README is an entry page: install, the quickstart (the command line
+  first, then Python), what it does not do, whether it is the right tool and which
+  setup to use, and the platform table. The rest is behind `docs/index.md`:
   `docs/getting-started.md` (the command line step by step, and file formats),
   `docs/limitations.md`, `docs/scale.md` and `docs/platforms.md`, with the benchmark
   headline summary in `docs/benchmarks.md`. `docs/stability.md` sets out the pre-1.0
