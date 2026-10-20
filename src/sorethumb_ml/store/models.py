@@ -171,8 +171,13 @@ def save_model(
     feature_schema_hash: str,
     train_row_count: int,
     seed: int,
+    boundary_flag_rate: float | None = None,
 ) -> str:
     """Persist a fitted detector and its calibrator to the workspace.
+
+    *boundary_flag_rate* is the share of the fit rows the detector's own boundary
+    flagged; a score-forward run reads it back to tell whether that boundary can vote
+    (``scoring.combine.uninformative_boundaries``).
 
     Returns the model_id (a digest-based string).
     """
@@ -207,6 +212,7 @@ def save_model(
         "train_row_count": train_row_count,
         "params": params,
         "seed": seed,
+        "boundary_flag_rate": boundary_flag_rate,
         "library_versions": _library_versions(),
         "file_digests": {"estimator": estimator_digest, "calibrator": calibrator_digest},
     }
@@ -403,6 +409,7 @@ def score_with_existing(
     scores: dict[str, np.ndarray] = {}
     calibrated: dict[str, np.ndarray] = {}
     natural_flags: dict[str, np.ndarray] = {}
+    fit_boundary_rates: dict[str, float] = {}
     detectors: dict[str, Any] = {}
     missing: list[str] = []
     drifted = False
@@ -445,11 +452,15 @@ def score_with_existing(
         calibrated[det_name] = calibrator.transform(raw_scores)
         natural_flags[det_name] = flags
         detectors[det_name] = detector
+        if manifest.get("boundary_flag_rate") is not None:
+            fit_boundary_rates[det_name] = float(manifest["boundary_flag_rate"])
 
     return {
         "scores": scores,
         "calibrated": calibrated,
         "natural_flags": natural_flags,
+        # Fit-time share of rows each boundary flagged (absent from older manifests).
+        "fit_boundary_rates": fit_boundary_rates,
         "detectors": detectors,
         "missing": missing,
         "drifted": drifted,

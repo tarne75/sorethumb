@@ -77,7 +77,7 @@ from sorethumb_ml.profiling.temporal import (
 )
 from sorethumb_ml.report.html import GroupSection, RunMeta, render_report
 from sorethumb_ml.scoring.calibrate import Calibrator
-from sorethumb_ml.scoring.combine import ScoreEnsemble, descending_order
+from sorethumb_ml.scoring.combine import ScoreEnsemble, descending_order, uninformative_boundaries
 from sorethumb_ml.scoring.policies import (
     DEFAULT_POLICY_ID,
     EVIDENCE_DECISION_RULE,
@@ -419,6 +419,10 @@ class GroupSummary:
     # composite_score, flagged, and the row's source values under "values". The
     # ranking a reader can use when the flag policy flagged few rows or none.
     top_ranked: list[dict[str, Any]] = field(default_factory=list)
+    # Detectors left out of the flag vote at contamination="auto" because their own
+    # boundary flagged more than half the rows they were fitted on
+    # (UninformativeBoundaryWarning). Their scores still count in the ranking.
+    abstaining_detectors: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -1638,6 +1642,7 @@ def _group_summary(
     detection_digest: str | None = None,
     warning_records: list[dict[str, Any]] | None = None,
     top_ranked: list[dict[str, Any]] | None = None,
+    abstaining_detectors: list[str] | None = None,
 ) -> GroupSummary:
     return GroupSummary(
         group_key=group_key,
@@ -1661,6 +1666,7 @@ def _group_summary(
         detection_digest=detection_digest,
         warning_records=warning_records or [],
         top_ranked=top_ranked or [],
+        abstaining_detectors=abstaining_detectors or [],
     )
 
 
@@ -2004,6 +2010,7 @@ def _run_group(
             feature_schema_hash=group_space.feature_schema_hash,
             train_row_count=train_rows,
             seed=config.run.seed,
+            boundary_flag_rate=float(np.asarray(flags, dtype=bool).mean()),
         )
 
     if not raw_scores_map:
@@ -2012,6 +2019,8 @@ def _run_group(
         )
 
     calibrated_map = {d: calibrators[d].transform(raw_scores_map[d]) for d in raw_scores_map}
+    # Fitted on this group's rows: each boundary's share of them decides whether it votes.
+    fit_rates = {d: float(np.asarray(f, dtype=bool).mean()) for d, f in natural_flags_map.items()}
     return _finalize_group(
         ws=ws,
         run_id=run_id,
@@ -2029,6 +2038,7 @@ def _run_group(
         natural_flags_map=natural_flags_map,
         det_instances=det_instances,
         drifted=False,
+        uninformative=uninformative_boundaries(fit_rates),
     )
 
 
@@ -2108,6 +2118,7 @@ def _score_forward_group(
         natural_flags_map=res["natural_flags"],
         det_instances=res["detectors"],
         drifted=bool(res["drifted"]),
+        uninformative=uninformative_boundaries(res["fit_boundary_rates"]),
         source_run_id=source_run_id,
     )
 
@@ -2157,6 +2168,7 @@ def _finalize_group(
     det_instances: dict[str, Any],
     drifted: bool,
     source_run_id: str | None = None,
+    uninformative: dict[str, float] | None = None,
 ) -> GroupSummary:
     """Ensemble-combine, threshold, explain, and write one group's results.
 
@@ -2172,7 +2184,9 @@ def _finalize_group(
         contamination=config.scoring.contamination,
         manual_weights=config.scoring.weights or None,
     )
-    result_dict = ensemble.combine(calibrated_map, natural_flags_map, source_row=group_space.row_ids)
+    result_dict = ensemble.combine(
+        calibrated_map, natural_flags_map, source_row=group_space.row_ids, uninformative=uninformative
+    )
     composite_score: np.ndarray = result_dict["combined_score"]
     anomaly_flag: np.ndarray = result_dict["anomaly_flag"]
     weights_used: dict[str, float] = result_dict["weights"]
@@ -2294,6 +2308,7 @@ def _finalize_group(
         warning_records=outcome.warnings,
         detection_digest=detection_digest,
         top_ranked=_top_ranked_records(preview),
+        abstaining_detectors=list(result_dict["abstaining_members"]),
     )
 
 

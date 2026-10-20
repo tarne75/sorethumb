@@ -432,6 +432,15 @@ which is why confirmation is a separate step:
   (-0.15), higher on masking and irrelevant columns. The composite flags several times
   the review budget and breaches the false-positive budget across the suite, because its
   `"auto"` threshold is the median of the detectors' own flag rates.
+- **Measured before the uninformative-boundary guard** (2026-10-19; see
+  [approximations.md](approximations.md#auto-contamination--each-detectors-own-boundary)).
+  At `"auto"` a detector whose own boundary flagged more than half its fit rows no
+  longer votes. On the scenarios where Isolation Forest's did (`local`, `contextual`,
+  `varying_density`, `categorical_rare`, `text_timestamp`), `composite-agreement@1` at
+  `"auto"` now flags about 40% fewer rows (3 seeds; `local` 33 to 19 rows,
+  false-positive rate 0.097 to 0.051, flag recall 0.75 to 0.52), and `intersection@1`
+  at `"auto"` is effectively unchanged. This round has not been re-run under the guard;
+  its conclusion, that a composite policy belongs with a numeric review budget, stands.
 
 ### Real data
 

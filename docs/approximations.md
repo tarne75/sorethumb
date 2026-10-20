@@ -302,6 +302,23 @@ policy:
 - **`composite`:** the combined score is cut at a rate taken as the median of the
   detectors' natural flag rates.
 
+**A boundary that flags most rows does not vote.** When a detector's own boundary
+flagged more than half the rows it was fitted on, it does not separate unusual rows
+from the rest, so at `"auto"` it is left out of the flag vote (the intersection or
+union, and the composite's median), with an `UninformativeBoundaryWarning`
+(`scoring.boundary_uninformative`). Its scores still count in the ranking; a numeric
+contamination does not use the boundaries at all. It happens on data with few
+distinct values: on a table of two low-cardinality categoricals Isolation Forest's
+offset flagged every row (every duplicated row isolates in a few splits), and One-Class
+SVM left every row on its boundary, within ±0.0006 of zero, where the side a row falls
+on is floating-point noise (that table flagged 0 rows on macOS and 26 on Linux before
+the guard). Isolation Forest's offset also flagged 55–76% of the rows on half the
+synthetic benchmark scenarios (588-row fits carrying a 3-level noise column), and
+5–16% on the real samples checked (KDD Cup 1999, electricity, weather, NATOPS). The
+verdict is taken on the fit rows and saved with the model, so `score --from-run`
+applies the same one: on new data a majority outside the boundary is drift, which the
+boundary should report.
+
 None of these estimates the true anomaly rate, and the per-detector rates routinely
 disagree by 2–3×. The run summary and `sorethumb run --json` report each detector's
 realised rate so the flag count is read as a shortlist size, not a measurement.

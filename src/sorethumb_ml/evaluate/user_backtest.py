@@ -216,7 +216,7 @@ def _fit_frame(
     from sorethumb_ml.detectors._protocol import score_and_flag  # noqa: PLC0415
     from sorethumb_ml.features.build import apply_feature_plan, fit_features  # noqa: PLC0415
     from sorethumb_ml.profiling.plan import build_feature_plan  # noqa: PLC0415
-    from sorethumb_ml.scoring.combine import ScoreEnsemble  # noqa: PLC0415
+    from sorethumb_ml.scoring.combine import ScoreEnsemble, uninformative_boundaries  # noqa: PLC0415
 
     plan = build_feature_plan(df, config, parsed_temporal)
     fit_features(df, plan, config)
@@ -244,8 +244,10 @@ def _fit_frame(
             space = apply_feature_plan(target, plan)
         calibrated: dict[str, np.ndarray] = {}
         natural: dict[str, np.ndarray] = {}
+        fit_rates: dict[str, float] = {}
         for name in enabled:
             det, raw, nat, cal, _ = _fit_detector(name, fit_space.matrix, config)
+            fit_rates[name] = float(np.asarray(nat, dtype=bool).mean())  # on the fit rows, as a run
             if score_df is not None:
                 raw, nat = score_and_flag(det, space.matrix)
             calibrated[name] = cal.transform(raw)
@@ -259,7 +261,12 @@ def _fit_frame(
                 contamination=config.scoring.contamination,
                 manual_weights=config.scoring.weights or None,
             )
-            out = ensemble.combine(calibrated, natural, source_row=space.row_ids)
+            out = ensemble.combine(
+                calibrated,
+                natural,
+                source_row=space.row_ids,
+                uninformative=uninformative_boundaries(fit_rates),
+            )
             scores[policy.id].append(np.asarray(out["combined_score"], dtype=np.float64))
             flags[policy.id].append(np.asarray(out["anomaly_flag"], dtype=bool))
 

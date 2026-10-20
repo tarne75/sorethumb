@@ -307,6 +307,22 @@ class ZeroAnomalyWarning(SorethumbWarning):
     code: ClassVar[str] = "scoring.zero_flagged"
 
 
+class UninformativeBoundaryWarning(SorethumbWarning):
+    """A detector's own boundary flagged more than half the rows it was fitted on.
+
+    Such a boundary does not separate unusual rows from the rest. It happens on data
+    with few distinct values: Isolation Forest scores every duplicated row as
+    short-path, so all of them fall past its offset, and One-Class SVM leaves every
+    row on its boundary, where the side a row falls on is floating-point noise. At
+    ``scoring.contamination = "auto"`` the detector then does not vote on which rows
+    are flagged (``intersection``/``union``, and a composite's median-of-rates cut);
+    its scores still count in the ranking. A numeric contamination does not use the
+    boundary, so it is unaffected.
+    """
+
+    code: ClassVar[str] = "scoring.boundary_uninformative"
+
+
 class ReportGenerationWarning(SorethumbWarning):
     """Report rendering failed after detection/scoring already succeeded.
 

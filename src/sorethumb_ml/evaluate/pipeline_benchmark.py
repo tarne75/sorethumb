@@ -372,6 +372,33 @@ def _build_pipeline_config(ablation: AblationSpec, seed: int) -> Any:
 _STABILITY_SUBSAMPLE = 0.8
 
 
+def _fit_bench_detectors(
+    matrix: np.ndarray, names: tuple[str, ...] | list[str], seed: int
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, float]]:
+    """Fit and self-calibrate each detector on the training matrix, as a run does.
+
+    Returns ``(detectors, calibrators, fit_rates)``; ``fit_rates`` is each boundary's
+    share of the training rows, which decides whether it votes at ``"auto"``.
+    """
+    from sorethumb_ml.detectors import registry  # noqa: PLC0415
+    from sorethumb_ml.scoring.calibrate import Calibrator  # noqa: PLC0415
+
+    X = matrix.astype(np.float64)
+    detectors: dict[str, Any] = {}
+    calibrators: dict[str, Any] = {}
+    fit_rates: dict[str, float] = {}
+    for name in names:
+        det = registry[name]()
+        det.fit(X, seed=seed)
+        raw, train_flags = score_and_flag(det, X)
+        fit_rates[name] = float(np.asarray(train_flags, dtype=bool).mean())
+        cal = Calibrator()
+        cal.fit(raw)
+        calibrators[name] = cal
+        detectors[name] = det
+    return detectors, calibrators, fit_rates
+
+
 def _fit_and_score(
     train_df: pl.DataFrame,
     holdout_df: pl.DataFrame,
@@ -388,13 +415,15 @@ def _fit_and_score(
     afterwards -- without that, a scenario with a date column would score
     against the wrong labels.
     """
-    from sorethumb_ml.detectors import registry  # noqa: PLC0415
     from sorethumb_ml.evaluate.candidates import candidate_by_id  # noqa: PLC0415
     from sorethumb_ml.features.build import apply_feature_plan, fit_features  # noqa: PLC0415
     from sorethumb_ml.io.fingerprint import INTERNAL_ROW_ID_COLUMN  # noqa: PLC0415
     from sorethumb_ml.profiling.plan import build_feature_plan  # noqa: PLC0415
-    from sorethumb_ml.scoring.calibrate import Calibrator  # noqa: PLC0415
-    from sorethumb_ml.scoring.combine import ScoreEnsemble, _exact_k_flags  # noqa: PLC0415
+    from sorethumb_ml.scoring.combine import (  # noqa: PLC0415
+        ScoreEnsemble,
+        _exact_k_flags,
+        uninformative_boundaries,
+    )
 
     train_df = train_df.with_columns(
         pl.Series(INTERNAL_ROW_ID_COLUMN, np.arange(len(train_df), dtype=np.int64))
@@ -424,16 +453,9 @@ def _fit_and_score(
 
     t0 = time.perf_counter()
     train_space = fit_features(train_df, plan, cfg)
-    calibrators: dict[str, Calibrator] = {}
-    detectors: dict[str, Any] = {}
-    for name in ablation.detector_names:
-        det = registry[name]()
-        det.fit(train_space.matrix.astype(np.float64), seed=seed)
-        raw, _ = score_and_flag(det, train_space.matrix.astype(np.float64))
-        cal = Calibrator()
-        cal.fit(raw)
-        calibrators[name] = cal
-        detectors[name] = det
+    detectors, calibrators, fit_rates = _fit_bench_detectors(
+        train_space.matrix, ablation.detector_names, seed
+    )
     fit_seconds = time.perf_counter() - t0
 
     t0 = time.perf_counter()
@@ -450,7 +472,9 @@ def _fit_and_score(
         weighting=weighting,
         contamination="auto" if ablation.contamination_auto else review_budget,
     )
-    combined = ensemble.combine(calibrated_holdout, natural_flags_holdout)
+    combined = ensemble.combine(
+        calibrated_holdout, natural_flags_holdout, uninformative=uninformative_boundaries(fit_rates)
+    )
     if flag_rule == "top_budget":
         combined["anomaly_flag"] = _exact_k_flags(np.asarray(combined["combined_score"]), review_budget)
     order = np.empty(len(holdout_df), dtype=np.int64)

@@ -82,8 +82,10 @@ def _capture_combine(monkeypatch: pytest.MonkeyPatch) -> dict[str, np.ndarray]:
     captured: dict[str, np.ndarray] = {}
     real = ScoreEnsemble.combine
 
-    def spy(self: ScoreEnsemble, scores: dict, flags: dict, source_row: np.ndarray | None = None) -> dict:
-        out = real(self, scores, flags, source_row=source_row)
+    def spy(
+        self: ScoreEnsemble, scores: dict, flags: dict, source_row: np.ndarray | None = None, **kwargs: object
+    ) -> dict:
+        out = real(self, scores, flags, source_row=source_row, **kwargs)
         assert source_row is not None, "the pipeline must pass the source row ids for tie-breaking"
         captured.update(
             source_row=np.asarray(source_row), score=out["combined_score"], flag=out["anomaly_flag"]

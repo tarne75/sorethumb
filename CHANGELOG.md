@@ -134,6 +134,19 @@ Versioning: [Semantic Versioning](https://semver.org/).
   success) and every `--json` command emits one document per outcome; see
   `docs/cli_reference.md`. A group is selected by its label (`run --only-group`,
   `show --group`, `history --group`; the last two also take its key).
+- **Uninformative detector boundaries**: at `scoring.contamination = "auto"`, a
+  detector whose own boundary flagged more than half the rows it was fitted on is left
+  out of the flag vote (the intersection or union, and the composite's
+  median-of-rates cut), with an `UninformativeBoundaryWarning`
+  (`scoring.boundary_uninformative`); its scores still rank. On a table of
+  low-cardinality categoricals, Isolation Forest's boundary flagged every row (so
+  Isolation Forest alone flagged every row, and `union` did too) and One-Class SVM's
+  sat on every row, where the side a row fell on was floating-point noise and differed
+  by platform. The fit-time rate is saved in each model's manifest
+  (`boundary_flag_rate`), so `score --from-run` applies the same verdict; models
+  saved before have none and keep their vote. `GroupSummary.abstaining_detectors` and
+  `groups[].abstaining_detectors` in `--json` name them. A numeric contamination is
+  unaffected.
 - **Reading a run: the ranking first**: every `run` and `score` summary ends with
   the top-ranked rows, flagged or not, and each group keeps its top 20 by combined
   score in `ranked.parquet` (`GroupSummary.top_ranked`, `groups[].top_ranked` in
