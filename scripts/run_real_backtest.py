@@ -68,10 +68,17 @@ class RealDataset:
     granularity: str | None = None
 
 
+KDD_SA_SEED = 0  # fixes which abnormal rows sklearn's SA subset keeps
+
+
 def _load_kdd(cache: Path) -> pl.DataFrame:
     from sklearn import datasets  # noqa: PLC0415
 
-    bunch = datasets.fetch_kddcup99(subset="SA", percent10=True, as_frame=True, data_home=str(cache))
+    # subset="SA" draws its abnormal rows at random: without a fixed random_state every
+    # load is a different dataset, so no KDD result could be reproduced.
+    bunch = datasets.fetch_kddcup99(
+        subset="SA", percent10=True, as_frame=True, data_home=str(cache), random_state=KDD_SA_SEED
+    )
     frame = bunch.frame
     cols: dict[str, Any] = {}
     for name in frame.columns:
@@ -134,7 +141,7 @@ DATASETS: dict[str, RealDataset] = {
             id="kddcup99_sa",
             description="KDD Cup 1999 network intrusion, SA subset of the 10% sample (~3.4% attacks).",
             licence="Freely available for research (UCI ML Repository).",
-            provenance="sklearn.datasets.fetch_kddcup99(subset='SA', percent10=True)",
+            provenance="sklearn.datasets.fetch_kddcup99(subset='SA', percent10=True, random_state=0)",
             review_budget=0.05,
             mode="random",
             load=_load_kdd,

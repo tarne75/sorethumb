@@ -460,6 +460,19 @@ Covertype, day 1 and day 2 for the card data. The pre-registration
 (`tests/benchmark/preregistrations/real/`) is committed before the confirmation run,
 and per-dataset p-values are Holm-corrected across the datasets the hypothesis names.
 
+**The KDD results below cannot be reproduced exactly** (found 2026-10-20). scikit-learn's
+`fetch_kddcup99(subset="SA")` draws which abnormal rows the SA subset keeps at random,
+and the loader passed no `random_state`, so each run, development and confirmation
+alike, used a different draw of the dataset. Separately, KMeans fits varied by a
+rounding step between identical runs (parallel partial sums), which on KDD's many
+duplicate rows moved tied blocks across the KMeans fence. Both are fixed: the loader
+pins `random_state=0`, and KMeans fits run on one OpenMP thread; repeat runs of the KDD
+confirmation slice are now identical. Covertype and the card data were reproducible
+throughout. The published KDD rows stand as what was measured, on one unrecorded draw;
+they also predate keeping 3-value columns (`protocol_type`), after which the default's
+KDD flag F1 at `"auto"` is far higher. A KDD verdict to rely on needs a new,
+pre-registered run on the pinned data.
+
 <!-- real-backtest-results-start -->
 <!-- AUTO-GENERATED — do not edit manually; run `python scripts/run_real_backtest.py --phase confirmation` to add a result. -->
 

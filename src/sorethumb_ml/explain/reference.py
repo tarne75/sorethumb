@@ -97,7 +97,10 @@ def _background(reference: np.ndarray, k: int, seed: int) -> tuple[np.ndarray, n
         sample = reference[np.sort(picked)]
     from sklearn.cluster import KMeans  # noqa: PLC0415
 
-    km = KMeans(n_clusters=k, n_init=1, random_state=seed).fit(sample)
+    from sorethumb_ml._determinism import single_openmp_thread  # noqa: PLC0415
+
+    with single_openmp_thread():  # reproducible centres; see sorethumb_ml._determinism
+        km = KMeans(n_clusters=k, n_init=1, random_state=seed).fit(sample)
     counts = np.bincount(km.labels_, minlength=k).astype(np.float64)
     keep = counts > 0
     return np.asarray(km.cluster_centers_[keep], dtype=np.float64), counts[keep] / counts[keep].sum()
