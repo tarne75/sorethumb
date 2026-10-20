@@ -114,3 +114,40 @@ def test_release_script_runs_the_same_release_state_checker_with_a_tag_date():
     text = (_ROOT / "scripts" / "release.sh").read_text(encoding="utf-8")
     assert "scripts/check_release_state.py" in text
     assert '--version "$VERSION" --tag-date' in text
+
+
+# ---------------------------------------------------------------------------
+# A TestPyPI rehearsal publishes a new pre-release (TestPyPI files are
+# immutable); a real release never overrides pyproject.toml's version.
+# ---------------------------------------------------------------------------
+
+
+def test_the_rehearsal_requires_a_version_and_checks_it_before_validating():
+    workflow = _load("publish-testpypi.yml")
+    # PyYAML reads the bare key `on` as True.
+    version = workflow[True]["workflow_dispatch"]["inputs"]["version"]
+    assert version["required"] is True
+    jobs = workflow["jobs"]
+    assert any("scripts/rehearsal_version.py" in r for r in _run_steps(jobs["check-version"]))
+    needs = jobs["validate"]["needs"]
+    assert "check-version" in ([needs] if isinstance(needs, str) else needs)
+    assert jobs["validate"]["with"]["version"] == "${{ inputs.version }}"
+    applied = [r for r in _run_steps(jobs["verify-and-publish"]) if "rehearsal_version.py" in r]
+    assert applied
+    assert all("--apply" in r for r in applied)
+
+
+def test_a_real_release_never_overrides_the_version():
+    assert "with" not in _load("publish.yml")["jobs"]["validate"]
+    assert "with" not in _load("ci.yml")["jobs"]["validate"]
+
+
+def test_the_build_and_windows_install_apply_the_rehearsal_version_only_when_given():
+    jobs = _load("release-validation.yml")["jobs"]
+    for name in ("build", "windows-install-smoke"):
+        steps = [s for s in jobs[name]["steps"] if s.get("name") == "Set the rehearsal version"]
+        assert len(steps) == 1, f"{name} has no 'Set the rehearsal version' step"
+        assert steps[0]["if"] == "inputs.version != ''"
+        assert "rehearsal_version.py" in steps[0]["run"]
+    build_names = [s.get("name") for s in jobs["build"]["steps"]]
+    assert build_names.index("Set the rehearsal version") < build_names.index("Build sdist and wheel")
