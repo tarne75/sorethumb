@@ -123,11 +123,12 @@ from __future__ import annotations
 
 import logging
 import warnings
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
 
-from sorethumb_ml.errors import AntiCorrelatedMemberWarning, ZeroAnomalyWarning
+from sorethumb_ml.errors import AntiCorrelatedMemberWarning, UninformativeBoundaryWarning, ZeroAnomalyWarning
 from sorethumb_ml.scoring._finite import nonfinite_summary
 
 logger = logging.getLogger(__name__)
@@ -256,6 +257,26 @@ def _validate_inputs(
     return clean, natural_flags, source_row
 
 
+# A detector's own boundary that flags more than this share of the rows it was fitted
+# on does not separate unusual rows from the rest (anomalies are a minority by
+# definition; One-Class SVM's nu bounds its outlier share far lower). It happens on
+# data with few distinct values: Isolation Forest scores every duplicated row as
+# short-path, and One-Class SVM leaves every row on its boundary, where the side a row
+# falls on is floating-point noise.
+MAX_INFORMATIVE_BOUNDARY_RATE = 0.5
+
+
+def uninformative_boundaries(fit_rates: Mapping[str, float]) -> dict[str, float]:
+    """Return the detectors whose own boundary flagged more than half the rows it was fitted on.
+
+    *fit_rates* maps detector name to the share of its **training** rows its natural
+    boundary flagged (never the rows being scored: on new data a majority outside
+    the boundary is drift, which the boundary should report). The result maps each
+    such detector to that rate, for ``ScoreEnsemble.combine(uninformative=...)``.
+    """
+    return {d: float(r) for d, r in fit_rates.items() if float(r) > MAX_INFORMATIVE_BOUNDARY_RATE}
+
+
 class ScoreEnsemble:
     """Combine calibrated scores from multiple detectors into a final anomaly decision.
 
@@ -321,6 +342,7 @@ class ScoreEnsemble:
         scores: dict[str, np.ndarray],
         natural_flags: dict[str, np.ndarray],
         source_row: np.ndarray | None = None,
+        uninformative: Mapping[str, float] | None = None,
     ) -> dict[str, Any]:
         """Combine per-detector scores into a final score and flag array.
 
@@ -335,6 +357,14 @@ class ScoreEnsemble:
             in an exact-k flag selection (the earliest source row wins). Defaults
             to the position, which is only the source order if the caller has not
             reordered the rows.
+        uninformative:
+            Detectors whose own boundary flagged more than half the rows it was
+            fitted on (see :func:`uninformative_boundaries`), with that rate. At
+            ``contamination="auto"`` they do not vote on which rows are flagged:
+            they are left out of the intersection/union and of the composite's
+            median-of-rates cut, with an :class:`UninformativeBoundaryWarning`.
+            Their scores still count in the ranking. Ignored for a numeric
+            contamination, which does not use the boundaries.
 
         Returns
         -------
@@ -350,6 +380,8 @@ class ScoreEnsemble:
                 always empty for combination="intersection"/"union" -- see module docstring)
             "per_detector_rates": dict[str, float] — realised fraction each
                 detector's own natural boundary flagged, all input detectors
+            "abstaining_members": list[str] — detectors left out of the flag
+                vote for an uninformative boundary (contamination="auto" only)
 
         """
         names = list(scores.keys())
@@ -399,6 +431,9 @@ class ScoreEnsemble:
                 stacklevel=2,
             )
 
+        abstaining = self._abstaining_members(names, uninformative or {})
+        voters = [d for d in names if d not in abstaining]
+
         flag_matrix = np.column_stack([natural_flags[d].astype(float) for d in names])  # (n, k)
 
         weights = self._resolve_weights(names, score_matrix)
@@ -409,11 +444,10 @@ class ScoreEnsemble:
             # Each detector independently flags its top-contamination fraction
             # (or its natural boundary when auto), then flags are AND/OR-ed.
             per_flags, contamination, is_auto = self._set_combine_flags(
-                score_matrix, natural_flags, names, source_row
+                score_matrix, natural_flags, names, source_row, voters=voters
             )
-            anomaly_flag = (
-                per_flags.all(axis=1) if self._combination == "intersection" else per_flags.any(axis=1)
-            )
+            vote = [i for i, d in enumerate(names) if d in voters] if is_auto else list(range(len(names)))
+            anomaly_flag = self._set_vote(per_flags, vote)
             per_rates = [round(float(per_flags[:, i].mean() * 100), 1) for i in range(len(names))]
             logger.info(
                 "ScoreEnsemble: weighting=%s combination=%s contamination=%s%s "
@@ -431,7 +465,7 @@ class ScoreEnsemble:
             threshold = float("nan")
             contamination_used = float(self._contamination) if not is_auto else contamination
 
-            if self._combination == "intersection" and n > 0 and not anomaly_flag.any():
+            if self._combination == "intersection" and n > 0 and vote and not anomaly_flag.any():
                 rates_str = ", ".join(f"{d}={per_detector_rates[d] * 100:.2f}%" for d in names)
                 warnings.warn(
                     f"The intersection flagged zero rows: no row passed all "
@@ -447,8 +481,14 @@ class ScoreEnsemble:
                 )
         else:
             # composite: single global threshold on combined score
-            contamination, is_auto = self._resolve_contamination(flag_matrix)
-            if is_auto:
+            contamination, is_auto = self._resolve_contamination(
+                flag_matrix[:, [i for i, d in enumerate(names) if d in voters]]
+            )
+            if is_auto and not voters:
+                # No detector's boundary can say what share of rows lies outside.
+                anomaly_flag = np.zeros(n, dtype=bool)
+                threshold = float("nan")
+            elif is_auto:
                 # contamination="auto" is a heuristic estimate, not a hard
                 # constraint -- left unchanged by the exact-k handling, which only tightens
                 # *explicit* numeric contamination (see module docstring).
@@ -488,6 +528,7 @@ class ScoreEnsemble:
             "is_auto_contamination": is_auto,
             "dropped_members": dropped,
             "per_detector_rates": per_detector_rates,
+            "abstaining_members": abstaining if is_auto else [],
         }
 
     # ------------------------------------------------------------------
@@ -588,12 +629,39 @@ class ScoreEnsemble:
         # score simply loses to the best member's opinion, never wins).
         return score_matrix.max(axis=1)
 
+    def _set_vote(self, per_flags: np.ndarray, vote: list[int]) -> np.ndarray:
+        """AND (intersection) or OR (union) the voting columns; nothing flagged with no voter."""
+        if not vote:
+            return np.zeros(per_flags.shape[0], dtype=bool)
+        if self._combination == "intersection":
+            return np.asarray(per_flags[:, vote].all(axis=1))
+        return np.asarray(per_flags[:, vote].any(axis=1))
+
+    def _abstaining_members(self, names: list[str], uninformative: Mapping[str, float]) -> list[str]:
+        """Return the members left out of the flag vote at contamination="auto", warning for each."""
+        if self._contamination != "auto":
+            return []
+        abstaining = [d for d in names if d in uninformative]
+        for d in abstaining:
+            warnings.warn(
+                f"{d}'s own boundary flagged {uninformative[d]:.0%} of the rows it was fitted on: "
+                "more than half, so it does not separate unusual rows from the rest (typical of "
+                "data with few distinct values). At contamination='auto' it does not vote on "
+                "which rows are flagged; its scores still count in the ranking. A numeric "
+                "contamination does not use the boundary.",
+                UninformativeBoundaryWarning,
+                stacklevel=3,
+            )
+        return abstaining
+
     def _set_combine_flags(
         self,
         score_matrix: np.ndarray,
         natural_flags: dict[str, np.ndarray],
         names: list[str],
         source_row: np.ndarray | None = None,
+        *,
+        voters: list[str] | None = None,
     ) -> tuple[np.ndarray, float, bool]:
         """Compute per-detector boolean flags for intersection/union modes.
 
@@ -606,7 +674,8 @@ class ScoreEnsemble:
         if self._contamination == "auto":
             for i, name in enumerate(names):
                 flags[:, i] = natural_flags[name]
-            rates = np.array([natural_flags[n].mean() for n in names])
+            voting = names if voters is None else voters
+            rates = np.array([natural_flags[n].mean() for n in voting]) if voting else np.zeros(1)
             rate = float(np.median(rates))
             rate = max(0.001, min(0.5, rate))
             return flags, rate, True
@@ -625,8 +694,8 @@ class ScoreEnsemble:
         if self._contamination != "auto":
             return float(self._contamination), False
 
-        # Auto: median natural_flag rate across detectors
-        rates = flag_matrix.mean(axis=0)
+        # Auto: median natural_flag rate across the detectors that can vote
+        rates = flag_matrix.mean(axis=0) if flag_matrix.shape[1] else np.zeros(1)
         rate = float(np.median(rates))
         rate = max(0.001, min(0.5, rate))  # clamp to sane range
         logger.info(

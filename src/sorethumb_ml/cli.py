@@ -3492,6 +3492,11 @@ def _print_run_summary(
                 if g.dropped_detectors
                 else ""
             )
+            if g.abstaining_detectors:
+                dropped += (
+                    f"  [yellow]no flag vote (boundary flags most rows): "
+                    f"{_e(', '.join(g.abstaining_detectors))}[/yellow]"
+                )
             label = "" if g.group_label == "__all__" else f"[{g.group_label}] "
             console.print(f"    {_e(label)}{_e(parts)}{dropped}")
         if len(rate_groups) > 8:
@@ -3571,6 +3576,7 @@ def _run_result_to_dict(result: RunResult, *, contamination: str | float | None 
                 "n_flagged": g.n_anomalies,  # review shortlist size, not a prevalence estimate
                 "detector_flag_rates": g.detector_flag_rates,
                 "dropped_detectors": g.dropped_detectors,
+                "abstaining_detectors": g.abstaining_detectors,
                 "status": g.status,
                 "error": g.error,
                 "elapsed_seconds": g.elapsed_seconds,
