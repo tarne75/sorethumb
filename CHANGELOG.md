@@ -6,6 +6,10 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-20
+
+First release.
+
 ### Added
 
 - **Names**: install the `sorethumb-ml` distribution (`pip install sorethumb-ml`;
@@ -370,4 +374,5 @@ Versioning: [Semantic Versioning](https://semver.org/).
   route), and on any OS a workspace needs a local drive, not a network share or
   synced folder. See `docs/platforms.md`.
 
-[Unreleased]: https://github.com/tarne75/sorethumb/commits/main
+[Unreleased]: https://github.com/tarne75/sorethumb/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/tarne75/sorethumb/releases/tag/v0.1.0

@@ -15,7 +15,7 @@ README.md, docs/*.md, SECURITY.md and CONTRIBUTING.md is checked as below:
   drift.
 - ```bash``` blocks: every ``sorethumb <subcommand>`` must be a real command
   (checked via ``--help``) and every ``--long-flag`` on that line must appear in
-  its help text. ``pip install ".[extra]"`` must name a real optional-dependency
+  its help text. ``pip install ".[extra]"`` (or ``"sorethumb-ml[extra]"``) must name a real optional-dependency
   group.
 
 A second entry point extracts the lone ```python``` block verbatim, for
@@ -148,7 +148,7 @@ def _check_bash(body: str) -> list[str]:
         tokens = cmd.split()
 
         if tokens[:2] == ["pip", "install"]:
-            for extra in re.findall(r"\.\[([a-z0-9_,\-]+)\]", cmd):
+            for extra in re.findall(r"(?:\.|sorethumb-ml)\[([a-z0-9_,\-]+)\]", cmd):
                 for name in extra.split(","):
                     if not _extra_exists(name.strip()):
                         problems.append(f"pip extra [{name}] is not in pyproject optional-dependencies")

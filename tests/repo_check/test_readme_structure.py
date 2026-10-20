@@ -22,7 +22,8 @@ _ROOT = Path(__file__).resolve().parents[2]
 _README = (_ROOT / "README.md").read_text(encoding="utf-8")
 _BENCH_DOC = _ROOT / "docs" / "benchmarks.md"
 _LIMITATIONS = _ROOT / "docs" / "limitations.md"
-_DOCS = "https://github.com/tarne75/sorethumb/blob/main/docs/"
+# blob/main before the first release; the released tag after it (the release-state commit).
+_DOCS = re.search(r"https://github\.com/tarne75/sorethumb/blob/[^/\s]+/docs/", _README).group(0)
 # An entry page, not the manual: room for what a newcomer needs and no more.
 _MAX_README_LINES = 300
 

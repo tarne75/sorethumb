@@ -48,7 +48,10 @@ _SECURITY = """\
 PyPI is supported.
 """
 
-_README = "# Project\n\n> **Status: alpha.** Install with `pip install sorethumb-ml`.\n"
+_README = (
+    "# Project\n\n> **Status: alpha.** Install with `pip install sorethumb-ml`.\n\n"
+    "See [the guide](https://github.com/example/repo/blob/v0.2.0/docs/guide.md).\n"
+)
 
 
 def _repo(
@@ -60,7 +63,7 @@ def _repo(
     readme: str = _README,
 ) -> Path:
     (tmp_path / "pyproject.toml").write_text(
-        f'[project]\nname = "x"\nversion = "{pyproject_version}"\n', encoding="utf-8"
+        f'[project]\nname = "sorethumb-ml"\nversion = "{pyproject_version}"\n', encoding="utf-8"
     )
     (tmp_path / "CHANGELOG.md").write_text(changelog, encoding="utf-8")
     (tmp_path / "SECURITY.md").write_text(security, encoding="utf-8")
@@ -219,7 +222,8 @@ def test_pre_release_wording_is_rejected_across_line_wraps_and_case(tmp_path, fi
 def test_pre_1_0_wording_is_only_a_contradiction_from_1_0_on(tmp_path):
     assert _check(_repo(tmp_path)) == []  # 0.2.0: "pre-1.0" is accurate
     changelog = _CHANGELOG.replace("0.2.0", "1.0.0")
-    root = _repo(tmp_path, pyproject_version="1.0.0", changelog=changelog)
+    readme = _README.replace("v0.2.0", "v1.0.0")
+    root = _repo(tmp_path, pyproject_version="1.0.0", changelog=changelog, readme=readme)
     problems = _check(root, version="1.0.0")
     _one(problems, "pre-1.0")
 
@@ -236,6 +240,41 @@ def test_every_problem_is_reported_at_once(tmp_path):
     assert len(_check(root)) >= 5
 
 
+# --- the README is the PyPI page ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "install",
+    ["pip install sorethumb-ml", 'pip install "sorethumb-ml[explain]"', "pip install sorethumb_ml"],
+)
+def test_any_spelling_of_the_pip_install_passes(tmp_path, install):
+    readme = _README.replace("pip install sorethumb-ml", install)
+    assert _check(_repo(tmp_path, readme=readme)) == []
+
+
+@pytest.mark.parametrize(
+    "readme",
+    [
+        "# Project\n\nInstall from a clone:\n\n    git clone https://x\n    pip install .\n",
+        "# Project\n\nInstall with `pip install sorethumb`.\n",  # another package
+    ],
+)
+def test_a_readme_that_does_not_say_how_to_install_the_release_is_rejected(tmp_path, readme):
+    _one(_check(_repo(tmp_path, readme=readme)), "no 'pip install sorethumb-ml'")
+
+
+@pytest.mark.parametrize("ref", ["main", "v0.1.0"])
+def test_readme_links_must_point_at_the_tag(tmp_path, ref):
+    readme = _README + f"[a](https://github.com/example/repo/blob/{ref}/LICENSE)\n"
+    problems = _check(_repo(tmp_path, readme=readme))
+    _one(problems, f"links into the repository at {ref}, not v0.2.0")
+
+
+def test_readme_links_outside_the_repository_files_are_left_alone(tmp_path):
+    readme = _README + "[i](https://github.com/example/repo/issues) [r](https://github.com/example/repo)\n"
+    assert _check(_repo(tmp_path, readme=readme)) == []
+
+
 # --- CLI ------------------------------------------------------------------------------------
 
 
@@ -249,7 +288,7 @@ def test_cli_success_exit_code(tmp_path, capsys):
 
 def test_cli_failure_lists_every_problem_and_exits_1(tmp_path, capsys):
     changelog = _CHANGELOG.replace("[0.2.0] - 2026-10-15", "[0.2.0] - 2999-01-01")
-    root = _repo(tmp_path, changelog=changelog, readme="Not yet on PyPI\n")
+    root = _repo(tmp_path, changelog=changelog, readme="Not yet on PyPI. `pip install sorethumb-ml`\n")
     assert crs.main(["--version", "0.2.0", "--root", str(root)]) == 1
     err = capsys.readouterr().err
     assert "in the future" in err
