@@ -10,7 +10,13 @@ Maintainer-only. Run from macOS, Linux or WSL (`scripts/release.sh` is bash).
 2. Create an account-scoped API token there (the project does not exist yet, so a
    project-scoped one cannot be made), and store it:
    `gh secret set TEST_PYPI_TOKEN --repo tarne75/sorethumb`
-3. Create the environment: `gh api --method PUT repos/tarne75/sorethumb/environments/testpypi`
+3. Create the environment, with you as its required reviewer so the run pauses for
+   approval like the real release:
+
+   ```bash
+   echo "{\"reviewers\":[{\"type\":\"User\",\"id\":$(gh api user --jq .id)}]}" |
+     gh api --method PUT repos/tarne75/sorethumb/environments/testpypi --input -
+   ```
 
 **Each rehearsal** publishes a pre-release of `pyproject.toml`'s version. Files on
 TestPyPI are immutable, so use a new one every attempt (`0.1.0rc1`, `0.1.0rc2`, ...):
@@ -19,7 +25,8 @@ TestPyPI are immutable, so use a new one every attempt (`0.1.0rc1`, `0.1.0rc2`, 
 gh workflow run publish-testpypi.yml -f version=0.1.0rc1
 ```
 
-Approve the `testpypi` deployment when the run pauses. Then verify in a clean venv.
+The run pauses before the upload: approve the `testpypi` deployment (Actions → the
+run → Review deployments). Then verify in a clean venv.
 TestPyPI does not mirror the dependencies, so fetch only sorethumb from it and let pip
 resolve the rest from PyPI:
 
@@ -30,6 +37,7 @@ pip install /tmp/rehearsal-dist/sorethumb_ml-0.1.0rc1-py3-none-any.whl
 sorethumb --version
 sorethumb --help
 python -c "import sorethumb_ml"
+deactivate && rm -rf /tmp/rehearsal /tmp/rehearsal-dist   # clean up afterwards
 ```
 
 `sorethumb --version` must print `sorethumb 0.1.0rc1`, and
