@@ -10,7 +10,7 @@ real null (a null cast to Utf8 stays null).
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 
 import polars as pl
 import pytest
@@ -69,7 +69,7 @@ def test_key_distinguishes_numeric_types_that_stringify_the_same():
 
 def test_key_handles_non_json_native_types_like_date():
     # Must not raise, and must not collide with the equivalent ISO string.
-    date_key = make_group_key({"d": datetime.date(2024, 1, 15)})
+    date_key = make_group_key({"d": dt.date(2024, 1, 15)})
     str_key = make_group_key({"d": "2024-01-15"})
     assert date_key != str_key
 

@@ -31,7 +31,7 @@ def _build_config(tmp_path: object, **kw: object) -> Config:
 
 def _make_cat_df() -> pl.DataFrame:
     """DataFrame with a mix of categorical, numeric, boolean, and temporal columns."""
-    import datetime
+    import datetime as dt
 
     n = 100
     return pl.DataFrame(
@@ -40,7 +40,7 @@ def _make_cat_df() -> pl.DataFrame:
             "cat_high": [f"val_{i}" for i in range(n)],  # 100 categories → frequency
             "num": [float(i) for i in range(n)],
             "flag": [i % 2 == 0 for i in range(n)],
-            "ts": [datetime.datetime(2024, 1, 1) + datetime.timedelta(hours=i) for i in range(n)],
+            "ts": [dt.datetime(2024, 1, 1) + dt.timedelta(hours=i) for i in range(n)],
             "with_nulls": [float(i) if i % 5 != 0 else None for i in range(n)],
         }
     )
