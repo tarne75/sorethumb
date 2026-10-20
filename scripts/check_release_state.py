@@ -19,7 +19,10 @@ Checks (stdlib only, so CI can run it without installing the project):
   (anything left there would be missing from the release's own notes);
 * ``SECURITY.md`` and ``README.md`` carry no pre-release wording ("has not yet
   had its first tagged release", "not yet on PyPI", "Status: pre-release", and
-  -- from 1.0 on -- "pre-1.0") that the version being tagged contradicts.
+  -- from 1.0 on -- "pre-1.0") that the version being tagged contradicts;
+* ``README.md`` (the PyPI page) says how to install the release, ``pip install
+  <name>`` with ``pyproject.toml``'s name, and its links into the repository point
+  at the tag (``blob/vX.Y.Z``), not at ``main`` or an older tag.
 
 Dates are UTC: the tag date is the UTC date the tag is pushed.
 
@@ -55,6 +58,8 @@ _PRE_RELEASE_WORDING: list[tuple[str, str]] = [
 ]
 _PRE_1_0_WORDING = (r"pre-1\.0", "calls the project pre-1.0")
 _WORDING_FILES = ("SECURITY.md", "README.md")
+# A link into the repository's files: github.com/<owner>/<repo>/(blob|tree)/<ref>/...
+_REPO_LINK_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/(?:blob|tree)/([^/\s)]+)")
 
 
 def _collapse(text: str) -> str:
@@ -166,6 +171,27 @@ def _wording_problems(root: Path, major: int) -> list[str]:
     return problems
 
 
+def _readme_problems(root: Path, version: str, name: str) -> list[str]:
+    path = root / "README.md"
+    if not path.is_file():
+        return []
+    text = path.read_text(encoding="utf-8")
+    problems: list[str] = []
+    # PyPI treats -, _ and . in a name as the same, and so does pip.
+    name_re = "[-_.]+".join(re.escape(part) for part in re.split(r"[-_.]+", name))
+    if not re.search(rf"pip install [\"']?{name_re}\b", text, flags=re.IGNORECASE):
+        problems.append(
+            f"README.md has no 'pip install {name}': the PyPI page must say how to install the release."
+        )
+    stale = sorted({ref for ref in _REPO_LINK_RE.findall(text) if ref != f"v{version}"})
+    if stale:
+        problems.append(
+            f"README.md links into the repository at {', '.join(stale)}, not v{version}: "
+            f"switch them to blob/v{version} so the PyPI page shows the released docs."
+        )
+    return problems
+
+
 def check_release_state(
     root: Path, version: str, *, tag_date: date | None = None, today: date | None = None
 ) -> list[str]:
@@ -178,7 +204,8 @@ def check_release_state(
     problems: list[str] = []
     pyproject_path = root / "pyproject.toml"
     with pyproject_path.open("rb") as fh:
-        pyproject_version = tomllib.load(fh)["project"]["version"]
+        project = tomllib.load(fh)["project"]
+    pyproject_version = project["version"]
     if pyproject_version != version:
         problems.append(f"pyproject.toml says version = {pyproject_version!r}, not {version!r}.")
 
@@ -189,6 +216,7 @@ def check_release_state(
         problems.append("CHANGELOG.md is missing.")
 
     problems += _wording_problems(root, int(match.group(1)))
+    problems += _readme_problems(root, version, project["name"])
     return problems
 
 
