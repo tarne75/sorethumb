@@ -61,8 +61,10 @@ fails, fix it and rehearse again with the next `rcN`.
 Push the commit and let CI pass. If the UTC day changes before tagging, re-date it in a
 new commit.
 
-**2. Tag:** `scripts/release.sh X.Y.Z`. It reruns the release checks, builds and
-smoke-tests the artifact, asks for confirmation, and pushes the `vX.Y.Z` tag.
+**2. Tag:** `scripts/release.sh X.Y.Z`, in a terminal (it asks you to type the version
+to confirm, so it cannot run in the background). It reruns the release checks (about 20
+minutes), builds and smoke-tests the artifact, pushes the `vX.Y.Z` tag and creates the
+GitHub Release from the changelog section.
 
 **3. Publish:** `publish.yml` revalidates the tagged commit and pauses on the `pypi`
 environment. Approve it (Actions → the run → Review deployments). Nothing reaches PyPI

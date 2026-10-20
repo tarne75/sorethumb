@@ -4,13 +4,21 @@ from __future__ import annotations
 
 import gc
 import logging
+import os
 import sqlite3
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
 
-from tests.factories.workspaces import workspace as ws
+# The CLI tests read Rich output as text. A shell that forces or disables colour
+# (FORCE_COLOR=3 is common in terminals and editor shells) would mix escape codes
+# into it, so drop those settings before the CLI's module-level consoles are built,
+# and before any subprocess a test starts inherits them.
+for _name in ("FORCE_COLOR", "NO_COLOR", "CLICOLOR_FORCE", "TTY_COMPATIBLE"):
+    os.environ.pop(_name, None)
+
+from tests.factories.workspaces import workspace as ws  # noqa: E402
 
 __all__ = ["ws"]
 
