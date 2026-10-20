@@ -203,41 +203,42 @@ def _full_population_scores(
         )
         return None
 
-    ws = Workspace.open(workdir)
-    plan = load_plan(ws, train_result.run_id)
-    if plan.chosen_time_column is not None:
-        logger.warning(
-            "Plan sorts by chosen_time_column=%r; skipping full-population "
-            "evaluation to avoid a silent score/label misalignment.",
-            plan.chosen_time_column,
+    # Closed on every path, the early returns included: the workspace holds a SQLite connection.
+    with Workspace.open(workdir) as ws:
+        plan = load_plan(ws, train_result.run_id)
+        if plan.chosen_time_column is not None:
+            logger.warning(
+                "Plan sorts by chosen_time_column=%r; skipping full-population "
+                "evaluation to avoid a silent score/label misalignment.",
+                plan.chosen_time_column,
+            )
+            return None
+
+        space = apply_feature_plan(holdout_df, plan)
+        group_key = train_result.groups[0].group_key
+        res = score_with_existing(
+            ws,
+            train_result.run_id,
+            group_key,
+            space.matrix.astype(np.float64),
+            space.feature_schema_hash,
+            detector_names,
+            plan_digest(plan.to_json()),
+            strict=False,
         )
-        return None
+        if not res["calibrated"]:
+            logger.warning("No persisted models found for group %s; skipping evaluation.", group_key)
+            return None
 
-    space = apply_feature_plan(holdout_df, plan)
-    group_key = train_result.groups[0].group_key
-    res = score_with_existing(
-        ws,
-        train_result.run_id,
-        group_key,
-        space.matrix.astype(np.float64),
-        space.feature_schema_hash,
-        detector_names,
-        plan_digest(plan.to_json()),
-        strict=False,
-    )
-    if not res["calibrated"]:
-        logger.warning("No persisted models found for group %s; skipping evaluation.", group_key)
-        return None
-
-    ensemble = ScoreEnsemble(
-        weighting=config.scoring.weighting,
-        combination=config.scoring.combination,
-        contamination=config.scoring.contamination,
-        manual_weights=config.scoring.weights or None,
-    )
-    combined = ensemble.combine(res["calibrated"], res["natural_flags"])
-    scores: np.ndarray = combined["combined_score"]
-    return scores
+        ensemble = ScoreEnsemble(
+            weighting=config.scoring.weighting,
+            combination=config.scoring.combination,
+            contamination=config.scoring.contamination,
+            manual_weights=config.scoring.weights or None,
+        )
+        combined = ensemble.combine(res["calibrated"], res["natural_flags"])
+        scores: np.ndarray = combined["combined_score"]
+        return scores
 
 
 def _evaluate_holdout(

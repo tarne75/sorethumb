@@ -36,4 +36,4 @@ def test_the_built_wheel_is_installed_and_run_on_windows() -> None:
     assert smoke["runs-on"] == "windows-latest"
     assert smoke["needs"] == "build"
     pythons = {entry["python"] for entry in smoke["strategy"]["matrix"]["include"]}
-    assert {"3.11", "3.13"} <= pythons
+    assert {"3.11", "3.14"} <= pythons

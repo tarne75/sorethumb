@@ -44,11 +44,11 @@ jobs:
           - os: ubuntu-latest
             python: "3.11"
           - os: ubuntu-latest
-            python: "3.13"
+            python: "3.14"
           - os: macos-latest
-            python: "3.13"
+            python: "3.14"
           - os: windows-latest
-            python: "3.13"
+            python: "3.14"
     env:
       HYPOTHESIS_PROFILE: ci
     steps:
@@ -85,5 +85,5 @@ jobs:
       - name: Accuracy floors
         # Numerical drift in a dependency shows up here, not in the lanes above. One
         # leg is enough: the floors are platform-independent.
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.13'
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.14'
         run: uv run --no-sync pytest tests/benchmark/test_accuracy_floors.py tests/benchmark/test_pipeline_accuracy_floors.py -m benchmark

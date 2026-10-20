@@ -55,8 +55,8 @@ def test_it_resolves_every_dependency_at_its_newest_release_and_installs_every_e
 
 def test_it_covers_the_oldest_and_newest_supported_python() -> None:
     project = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    match = re.fullmatch(r">=\s*(\d+\.\d+)", project["requires-python"].strip())
-    assert match, "requires-python must be a simple '>=X.Y' bound for this check"
+    match = re.fullmatch(r">=\s*(\d+\.\d+)\s*(?:,\s*<\s*\d+\.\d+)?", project["requires-python"].strip())
+    assert match, "requires-python must be '>=X.Y' or '>=X.Y,<X.Z' for this check"
     classifiers = [
         c for c in project["classifiers"] if re.fullmatch(r"Programming Language :: Python :: 3\.\d+", c)
     ]

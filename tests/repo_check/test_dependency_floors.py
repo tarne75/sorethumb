@@ -40,8 +40,10 @@ def _runs(job: dict) -> str:
 
 
 def _min_python() -> str:
-    match = re.fullmatch(r">=\s*(\d+\.\d+)", _pyproject()["project"]["requires-python"].strip())
-    assert match, "requires-python must be a simple '>=X.Y' bound for this check"
+    match = re.fullmatch(
+        r">=\s*(\d+\.\d+)\s*(?:,\s*<\s*\d+\.\d+)?", _pyproject()["project"]["requires-python"].strip()
+    )
+    assert match, "requires-python must be '>=X.Y' or '>=X.Y,<X.Z' for this check"
     return match.group(1)
 
 

@@ -62,8 +62,8 @@ def test_every_temporal_column_gets_derive_time_features_not_only_the_chosen_one
     result = run_detection(cfg, no_report=True)
     assert result.groups[0].status == "success"
 
-    ws = Workspace.open(tmp_path / "ws")
-    plan = load_plan(ws, result.run_id)
+    with Workspace.open(tmp_path / "ws") as ws:
+        plan = load_plan(ws, result.run_id)
 
     assert set(plan.parsed_temporal) == {"iso_date", "iso_datetime", "day_month_year"}
     for col in ("iso_date", "iso_datetime", "day_month_year"):
@@ -124,8 +124,8 @@ def test_duration_column_is_converted_to_a_numeric_feature(tmp_path: Path) -> No
     result = run_detection(cfg, no_report=True)
     assert result.groups[0].status == "success"
 
-    ws = Workspace.open(tmp_path / "ws")
-    plan = load_plan(ws, result.run_id)
+    with Workspace.open(tmp_path / "ws") as ws:
+        plan = load_plan(ws, result.run_id)
     assert "wait" in plan.output_features  # a single numeric feature, not dropped
     decision = next(d for d in plan.decisions if d.column == "wait")
     assert decision.col_class.value == "numeric"
@@ -162,8 +162,8 @@ def test_ambiguous_date_order_is_left_as_categorical_text_end_to_end(tmp_path: P
         result = run_detection(cfg, no_report=True)
     assert result.groups[0].status == "success"
 
-    ws = Workspace.open(tmp_path / "ws")
-    plan = load_plan(ws, result.run_id)
+    with Workspace.open(tmp_path / "ws") as ws:
+        plan = load_plan(ws, result.run_id)
     assert "when" not in plan.parsed_temporal
     decision = next(d for d in plan.decisions if d.column == "when")
     assert decision.col_class.value == "categorical"
@@ -183,7 +183,8 @@ def test_grouping_by_a_text_date_column_keeps_it_as_text(tmp_path: Path) -> None
 
     result = run_detection(cfg, no_report=True)
     assert sorted(g.group_label for g in result.groups) == ["2026-01-01", "2026-01-02"]
-    plan = load_plan(Workspace.open(tmp_path / "ws"), result.run_id)
+    with Workspace.open(tmp_path / "ws") as ws:
+        plan = load_plan(ws, result.run_id)
     assert "day" not in plan.parsed_temporal
 
 
