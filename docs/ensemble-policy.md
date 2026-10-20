@@ -34,7 +34,7 @@ the most common source of surprise:
 | --- | --- | --- | --- |
 | `composite-agreement@1` vs `intersection@1` | synthetic suite (round 2) | the review budget | **outperforms** |
 | `composite-agreement@1` vs `intersection@1` | 3 real datasets | the review budget | **outperforms** |
-| `composite-agreement@1` vs `intersection@1` | synthetic suite (round 4) | `"auto"` | does not outperform |
+| `composite-agreement@1` vs `intersection@1` | synthetic suite (rounds 4 and 5) | `"auto"` | does not outperform |
 | `composite-agreement@1` vs `intersection@1` | 3 real datasets | `"auto"` | does not outperform |
 | `rule:discrete-budget@2` vs `intersection@1` | synthetic all-categorical scenario (round 3) | the review budget | **outperforms** (synthetic only) |
 | earlier candidates (rounds 1-2) | synthetic suite | the review budget | do not outperform |
@@ -124,7 +124,8 @@ registered policy: `union@1`, `composite-equal@1`, `composite-agreement@1` or
 has published evidence at a fixed review budget, on the synthetic suite
 ([Round 2](#round-2-2026-10-14-budgets-v3)) and three real datasets
 ([Real data](#real-data)). At `"auto"` it does not outperform
-([Round 4](#round-4-2026-10-15-budgets-v3-composite-at-auto)). That evidence is about
+([Round 4](#round-4-2026-10-15-budgets-v3-composite-at-auto), and again on the current
+code in [Round 5](#round-5-2026-10-20-budgets-v4-round-4-again-on-the-current-code)). That evidence is about
 other data, though. Whether a policy is better on *your* data is measured by
 `sorethumb backtest` ([CLI reference](cli_reference.md#sorethumb-backtest)):
 
@@ -206,9 +207,9 @@ scores), is judged by a fixed protocol (`sorethumb_ml.evaluate.backtest`):
 2. **Seed split.** Candidates are developed on the development seeds (the policy
    matrix's, 0-9) and judged once on 20 disjoint confirmation seeds. Confirmations run in
    rounds: once a round's results are published its seeds have been seen, so the next
-   round uses fresh ones. Rounds 1-4 (seeds 10000-10019, 20000-20019, 30000-30019,
-   40000-40019) all have published results, so their seeds have been seen. The next
-   candidate must use a new round 5, opened in `evaluate/backtest.py` when it is
+   round uses fresh ones. Rounds 1-5 (seeds 10000-10019, 20000-20019, 30000-30019,
+   40000-40019, 50000-50019) all have published results, so their seeds have been seen.
+   The next candidate must use a new round 6, opened in `evaluate/backtest.py` when it is
    registered. A confirmation run is refused for an uncommitted pre-registration, for
    a closed round, and again once a result exists: a revised hypothesis is a new
    pre-registration.
@@ -229,7 +230,8 @@ are evaluation-only: none is a configuration setting.
 been promoted.
 
 The pre-registrations in the table below run both policies at each scenario's review
-budget, except `composite-agreement-auto-v1`, which runs both at `"auto"`.
+budget, except `composite-agreement-auto-v1` and `composite-agreement-auto-v2`, which
+run both at `"auto"`.
 
 ### Results
 
@@ -239,6 +241,7 @@ budget, except `composite-agreement-auto-v1`, which runs both at `"auto"`.
 | pre-registration | candidate | baseline | primary metric | verdict | seeds |
 | --- | --- | --- | --- | --- | --- |
 | [`composite-agreement-auto-v1`](benchmark-results/backtests/composite-agreement-auto-v1.json) | `composite-agreement@1` | `intersection@1` | flag_f1 | **does not outperform** | 20 |
+| [`composite-agreement-auto-v2`](benchmark-results/backtests/composite-agreement-auto-v2.json) | `composite-agreement@1` | `intersection@1` | flag_f1 | **does not outperform** | 20 |
 | [`composite-agreement-v1`](benchmark-results/backtests/composite-agreement-v1.json) | `composite-agreement@1` | `intersection@1` | flag_f1 | **does not outperform** | 20 |
 | [`composite-agreement-v2`](benchmark-results/backtests/composite-agreement-v2.json) | `composite-agreement@1` | `intersection@1` | flag_f1 | **outperforms** | 20 |
 | [`discrete-budget-v1`](benchmark-results/backtests/discrete-budget-v1.json) | `rule:discrete-budget@1` | `intersection@1` | flag_f1 | **does not outperform** | 20 |
@@ -280,6 +283,41 @@ Why it does not outperform:
 - budget regression on varying_density: max_false_positive_budget_ratio 1 met by the baseline (0.3875) but not the candidate (2.3188)
 - budget regression on varying_density: max_over_flag_ratio 1.5 met by the baseline (0.3974) but not the candidate (2.4103)
 - stability regression on all_categorical: flag_jaccard_stability 0.8441 vs baseline 1.0000 (tolerance 0.05)
+
+**`composite-agreement-auto-v2`** -- Repeats composite-agreement-auto-v1 (round 4) on the current code. Since round 4: a
+detector whose own boundary flagged more than half its fit rows no longer votes at
+"auto" (UninformativeBoundaryWarning; Isolation Forest's did on half the synthetic
+scenarios, which moves the composite's median-of-rates cut), 3-value columns are kept
+with a fixed categorical distance, KMeans fits are reproducible, and the budgets are v4.
+Does composite-agreement@1 at scoring.contamination = "auto" outperform intersection@1
+at "auto": flag F1 on point, clustered, masking and irrelevant_columns, judged against
+budgets v4?
+
+| hypothesis scenario | mean difference | 95% CI | p (Holm) | improved |
+| --- | --- | --- | --- | --- |
+| point | -0.1265 | [-0.2058, -0.0465] | 0.0060 | no |
+| clustered | -0.1491 | [-0.2207, -0.0803] | 0.0008 | no |
+| masking | +0.2526 | [+0.2252, +0.2807] | 0.0008 | yes |
+| irrelevant_columns | +0.0357 | [-0.0421, +0.1117] | 0.3574 | no |
+
+Why it does not outperform:
+
+- flag_f1 improved significantly on 1 of 4 hypothesis scenario(s); required: all
+- budget regression on all_categorical: max_false_positive_budget_ratio 1 met by the baseline (0.0000) but not the candidate (2.6231)
+- budget regression on all_categorical: max_over_flag_ratio 1.5 met by the baseline (0.0000) but not the candidate (3.3333)
+- budget regression on categorical_rare: max_false_positive_budget_ratio 1 met by the baseline (0.7292) but not the candidate (2.0667)
+- budget regression on categorical_rare: max_over_flag_ratio 1.5 met by the baseline (0.7419) but not the candidate (2.1855)
+- budget regression on clustered: max_false_positive_budget_ratio 1 met by the baseline (0.0923) but not the candidate (1.3577)
+- budget regression on clustered: max_over_flag_ratio 1.5 met by the baseline (0.7063) but not the candidate (2.3492)
+- budget regression on contextual: max_false_positive_budget_ratio 1 met by the baseline (0.7111) but not the candidate (1.5639)
+- budget regression on contextual: max_over_flag_ratio 1.5 met by the baseline (0.7611) but not the candidate (1.6944)
+- budget regression on point: max_false_positive_budget_ratio 1 met by the baseline (0.0885) but not the candidate (1.3308)
+- budget regression on point: max_over_flag_ratio 1.5 met by the baseline (0.6905) but not the candidate (2.3214)
+- budget regression on swamping_contaminated: max_false_positive_budget_ratio 1 met by the baseline (0.9938) but not the candidate (9.1750)
+- budget regression on text_timestamp: max_false_positive_budget_ratio 1 met by the baseline (0.3125) but not the candidate (1.3250)
+- budget regression on text_timestamp: max_over_flag_ratio 1.5 met by the baseline (0.6988) but not the candidate (1.7430)
+- budget regression on varying_density: max_false_positive_budget_ratio 1 met by the baseline (0.0844) but not the candidate (1.1938)
+- stability regression on all_categorical: flag_jaccard_stability 0.8609 vs baseline 1.0000 (tolerance 0.05)
 
 **`composite-agreement-v1`** -- Thresholding the agreement-weighted composite score at the review budget improves
 flag F1 over unanimity on the anomaly types where the ensemble ranking is good but the
@@ -439,8 +477,19 @@ which is why confirmation is a separate step:
   `varying_density`, `categorical_rare`, `text_timestamp`), `composite-agreement@1` at
   `"auto"` now flags about 40% fewer rows (3 seeds; `local` 33 to 19 rows,
   false-positive rate 0.097 to 0.051, flag recall 0.75 to 0.52), and `intersection@1`
-  at `"auto"` is effectively unchanged. This round has not been re-run under the guard;
-  its conclusion, that a composite policy belongs with a numeric review budget, stands.
+  at `"auto"` is effectively unchanged. Round 5 re-runs this comparison under the guard.
+
+### Round 5 (2026-10-20, budgets v4): round 4 again, on the current code
+
+- **`composite-agreement@1` at `"auto"` still does not outperform `intersection@1` at
+  `"auto"`** (`composite-agreement-auto-v2`), as pre-registered, on 20 fresh seeds
+  (50000-50019). Since round 4: the uninformative-boundary guard, kept 3-value columns
+  with a fixed categorical distance, reproducible KMeans fits and budgets v4. Flag F1 is
+  lower on point (-0.13) and clustered (-0.15), higher on masking (+0.25), and not
+  significantly different on irrelevant columns (+0.04). The composite still flags
+  1.7-3.3x the review budget and misses the false-positive budget on eight scenarios
+  where the baseline meets it. Round 4's conclusion stands: a composite policy belongs
+  with a numeric review budget, not `"auto"`.
 
 ### Real data
 
@@ -557,7 +606,7 @@ CHANGELOG entry. Never as a side effect of a benchmark run. Winning is necessary
 sufficient.
 
 **Current decision (2026-10-15): no change.** `composite-agreement@1` won only at a
-fixed review budget, and the default ships at `"auto"`, where it loses (Round 4 and
+fixed review budget, and the default ships at `"auto"`, where it loses (Rounds 4 and 5, and
 `composite-agreement-real-auto-v1`). Switching would therefore also mean switching the
 default `scoring.contamination` to a number. That would change every run from
 "flag what the detectors agree on" to "flag exactly N%", and choose N for everyone.
