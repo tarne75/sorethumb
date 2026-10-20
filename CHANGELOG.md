@@ -134,6 +134,14 @@ Versioning: [Semantic Versioning](https://semver.org/).
   success) and every `--json` command emits one document per outcome; see
   `docs/cli_reference.md`. A group is selected by its label (`run --only-group`,
   `show --group`, `history --group`; the last two also take its key).
+- **Reproducible fits**: KMeans (the detector, its choice of k, and the explanation
+  reference) fits on one OpenMP thread, so the same data and seed give the same
+  centroids every run; scikit-learn's parallel partial sums otherwise varied by a
+  rounding step, which on data with many duplicate rows moved whole tied blocks across
+  the KMeans flag fence (up to 90 rows flagged more or fewer between identical KDD Cup
+  1999 runs). About 18% more KMeans fit time at its 200,000-row training cap.
+  `threadpoolctl` is now a declared dependency. The real-data backtest pins the KDD
+  SA subset's random draw (`random_state=0`), which was different on every load.
 - **Uninformative detector boundaries**: at `scoring.contamination = "auto"`, a
   detector whose own boundary flagged more than half the rows it was fitted on is left
   out of the flag vote (the intersection or union, and the composite's

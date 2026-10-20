@@ -33,6 +33,7 @@ from typing import Any, ClassVar
 
 import numpy as np
 
+from sorethumb_ml._determinism import single_openmp_thread
 from sorethumb_ml.detectors._hyperparams import estimator_extra_param_defaults, validate_extra_params
 
 logger = logging.getLogger(__name__)
@@ -141,7 +142,8 @@ class KMeansDetector:
         self._chosen_k = k
         logger.info("KMeans: fitting k=%d on %d rows x %d features.", k, X.shape[0], X.shape[1])
         self._model = KMeans(n_clusters=k, n_init=self._n_init, random_state=seed, **self._extra)
-        self._model.fit(X)
+        with single_openmp_thread():  # reproducible centroids; see sorethumb_ml._determinism
+            self._model.fit(X)
 
         # Identify large clusters (CBLOF: clusters covering >= large_coverage of data)
         labels: np.ndarray = self._model.labels_
@@ -272,7 +274,8 @@ def _select_k(X: np.ndarray, k_min: int, k_max: int | None, seed: int) -> int:
 
     for k in ks:
         km = KMeans(n_clusters=k, n_init=5, random_state=seed)
-        km.fit(X)
+        with single_openmp_thread():
+            km.fit(X)
         inertias.append(float(km.inertia_))
 
         sample = (

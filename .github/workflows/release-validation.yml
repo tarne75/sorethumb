@@ -98,7 +98,7 @@ jobs:
             --extra explain --extra benchmark \
             --resolution lowest-direct --python-version 3.11 \
             -o lowest-direct.txt
-          grep -E '^(polars|pyarrow|numpy|scikit-learn|scipy|pydantic|typer|rich|httpx|joblib)==' lowest-direct.txt
+          grep -E '^(polars|pyarrow|numpy|scikit-learn|scipy|pydantic|typer|rich|httpx|joblib|threadpoolctl)==' lowest-direct.txt
       - name: Install the minimums, then the project and test tooling under them
         run: |
           uv venv --python 3.11 .lowest-venv
